@@ -6,6 +6,8 @@ import Foundation
 /// WebRTC connection.
 protocol VoiceSessionRegistrySession: AnyObject, Sendable {
     var rishiSessionId: String? { get async }
+    var serverCreationReceipt: VoiceSessionCreationReceipt? { get async }
+    var credentialLease: CredentialLease? { get async }
     func parkForBackground() async
     func resumeFromBackground() async
     func end() async -> String?
@@ -37,6 +39,13 @@ final class VoiceSessionRegistry {
     private(set) var activeSession: (any VoiceSessionRegistrySession)?
     private(set) var parkedUntil: Date?
 
+    private enum Authentication {
+        case legacy
+        case scoped(SessionCredentialAuthority, @MainActor (CredentialRequestContext) throws -> VoiceSessionAPIClient)
+    }
+    private let authentication: Authentication
+    /// In-memory capabilities never enter the durable ID/owner record.
+    private var pendingReceipts: [String: VoiceSessionCreationReceipt] = [:]
     private let defaults: UserDefaults
     private let gracePeriod: Duration
     private let endServerSession: @MainActor @Sendable (String) async throws -> Void
@@ -59,6 +68,7 @@ final class VoiceSessionRegistry {
             return persisted.id
         }
         set {
+            guard case .legacy = authentication else { return }
             guard let newValue else {
                 defaults.removeObject(forKey: Self.persistedIDKey)
                 return
@@ -77,10 +87,90 @@ final class VoiceSessionRegistry {
         currentUserIDProvider: @escaping @MainActor () -> UserID? = { nil },
         endServerSession: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in }
     ) {
+        self.authentication = .legacy
         self.defaults = defaults
         self.gracePeriod = gracePeriod
         self.currentUserIDProvider = currentUserIDProvider
         self.endServerSession = endServerSession
+    }
+
+    init(
+        defaults: UserDefaults,
+        gracePeriod: Duration = .seconds(3 * 60),
+        credentialAuthority: SessionCredentialAuthority,
+        currentUserIDProvider: @escaping @MainActor () -> UserID?,
+        sessionAPIFactory: @escaping @MainActor (CredentialRequestContext) throws -> VoiceSessionAPIClient
+    ) {
+        self.authentication = .scoped(credentialAuthority, sessionAPIFactory)
+        self.defaults = defaults
+        self.gracePeriod = gracePeriod
+        self.currentUserIDProvider = currentUserIDProvider
+        // The scoped branch cannot call this legacy operation.
+        self.endServerSession = { _ in throw CredentialAuthenticationFailure.accountChanged }
+    }
+
+    func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        guard case .scoped(let configured, _) = authentication else { return false }
+        return configured === authority
+    }
+
+    private func persistedRecord() -> PersistedSession? {
+        guard let data = defaults.data(forKey: Self.persistedIDKey) else { return nil }
+        return try? JSONDecoder().decode(PersistedSession.self, from: data)
+    }
+
+    func recordServerSessionID(_ id: String, owner: UserID) {
+        guard currentUserIDProvider() == owner,
+              let data = try? JSONEncoder().encode(PersistedSession(id: id, userID: owner)) else { return }
+        defaults.set(data, forKey: Self.persistedIDKey)
+    }
+
+    func clearServerSessionID(_ id: String, owner: UserID) {
+        guard let persisted = persistedRecord(), persisted.id == id, persisted.userID == owner else { return }
+        defaults.removeObject(forKey: Self.persistedIDKey)
+    }
+
+    func retainCreationReceipt(_ receipt: VoiceSessionCreationReceipt) {
+        guard case .scoped(let authority, _) = authentication else { return }
+        pendingReceipts[receipt.started.rishiSessionId] = receipt
+        let owner = DerivedUserID.from(receipt.lease.rawUserID)
+        guard authority.isCurrent(receipt.lease) else { return }
+        if defaults.object(forKey: Self.persistedIDKey) != nil {
+            guard let persisted = persistedRecord(),
+                  persisted.id == receipt.started.rishiSessionId, persisted.userID == owner else { return }
+        }
+        recordServerSessionID(receipt.started.rishiSessionId, owner: owner)
+    }
+
+    @discardableResult
+    func deliverCreationReceipt(_ receipt: VoiceSessionCreationReceipt) async -> Bool {
+        guard case .scoped = authentication else { return false }
+        retainCreationReceipt(receipt)
+        for attempt in 1...Self.maxServerEndAttempts {
+            do {
+                try await receipt.endSpecificSession()
+                if pendingReceipts[receipt.started.rishiSessionId]?.lease == receipt.lease {
+                    pendingReceipts.removeValue(forKey: receipt.started.rishiSessionId)
+                }
+                clearServerSessionID(receipt.started.rishiSessionId, owner: DerivedUserID.from(receipt.lease.rawUserID))
+                return true
+            } catch {
+                if attempt < Self.maxServerEndAttempts {
+                    try? await Task.sleep(for: .milliseconds(400 * attempt))
+                }
+            }
+        }
+        return false
+    }
+
+    /// Retries retained actual-bearer capabilities even after their owner signs out.
+    func retryPendingCreationReceipts() async -> Bool {
+        let receipts = Array(pendingReceipts.values)
+        var delivered = true
+        for receipt in receipts {
+            if !(await deliverCreationReceipt(receipt)) { delivered = false }
+        }
+        return delivered
     }
 
     func register(_ session: any VoiceSessionRegistrySession) async {
@@ -91,16 +181,25 @@ final class VoiceSessionRegistry {
         while state == .closing || deliveryTask != nil {
             try? await Task.sleep(for: .milliseconds(10))
         }
+        if case .scoped(let authority, _) = authentication {
+            guard let lease = await session.credentialLease,
+                  (try? authority.snapshot(for: .normal(lease))) != nil,
+                  currentUserIDProvider() == DerivedUserID.from(lease.rawUserID) else { return }
+        }
         expiryTask?.cancel()
         activeSession = session
         state = .live
         parkedUntil = nil
-        if let id = await session.rishiSessionId {
-            recordServerSessionID(id)
+        switch authentication {
+        case .legacy:
+            if let id = await session.rishiSessionId { recordServerSessionID(id) }
+        case .scoped:
+            if let receipt = await session.serverCreationReceipt { retainCreationReceipt(receipt) }
         }
     }
 
     func recordServerSessionID(_ id: String) {
+        guard case .legacy = authentication else { return }
         persistedServerSessionID = id
     }
 
@@ -117,10 +216,23 @@ final class VoiceSessionRegistry {
 
     func resume() async {
         guard state == .parked, let session = activeSession else { return }
+        let originalLease: CredentialLease?
+        if case .scoped(let authority, _) = authentication {
+            let lease = await session.credentialLease
+            guard activeSession === session, state == .parked, let lease,
+                  (try? authority.snapshot(for: .normal(lease))) != nil else { return }
+            originalLease = lease
+        } else {
+            originalLease = nil
+        }
         expiryTask?.cancel()
         expiryTask = nil
         parkedUntil = nil
         await session.resumeFromBackground()
+        if case .scoped(let authority, _) = authentication {
+            guard activeSession === session, state == .parked, let originalLease,
+                  (try? authority.snapshot(for: .normal(originalLease))) != nil else { return }
+        }
         state = .live
     }
 
@@ -143,13 +255,32 @@ final class VoiceSessionRegistry {
         activeSession = nil
         closeFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            var receipt = await session?.serverCreationReceipt
             var id = await session?.rishiSessionId ?? self.persistedServerSessionID
             if let session {
                 let endedID = await session.end()
                 if let endedID {
                     id = endedID
-                    self.recordServerSessionID(endedID)
+                    if case .legacy = self.authentication { self.recordServerSessionID(endedID) }
                 }
+                receipt = await session.serverCreationReceipt ?? receipt
+            }
+            if case .scoped = self.authentication {
+                if let receipt {
+                    self.retainCreationReceipt(receipt)
+                    let delivery = Task { @MainActor in
+                        _ = await self.deliverCreationReceipt(receipt)
+                    }
+                    self.deliveryTask = delivery
+                    await delivery.value
+                    self.deliveryTask = nil
+                } else if id != nil {
+                    // Crash recovery admits a fresh context only for the stored owner.
+                    await self.recoverPersistedSession()
+                }
+                self.state = .ended
+                self.closeFlightTask = nil
+                return
             }
 
             guard let id else {
@@ -189,12 +320,30 @@ final class VoiceSessionRegistry {
     }
 
     func recoverPersistedSession() async {
-        guard activeSession == nil, let id = persistedServerSessionID else { return }
-        do {
-            try await endServerSession(id)
-            persistedServerSessionID = nil
-        } catch {
-            // Recovery is best effort. Retain the id for a subsequent launch.
+        guard activeSession == nil else { return }
+        switch authentication {
+        case .legacy:
+            guard let id = persistedServerSessionID else { return }
+            do {
+                try await endServerSession(id)
+                persistedServerSessionID = nil
+            } catch { }
+        case .scoped(let authority, let factory):
+            // Capture crash-recovery ownership before capability retry can suspend.
+            let persisted = persistedRecord()
+            let snapshot = try? authority.snapshot()
+            let owner = currentUserIDProvider()
+            _ = await retryPendingCreationReceipts()
+            guard let persisted, let snapshot, owner == persisted.userID,
+                  DerivedUserID.from(snapshot.lease.rawUserID) == persisted.userID else { return }
+            let context = CredentialRequestContext.normal(snapshot.lease)
+            guard (try? authority.snapshot(for: context)) != nil,
+                  let api = try? factory(context), api.isBound(to: authority, context: context) else { return }
+            do {
+                try await api.endSession(rishiSessionId: persisted.id)
+                // An old completion can clear only the exact owner/id it admitted.
+                clearServerSessionID(persisted.id, owner: persisted.userID)
+            } catch { }
         }
     }
 

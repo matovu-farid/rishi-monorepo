@@ -21,7 +21,7 @@ import Foundation
 /// thread-safe per Apple's docs. Mirrors the same pattern used by
 /// `SystemKeychainBackend` (Phase 3) and `SampleBookInstaller`
 /// (Phase 4).
-public final class UserDefaultsReaderSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+public final class UserDefaultsReaderSettingsStore: SynchronousReaderSettingsStore, @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let namespace: String

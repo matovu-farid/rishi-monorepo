@@ -169,7 +169,7 @@ public actor RishiChatService: ChatService {
         let endpoint = ChatStreamEndpoint(body: ChatRequest(bookId: bookId, query: query))
         let parser = SSEParser()
         let accumulator = AssistantAccumulator()
-        var finalized = false
+        var finalizationStarted = false
 
         let byteStream = await workerClient.stream(endpoint)
         let yieldChannel = AsyncStream<ChatEvent>.makeStream(bufferingPolicy: .unbounded)
@@ -179,30 +179,24 @@ public actor RishiChatService: ChatService {
         // Decoupled from the parent so cancellation propagation is sub-100ms
         // per CHAT-08 budget — see surrounding comment block above.
         let consumer = Task { () async throws -> Bool in
+            defer { yieldChannel.continuation.finish() }
             // Returns true when `.completed` was seen; false on clean stream end.
             for try await chunk in byteStream {
                 try Task.checkCancellation()
                 let events = await parser.consume(chunk)
                 for event in events {
+                    if event == .completed { return true }
                     if case let .token(t) = event { await accumulator.append(t) }
                     yieldChannel.continuation.yield(event)
-                    if event == .completed {
-                        yieldChannel.continuation.finish()
-                        return true
-                    }
                 }
             }
             try Task.checkCancellation()
             let tail = await parser.finalize()
             for event in tail {
+                if event == .completed { return true }
                 if case let .token(t) = event { await accumulator.append(t) }
                 yieldChannel.continuation.yield(event)
-                if event == .completed {
-                    yieldChannel.continuation.finish()
-                    return true
-                }
             }
-            yieldChannel.continuation.finish()
             return false
         }
 
@@ -225,28 +219,23 @@ public actor RishiChatService: ChatService {
         //   b) consumer threw          → bubble that error
         //   c) consumer returned       → consume result + finalize+yield as needed
         if Task.isCancelled {
-            if !finalized {
+            if !finalizationStarted {
+                finalizationStarted = true
                 let content = await accumulator.value
                 try? await finalizeAssistant(convo: convo, content: content)
             }
             throw CancellationError()
         }
         do {
-            let sawCompleted = try await consumer.value
-            if sawCompleted {
-                let content = await accumulator.value
-                try await finalizeAssistant(convo: convo, content: content)
-                finalized = true
-            } else {
-                // Clean stream end without explicit `.completed` — finalize
-                // and emit a synthetic `.completed` to keep the contract.
-                let content = await accumulator.value
-                try await finalizeAssistant(convo: convo, content: content)
-                finalized = true
-                continuation.yield(.completed)
-            }
+            _ = try await consumer.value
+            finalizationStarted = true
+            let content = await accumulator.value
+            try await finalizeAssistant(convo: convo, content: content)
+            try Task.checkCancellation()
+            continuation.yield(.completed)
         } catch is CancellationError {
-            if !finalized {
+            if !finalizationStarted {
+                finalizationStarted = true
                 let content = await accumulator.value
                 try? await finalizeAssistant(convo: convo, content: content)
             }

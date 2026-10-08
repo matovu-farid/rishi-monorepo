@@ -105,6 +105,20 @@ struct CustomTTSTokenizerTests {
         #expect(trimmed.segments.first?.locator.text.highlight == trimmed.text)
     }
 
+    @Test("EPUB context disambiguates repeated highlights and advances Unicode preceding text")
+    func epubContextAndUnicode() throws {
+        let content = makeTextContent("Selected first. Café 👩🏽‍🚀 before. Selected second.")
+        let trimmed = try #require(CustomTTSTokenizer.trimming(
+            content, before: Locator.Text(before: "Café 👩🏽‍🚀 before. ", highlight: "Selected")
+        ) as? TextContentElement)
+        #expect(trimmed.text == "Selected second.")
+        let interior = makeTextContent("Earlier. Prefix. Target.")
+        #expect((CustomTTSTokenizer.trimming(interior, before: .init(before: "Prefix. ", highlight: "Target")) as? TextContentElement)?.text == "Target.")
+        #expect((CustomTTSTokenizer.trimming(interior, before: .init(highlight: "Target")) as? TextContentElement)?.text == "Target.")
+        #expect(CustomTTSTokenizer.trimming(interior, before: .init(highlight: "Missing")) == nil)
+        #expect(CustomTTSTokenizer.trimming(interior, before: .init(highlight: "")) == nil)
+    }
+
     @Test("packs sentences when sentence granularity is requested")
     func packsSentencesWhenRequested() throws {
         let content = makeTextContent(

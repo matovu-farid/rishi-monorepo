@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendable {
     public enum PersistenceError: Error, Sendable {
@@ -30,6 +31,7 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         return try await dbStore.write { context in
             guard job.token.bookID == book.id, job.token.ownerID == book.userId,
                   job.phase == .registered, job.expectedByteCount >= 0,
+                  job.sourceKind != .sampleRepair,
                   job.expectedSHA256 == job.expectedSHA256.lowercased(),
                   job.destinationRelativePath == book.fileURL else {
                 throw PersistenceError.invalidReservation
@@ -91,6 +93,16 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
                       let existingBook = try Self.bookEntity(context, id: pending.bookID),
                       existingBook.userId == book.userId,
                       let existingBookValue = existingBook.bookValue else { throw PersistenceError.pendingJobConflict }
+                if Self.isRetryable(existingJob.phase),
+                   existingJob.sourceKind != .sampleRepair,
+                   existingJob.destinationRelativePath == existingBook.fileURL,
+                   existingJob.expectedSHA256.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame,
+                   existingJob.expectedByteCount == job.expectedByteCount,
+                   let reading = try Self.readingEntity(context, bookID: pending.bookID),
+                   reading.ownerID == book.userId, !reading.revoked, !reading.tombstoned,
+                   UInt64(bitPattern: reading.accountGenerationBits) == existingJob.token.accountGeneration {
+                    return BookRegistration(book: existingBookValue, token: existingJob.token, disposition: .retryRequired)
+                }
                 try Self.requireReading(context, bookID: pending.bookID, ownerID: book.userId, generation: job.token.accountGeneration)
                 let disposition: BookRegistration.Disposition = Self.isJoinable(existingJob.phase.rawValue) && existingJob.token.accountGeneration == job.token.accountGeneration && existingJob.expectedByteCount == job.expectedByteCount
                     ? .joinedPending
@@ -121,6 +133,108 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         }
         } catch PersistenceError.bookIDOccupied {
             throw BookImportPersistenceError.bookIDOccupied
+        }
+    }
+
+    public func reserveSampleRepair(_ request: SampleRepairReservationRequest) async throws -> SampleRepairReservation {
+        let bookValue = request.expectedBook
+        let fingerprintValue = request.expectedFingerprint
+        let jobValue = request.job
+        return try await dbStore.write { context in
+            guard bookValue.formatType == .epub,
+                  fingerprintValue.bookID == bookValue.id,
+                  fingerprintValue.ownerID == bookValue.userId,
+                  jobValue.token.bookID == bookValue.id,
+                  jobValue.token.ownerID == bookValue.userId,
+                  jobValue.sourceKind == .sampleRepair,
+                  jobValue.phase == .registered,
+                  jobValue.expectedSHA256.caseInsensitiveCompare(fingerprintValue.sha256) == .orderedSame,
+                  jobValue.expectedByteCount == fingerprintValue.version.byteCount,
+                  jobValue.destinationRelativePath == bookValue.fileURL,
+                  jobValue.stagingRelativePath == "Imports/\(jobValue.token.attemptID.uuidString)/content.partial",
+                  let managedFileRootURL, managedFileRootURL.isFileURL else {
+                throw PersistenceError.staleCandidate
+            }
+            guard !bookValue.fileURL.hasPrefix("/"),
+                  !bookValue.fileURL.split(separator: "/").contains("..") else {
+                throw PersistenceError.staleCandidate
+            }
+            let root = try Self.sampleRepairPath(managedFileRootURL)
+            let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            let canonicalURL = try Self.sampleRepairPath(root.appendingPathComponent(bookValue.fileURL))
+            let requestedURL = try Self.sampleRepairPath(request.canonicalManagedURL)
+            guard canonicalURL.path.hasPrefix(rootPath),
+                  canonicalURL.path != root.path,
+                  requestedURL.path == canonicalURL.path else {
+                throw PersistenceError.staleCandidate
+            }
+            try Self.requireAccount(context, ownerID: bookValue.userId, generation: jobValue.token.accountGeneration)
+            try Self.requireReading(context, bookID: bookValue.id, ownerID: bookValue.userId, generation: jobValue.token.accountGeneration)
+            guard let storedBook = try Self.bookEntity(context, id: bookValue.id),
+                  storedBook.bookValue == bookValue,
+                  let storedFingerprint = try Self.fingerprintEntity(context, bookID: bookValue.id),
+                  storedFingerprint.ownerID == bookValue.userId,
+                  storedFingerprint.value == fingerprintValue else {
+                throw PersistenceError.staleCandidate
+            }
+
+            let priorPending = try Self.pendingEntity(context, bookID: bookValue.id)
+            guard priorPending?.value?.token == request.expectedPriorPendingToken else {
+                throw PersistenceError.staleCandidate
+            }
+            if let pending = priorPending {
+                guard pending.ownerID == bookValue.userId,
+                      let existing = pending.value,
+                      (existing.phase == .ready && Self.readyJob(pending, matches: fingerprintValue, relativePath: bookValue.fileURL)
+                       || existing.phase == .paused && existing.sourceKind == .sampleRepair
+                        && existing.expectedSHA256.caseInsensitiveCompare(fingerprintValue.sha256) == .orderedSame
+                        && existing.expectedByteCount == fingerprintValue.version.byteCount
+                        && existing.destinationRelativePath == bookValue.fileURL) else {
+                    throw PersistenceError.pendingJobConflict
+                }
+            }
+
+            let actualVersion = try managedFileVersionInspector.managedFileVersion(
+                at: canonicalURL,
+                materializationRevision: fingerprintValue.version.materializationRevision
+            )
+            if let actualVersion {
+                guard actualVersion == request.expectedManagedFileVersion,
+                      actualVersion == fingerprintValue.version,
+                      actualVersion.byteCount == fingerprintValue.version.byteCount,
+                      let fileIdentifier = actualVersion.fileIdentifier, !fileIdentifier.isEmpty else {
+                    throw PersistenceError.staleCandidate
+                }
+                guard try Self.sha256(at: canonicalURL).caseInsensitiveCompare(fingerprintValue.sha256) == .orderedSame,
+                      let verifiedVersion = try managedFileVersionInspector.managedFileVersion(
+                        at: canonicalURL,
+                        materializationRevision: fingerprintValue.version.materializationRevision
+                      ), verifiedVersion == actualVersion else { throw PersistenceError.staleCandidate }
+                if let priorPending, priorPending.phaseRawValue != BookMaterializationPhase.ready.rawValue {
+                    guard let paused = priorPending.value,
+                          paused.phase == .paused,
+                          paused.sourceKind == .sampleRepair,
+                          paused.token.bookID == bookValue.id,
+                          paused.token.ownerID == bookValue.userId,
+                          paused.token.accountGeneration == jobValue.token.accountGeneration else {
+                        throw PersistenceError.pendingJobConflict
+                    }
+                    priorPending.destinationFileIdentifier = fileIdentifier
+                    priorPending.promotionRevision = actualVersion.materializationRevision
+                    priorPending.phaseRawValue = BookMaterializationPhase.ready.rawValue
+                    priorPending.retryableErrorCode = nil
+                    return .reconciled(fingerprintValue)
+                }
+                return .alreadyManaged(fingerprintValue)
+            }
+            guard request.expectedManagedFileVersion == nil else { throw PersistenceError.staleCandidate }
+
+            if let priorPending {
+                Self.replace(priorPending, with: jobValue)
+            } else {
+                context.insert(PendingBookMaterializationEntity(jobValue))
+            }
+            return .reserved(BookRegistration(book: bookValue, token: jobValue.token, disposition: .registered))
         }
     }
 
@@ -157,7 +271,7 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
                   let book = try Self.bookEntity(context, id: job.token.bookID), book.userId == ownerID,
                   let bookValue = book.bookValue else { return nil }
             try Self.requireAccount(context, ownerID: ownerID, generation: newSource.token.accountGeneration)
-            try Self.requireReading(context, bookID: job.token.bookID, ownerID: ownerID, generation: newSource.token.accountGeneration)
+            guard job.sourceKind != .sampleRepair else { throw PersistenceError.pendingJobConflict }
 
             guard newSource.expectedByteCount == job.expectedByteCount else {
                 return BookRegistration(book: bookValue, token: job.token, disposition: .retryRequired)
@@ -166,19 +280,87 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             if job.phase == .ready { return nil }
 
             guard job.phase == .failed || job.phase == .cancelled || job.phase == .paused else {
+                try Self.requireReading(context, bookID: job.token.bookID, ownerID: ownerID, generation: newSource.token.accountGeneration)
                 guard job.token.accountGeneration == newSource.token.accountGeneration else {
                     return BookRegistration(book: bookValue, token: job.token, disposition: .retryRequired)
                 }
                 return BookRegistration(book: bookValue, token: job.token, disposition: .joinedPending)
             }
-
-            guard newSource.phase == .registered,
-                  newSource.token.attemptID != job.token.attemptID,
-                  retiredAttempt?.token == job.token else {
-                return BookRegistration(book: bookValue, token: job.token, disposition: .retryRequired)
+            guard let reading = try Self.readingEntity(context, bookID: job.token.bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  UInt64(bitPattern: reading.accountGenerationBits) == job.token.accountGeneration else {
+                return nil
             }
+            return BookRegistration(book: bookValue, token: job.token, disposition: .retryRequired)
+        }
+    }
+
+    public func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation? {
+        guard accountPermit.ownerID == ownerID else { return nil }
+        return try await dbStore.read { context in
+            try Self.requireAccount(context, ownerID: ownerID, generation: accountPermit.accountGeneration)
+            guard let storedBook = try Self.bookEntity(context, id: bookID),
+                  storedBook.userId == ownerID, let book = storedBook.bookValue,
+                  let pending = try Self.pendingEntity(context, bookID: bookID),
+                  pending.ownerID == ownerID, let job = pending.value,
+                  job.token.ownerID == ownerID, job.token.bookID == bookID,
+                  job.destinationRelativePath == book.fileURL,
+                  Self.isRetryable(job.phase), job.sourceKind != .sampleRepair,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  UInt64(bitPattern: reading.accountGenerationBits) == job.token.accountGeneration,
+                  !reading.contentRevision.uuidString.isEmpty else { return nil }
+            let permit = BookReadingPermit(ownerID: ownerID, accountGeneration: job.token.accountGeneration, bookID: bookID, contentRevision: reading.contentRevision)
+            return BookImportRetryExpectation(book: book, pending: job, readingPermit: permit, canonicalSHA256: reading.verifiedContentDigest)
+        }
+    }
+
+    public func retryPendingMaterialization(
+        expected: BookImportRetryExpectation,
+        accountPermit: AccountMutationPermit,
+        newSource: PendingBookMaterialization,
+        verifiedSourceSHA256: String,
+        verifiedSourceByteCount: Int64,
+        verifiedSourceVersion: ManagedFileVersion,
+        retiredAttempt: RetiredBookMaterializationAttempt
+    ) async throws -> BookRegistration? {
+        guard accountPermit.ownerID == expected.book.userId,
+              newSource.phase == .registered,
+              newSource.token.ownerID == accountPermit.ownerID,
+              newSource.token.accountGeneration == accountPermit.accountGeneration,
+              newSource.token.bookID == expected.book.id,
+              newSource.token.attemptID != expected.pending.token.attemptID,
+              retiredAttempt.token == expected.pending.token,
+              newSource.destinationRelativePath == expected.book.fileURL,
+              newSource.sourceVersion == verifiedSourceVersion,
+              verifiedSourceByteCount >= 0,
+              newSource.expectedByteCount == verifiedSourceByteCount,
+              verifiedSourceVersion.byteCount == verifiedSourceByteCount,
+              newSource.expectedSHA256.caseInsensitiveCompare(verifiedSourceSHA256) == .orderedSame,
+              expected.pending.expectedSHA256.caseInsensitiveCompare(verifiedSourceSHA256) == .orderedSame,
+              expected.pending.expectedByteCount == verifiedSourceByteCount,
+              expected.canonicalSHA256 == nil || expected.canonicalSHA256?.caseInsensitiveCompare(verifiedSourceSHA256) == .orderedSame else { return nil }
+        return try await dbStore.write { context in
+            try Self.requireAccount(context, ownerID: accountPermit.ownerID, generation: accountPermit.accountGeneration)
+            guard let storedBook = try Self.bookEntity(context, id: expected.book.id),
+                  storedBook.userId == expected.book.userId, storedBook.bookValue == expected.book,
+                  let pending = try Self.pendingEntity(context, bookID: expected.book.id),
+                  pending.ownerID == expected.book.userId,
+                  pending.value == expected.pending,
+                  Self.matches(pending, expected.pending.token),
+                  Self.isRetryable(expected.pending.phase),
+                  let authorization = try Self.readingEntity(context, bookID: expected.book.id),
+                  authorization.ownerID == expected.readingPermit.ownerID,
+                  UInt64(bitPattern: authorization.accountGenerationBits) == expected.readingPermit.accountGeneration,
+                  authorization.contentRevision == expected.readingPermit.contentRevision,
+                  authorization.verifiedContentDigest == expected.canonicalSHA256,
+                  !authorization.revoked, !authorization.tombstoned,
+                  expected.readingPermit.bookID == expected.book.id,
+                  expected.readingPermit.ownerID == expected.book.userId else { return nil }
             Self.replace(pending, with: newSource)
-            return BookRegistration(book: bookValue, token: newSource.token, disposition: .retried)
+            authorization.accountGenerationBits = Int64(bitPattern: accountPermit.accountGeneration)
+            authorization.verifiedContentDigest = verifiedSourceSHA256.lowercased()
+            return BookRegistration(book: expected.book, token: newSource.token, disposition: .retried)
         }
     }
 
@@ -189,6 +371,50 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             try Self.requireLiveBook(context, token: token)
             job.phaseRawValue = to.rawValue
             return true
+        }
+    }
+
+    /// Parks only the exact current sample-repair reservation while its Book
+    /// and reading authorization remain live. The validation and phase update
+    /// share one database transaction so deletion or replacement wins cleanly.
+    public func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome {
+        do {
+            return try await dbStore.write { context in
+                guard token.ownerID == book.userId, token.bookID == book.id,
+                      let account = try Self.accountEntity(context, ownerID: book.userId),
+                      !account.revoked,
+                      UInt64(bitPattern: account.accountGenerationBits) == token.accountGeneration,
+                      let storedBook = try Self.bookEntity(context, id: book.id),
+                      storedBook.userId == book.userId, storedBook.bookValue == book,
+                      let reading = try Self.readingEntity(context, bookID: book.id),
+                      reading.ownerID == book.userId, !reading.revoked, !reading.tombstoned,
+                      UInt64(bitPattern: reading.accountGenerationBits) == token.accountGeneration,
+                      let job = try Self.pendingEntity(context, bookID: book.id),
+                      Self.matches(job, token),
+                      job.sourceKindRawValue == BookSourceKind.sampleRepair.rawValue,
+                      job.destinationRelativePath == book.fileURL,
+                      let fingerprint = try Self.fingerprintEntity(context, bookID: book.id),
+                      fingerprint.ownerID == book.userId,
+                      fingerprint.sha256.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame,
+                      fingerprint.byteCount == job.expectedByteCount,
+                      fingerprint.materializationRevision == reading.contentRevision,
+                      reading.verifiedContentDigest?.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame else {
+                    return .supersededOrFenced
+                }
+                if job.phaseRawValue == BookMaterializationPhase.paused.rawValue { return .parked }
+                let phase = BookMaterializationPhase(rawValue: job.phaseRawValue)
+                let unpreparedCopy = phase == .copying
+                    && job.preparedFileIdentifier == nil
+                    && job.destinationFileIdentifier == nil
+                    && job.promotionRevision == nil
+                guard phase == .registered || unpreparedCopy else {
+                    return .supersededOrFenced
+                }
+                job.phaseRawValue = BookMaterializationPhase.paused.rawValue
+                return .parked
+            }
+        } catch {
+            return .writeFailed
         }
     }
 
@@ -338,6 +564,8 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
                 switch BookSourceKind(rawValue: job.sourceKindRawValue) {
                 case .securityScopedOriginal:
                     canResumeSource = !(job.sourceBookmark?.isEmpty ?? true)
+                case .sampleRepair:
+                    canResumeSource = false
                 case .ownedStaging:
                     if let managedFileRootURL,
                        let relativePath = job.ownedSourceRelativePath,
@@ -487,7 +715,6 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             if let reading {
                 guard reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned else { return false }
                 reading.accountGenerationBits = Int64(bitPattern: generation)
-                reading.contentRevision = fingerprint.version.materializationRevision
                 reading.verifiedContentDigest = fingerprint.sha256.lowercased()
             } else {
                 context.insert(BookReadingAuthorizationEntity(
@@ -596,8 +823,28 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         }
     }
 
-    public func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
-        false
+    public func sampleRepairFingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? {
+        try await dbStore.read { context in
+            guard let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
+                  let bookValue = book.bookValue,
+                  let fingerprintEntity = try Self.fingerprintEntity(context, bookID: bookID),
+                  fingerprintEntity.ownerID == ownerID else { return nil }
+            let fingerprint = fingerprintEntity.value
+            if let pending = try Self.pendingEntity(context, bookID: bookID) {
+                guard let job = pending.value, pending.ownerID == ownerID,
+                      (job.phase == .ready && Self.readyJob(pending, matches: fingerprint, relativePath: book.fileURL)
+                       || job.phase == .paused && job.sourceKind == .sampleRepair
+                        && job.expectedSHA256.caseInsensitiveCompare(fingerprint.sha256) == .orderedSame
+                        && job.expectedByteCount == fingerprint.version.byteCount
+                        && job.destinationRelativePath == book.fileURL) else { return nil }
+            }
+            guard bookValue.formatType == .epub else { return nil }
+            guard let account = try Self.accountEntity(context, ownerID: ownerID), !account.revoked,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  reading.accountGenerationBits == account.accountGenerationBits else { return nil }
+            return fingerprint
+        }
     }
 
     public func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
@@ -849,34 +1096,6 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         }
     }
 
-    public func recordServerAcceptance(
-        bookID: BookID,
-        ownerID: UserID,
-        expectedGeneration: UInt64,
-        expectedContentRevision: UUID,
-        acceptance: BookServerAcceptance
-    ) async throws -> Bool {
-        try await dbStore.write { context in
-            guard acceptance.sha256.count == 64,
-                  let account = try Self.accountEntity(context, ownerID: ownerID),
-                  !account.revoked,
-                  account.accountGenerationBits == Int64(bitPattern: expectedGeneration),
-                  let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
-                  let reading = try Self.readingEntity(context, bookID: bookID),
-                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
-                  reading.accountGenerationBits == Int64(bitPattern: expectedGeneration),
-                  reading.contentRevision == expectedContentRevision,
-                  let fingerprint = try Self.fingerprintEntity(context, bookID: bookID),
-                  fingerprint.ownerID == ownerID,
-                  fingerprint.sha256.caseInsensitiveCompare(acceptance.sha256) == .orderedSame,
-                  fingerprint.materializationRevision == expectedContentRevision else { return false }
-            fingerprint.serverAcceptanceSHA256 = acceptance.sha256.lowercased()
-            fingerprint.acceptedOperationID = acceptance.acceptedOperationID
-            fingerprint.acceptedAt = acceptance.acceptedAt
-            return true
-        }
-    }
-
     public func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {
         if let generation {
             try await dbStore.activateAccountMutation(permit: AccountMutationPermit(ownerID: ownerID, accountGeneration: generation))
@@ -900,6 +1119,51 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             return
         }
         try await dbStore.revokeBookReading(permit: permit, tombstone: true)
+    }
+
+    private static func sampleRepairPath(_ url: URL) throws -> URL {
+        guard url.isFileURL, url.path.hasPrefix("/"),
+              !url.pathComponents.contains("..") else { throw PersistenceError.staleCandidate }
+        let fileManager = FileManager.default
+        var ancestor = url
+        var missingComponents: [String] = []
+        while true {
+            let attributes: [FileAttributeKey: Any]
+            do {
+                attributes = try fileManager.attributesOfItem(atPath: ancestor.path)
+            } catch {
+                guard isMissingPathError(error) else { throw PersistenceError.staleCandidate }
+                do {
+                    _ = try fileManager.destinationOfSymbolicLink(atPath: ancestor.path)
+                    throw PersistenceError.staleCandidate
+                } catch {
+                    guard isMissingPathError(error) else { throw PersistenceError.staleCandidate }
+                }
+                let parent = ancestor.deletingLastPathComponent()
+                guard parent.path != ancestor.path else { throw PersistenceError.staleCandidate }
+                missingComponents.append(ancestor.lastPathComponent)
+                ancestor = parent
+                continue
+            }
+            if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+                _ = try fileManager.destinationOfSymbolicLink(atPath: ancestor.path)
+            }
+            let resolved = ancestor.resolvingSymlinksInPath()
+            let resolvedAttributes = try fileManager.attributesOfItem(atPath: resolved.path)
+            guard resolvedAttributes[.type] as? FileAttributeType != .typeSymbolicLink,
+                  missingComponents.isEmpty || resolvedAttributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw PersistenceError.staleCandidate
+            }
+            // Standardizing an absent leaf can preserve a different /private
+            // alias than its existing root. Resolve only the existing ancestor.
+            return missingComponents.reversed().reduce(resolved) { $0.appendingPathComponent($1) }
+        }
+    }
+
+    private static func isMissingPathError(_ error: any Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSCocoaErrorDomain && error.code == CocoaError.Code.fileReadNoSuchFile.rawValue
+            || error.domain == NSPOSIXErrorDomain && error.code == POSIXErrorCode.ENOENT.rawValue
     }
 
     private static func makeBookEntity(_ book: Book) -> BookEntity {
@@ -967,6 +1231,10 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         return phase != .ready && phase != .failed && phase != .cancelled && phase != .paused
     }
 
+    private static func isRetryable(_ phase: BookMaterializationPhase) -> Bool {
+        phase == .failed || phase == .cancelled || phase == .paused
+    }
+
     private static func readyJob(
         _ entity: PendingBookMaterializationEntity,
         matches fingerprint: BookFileFingerprint,
@@ -1009,6 +1277,16 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         entity.preparedFileIdentifier = value.preparedFileIdentifier
         entity.destinationFileIdentifier = value.destinationFileIdentifier
         entity.promotionRevision = value.promotionRevision
+    }
+
+    private static func sha256(at url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

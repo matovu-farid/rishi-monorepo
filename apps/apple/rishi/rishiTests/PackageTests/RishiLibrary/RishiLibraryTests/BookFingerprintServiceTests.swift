@@ -32,7 +32,7 @@ struct BookFingerprintServiceTests {
         let version = try #require(try FileManagedFileVersionInspector().managedFileVersion(at: root.appendingPathComponent(book.fileURL), materializationRevision: UUID()))
         let persistence = FingerprintPersistence(fingerprint: BookFileFingerprint(bookID: book.id, ownerID: owner, sha256: testBookDigest, version: version))
         let hashes = HashCounter()
-        let service = BookFingerprintService(rootURL: root, bookStore: InMemoryBookStore(initial: [book]), persistence: persistence, hashFile: { _ in hashes.increment(); return testBookDigest })
+        let service = BookFingerprintService(rootURL: root, bookStore: InMemoryBookStore(initial: [book]), persistence: persistence, currentGeneration: { 1 }, hashFile: { _ in hashes.increment(); return testBookDigest })
 
         let result = try await service.matchingBook(ownerID: owner, byteCount: 4, sha256: testBookDigest)
 
@@ -48,7 +48,7 @@ struct BookFingerprintServiceTests {
         let book = try makeBook(root: root, owner: owner, bytes: Data("same".utf8))
         let persistence = FingerprintPersistence()
         let hashes = HashCounter()
-        let service = BookFingerprintService(rootURL: root, bookStore: InMemoryBookStore(initial: [book]), persistence: persistence, hashFile: { _ in hashes.increment(); return testBookDigest })
+        let service = BookFingerprintService(rootURL: root, bookStore: InMemoryBookStore(initial: [book]), persistence: persistence, currentGeneration: { 1 }, hashFile: { _ in hashes.increment(); return testBookDigest })
 
         let result = try await service.matchingBook(ownerID: owner, byteCount: 4, sha256: testBookDigest)
 
@@ -132,6 +132,7 @@ struct BookFingerprintServiceTests {
             rootURL: root,
             bookStore: InMemoryBookStore(initial: [book]),
             persistence: persistence,
+            currentGeneration: { 1 },
             hashFile: { _ in hashes.increment(); return testBookDigest }
         )
 
@@ -155,6 +156,7 @@ struct BookFingerprintServiceTests {
             rootURL: root,
             bookStore: InMemoryBookStore(initial: [book]),
             persistence: persistence,
+            currentGeneration: { 1 },
             hashFile: { _ in testBookDigest }
         )
 
@@ -236,7 +238,7 @@ private final class HashCounter: @unchecked Sendable {
     func increment() { lock.lock(); defer { lock.unlock() }; count += 1 }
 }
 
-private actor FingerprintPersistence: BookImportPersistence {
+private actor FingerprintPersistence: BookFingerprintPersistence {
     private var stored: [BookID: BookFileFingerprint] = [:]
     private let allowCache: Bool
     private let pending: PendingBookMaterialization?
@@ -249,7 +251,7 @@ private actor FingerprintPersistence: BookImportPersistence {
         guard let value = stored[bookID], value.ownerID == ownerID else { return nil }
         return value
     }
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
+    private func storeValidatedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
         guard allowCache, fingerprint.version == expectedVersion else { return false }
         if let pending {
             guard pending.phase == .ready,
@@ -264,16 +266,12 @@ private actor FingerprintPersistence: BookImportPersistence {
         stored[fingerprint.bookID] = fingerprint
         return true
     }
-    func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration { fatalError("unused") }
-    func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration? { fatalError("unused") }
-    func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool { fatalError("unused") }
-    func commitManaged(token: BookMaterializationToken, fingerprint: BookFileFingerprint) async throws -> Bool { fatalError("unused") }
-    func patchCover(bookID: BookID, token: BookMaterializationToken, relativePath: String) async throws -> Bool { fatalError("unused") }
-    func adoptRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID, verifiedArtifacts: VerifiedBookArtifacts) async throws -> BookMaterializationToken? { fatalError("unused") }
+    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
+        guard expectedGeneration == 1 else { return false }
+        return try await storeValidatedFingerprint(fingerprint, expectedRelativePath: expectedRelativePath, expectedVersion: expectedVersion)
+    }
     func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? {
         guard pending?.token.bookID == bookID, pending?.token.ownerID == ownerID else { return nil }
         return pending
     }
-    func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {}
-    func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws {}
 }

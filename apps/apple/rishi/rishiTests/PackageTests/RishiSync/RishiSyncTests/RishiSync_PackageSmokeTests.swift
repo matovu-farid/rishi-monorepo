@@ -41,7 +41,7 @@ struct RishiSync_PackageSmokeTests {
 
     @Test("SwiftData bootstrap yields an empty sync metadata store")
     func syncMetadataBootstrapYieldsEmptyStore() async throws {
-        let store = try SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let store = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
         #expect(try await store.pendingCount() == 0)
         #expect(try await store.allDirty().isEmpty)
     }

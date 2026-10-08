@@ -60,7 +60,7 @@ struct ReaderDeletionFixture {
         let registry = BookSourceRegistry(persistence: persistence, currentGeneration: generationProvider,
                                           currentOwnerID: { owner }, managedURL: { root.appendingPathComponent($0.fileURL) })
         let lifecycle = BookImportLifecycle(sourceRegistry: registry, currentAccountGeneration: generationProvider)
-        let metadata = try makeMetadata(at: metadataURL)
+        let metadata = try await makeMetadata(at: metadataURL)
         let storage = BookFileStorage(rootURL: root, bookStore: books, coverExtractors: [:],
                                       isTombstoned: { (try? await metadata.isTombstone(entityId: $0, kind: .book)) ?? true })
         let sync = makeSync(db: db, books: books, positions: positions, storage: storage, metadata: metadata)
@@ -70,10 +70,10 @@ struct ReaderDeletionFixture {
                     storage: storage, metadata: metadata, sync: sync)
     }
 
-    static func makeMetadata(at url: URL) throws -> SwiftDataSyncMetadataStore {
+    static func makeMetadata(at url: URL) async throws -> SwiftDataSyncMetadataStore {
         let container = try ModelContainer(for: SyncMetadataRow.self, SyncCursorStateRow.self, SyncRecoveryStateRow.self,
                                            configurations: ModelConfiguration(url: url))
-        return SwiftDataSyncMetadataStore(container: container)
+        return await SwiftDataSyncMetadataStore.make(container: container)
     }
 
     private static func makeSync(db: RishiDBStore, books: SwiftDataBookStore, positions: SwiftDataPositionStore,
@@ -105,7 +105,17 @@ struct ReaderDeletionFixture {
                 metadataStore: metadata
             ),
             fetcher: RemoteChangeFetcher(workerClient: client, metadataStore: metadata),
-            applier: ChangeApplier(bookStore: books, positionStore: positions, highlightStore: highlights, bookmarkStore: bookmarks, metadataStore: metadata),
+            applier: ChangeApplier(
+            bookStore: books,
+            positionStore: positions,
+            highlightStore: highlights,
+            bookmarkStore: bookmarks,
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
+        ),
             conversationsFetcher: ConversationsFetcher(workerClient: client, metadataStore: metadata),
             messagesFetcher: MessagesFetcher(workerClient: client, metadataStore: metadata),
             conversationStore: conversations, messageStore: messages, dataUseConsentProvider: NoWorkerDataUseConsentProvider()
@@ -299,16 +309,16 @@ struct ImportedBookDeletionLifetimeTests {
         let poll = ReaderLifetimeGate()
         var lease: BookSourceLease? = try await fixture.registry.acquireReadableSource(for: fixture.book)
         var reader: ReaderViewModel? = fixture.makeReader(lease: try #require(lease))
-        reader?.didChangeLocation(try ReaderDeletionFixture.locator(), isProgrammatic: true)
+        reader?.didChangeLocation(try ReaderDeletionFixture.locator())
         await reader?.flush()
         var attachment: ReaderSourceAttachment? = ReaderSourceAttachment(
             viewModel: try #require(reader), sourceLease: try #require(lease), syncEngine: fixture.sync,
             playbackOwner: environment.playback, voiceEntry: environment.voice, cleanup: cleanup,
-            pollWait: { await poll.wait() }
+            scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db)
         )
         await attachment?.registerCleanup()
         #expect(attachment?.installIfCurrent(attachment, navigation: environment.navigation) == true)
-        #expect(await readerLifetimeEventually { poll.entered > 0 })
+        #expect(attachment?.isDisposed == false)
         weak var weakReader = reader
         weak var weakLease = lease
         weak var weakAttachment = attachment
@@ -484,7 +494,7 @@ struct ImportedBookDeletionLifetimeTests {
 
         let reopenedDB = try RishiDB.makeStore(at: fixture.databaseURL)
         let reopenedBooks = SwiftDataBookStore(dbStore: reopenedDB)
-        let reopenedMetadata = try ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
+        let reopenedMetadata = try await ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
         #expect(try await reopenedBooks.book(fixture.book.id) == fixture.book)
         #expect(try await !reopenedMetadata.isTombstone(entityId: fixture.book.id, kind: .book))
     }
@@ -492,7 +502,7 @@ struct ImportedBookDeletionLifetimeTests {
     private func assertDeletedAfterReopen(_ fixture: ReaderDeletionFixture) async throws {
         let db = try RishiDB.makeStore(at: fixture.databaseURL)
         let books = SwiftDataBookStore(dbStore: db)
-        let metadata = try ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
+        let metadata = try await ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
         #expect(try await books.book(fixture.book.id) == nil)
         #expect(try await metadata.isTombstone(entityId: fixture.book.id, kind: .book))
         let persistence = SwiftDataBookImportPersistence(dbStore: db, managedFileRootURL: fixture.root)

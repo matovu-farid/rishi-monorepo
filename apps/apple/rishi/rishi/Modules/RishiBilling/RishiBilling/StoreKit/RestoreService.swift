@@ -71,10 +71,11 @@ public protocol RestoreProtocol: Sendable {
 @available(iOS 18.4, macOS 15.4, *)
 public actor RestoreService {
 
+    private let scopedSync: (authority: SessionCredentialAuthority, client: EntitlementSyncClient)?
     private let reconciler: EntitlementReconciler
     private let appStoreSync: @Sendable () async throws -> Void
     private let activeEntitlements: @Sendable () async -> [RestoreEntitlement]
-    private let entitlementSync: @Sendable (String) async throws -> EntitlementSyncResult
+    private let legacySyncClient: (any EntitlementSyncing)?
 
     /// Product ID prefix for the grandfathered Rishi Pro tier.
     public static let productIdPrefix = "org.fidexa.rishi.pro."
@@ -83,13 +84,33 @@ public actor RestoreService {
         reconciler: EntitlementReconciler,
         appStoreSync: (@Sendable () async throws -> Void)? = nil,
         activeEntitlements: (@Sendable () async -> [RestoreEntitlement])? = nil,
-        entitlementSync: (@Sendable (String) async throws -> EntitlementSyncResult)? = nil
+        entitlementSyncClient: any EntitlementSyncing
     ) {
+        self.scopedSync = nil
         self.reconciler = reconciler
         self.appStoreSync = appStoreSync ?? {
             try await AppStore.sync()
         }
-        self.activeEntitlements = activeEntitlements ?? {
+        self.activeEntitlements = activeEntitlements ?? Self.storeKitEntitlements
+        legacySyncClient = entitlementSyncClient
+    }
+
+    init(reconciler: EntitlementReconciler, entitlementSyncClient: EntitlementSyncClient,
+         credentialAuthority: SessionCredentialAuthority,
+         appStoreSync: (@Sendable () async throws -> Void)? = nil,
+         activeEntitlements: (@Sendable () async -> [RestoreEntitlement])? = nil) throws {
+        guard entitlementSyncClient.usesCredentialAuthority(credentialAuthority) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        self.reconciler = reconciler
+        scopedSync = (credentialAuthority, entitlementSyncClient)
+        self.appStoreSync = appStoreSync ?? { try await AppStore.sync() }
+        self.activeEntitlements = activeEntitlements ?? Self.storeKitEntitlements
+        // Required scoped mode never calls an ambient compatibility capability.
+        legacySyncClient = nil
+    }
+
+    private static let storeKitEntitlements: @Sendable () async -> [RestoreEntitlement] = {
             var entitlements: [RestoreEntitlement] = []
             for await result in Transaction.currentEntitlements {
                 guard case .verified(let transaction) = result,
@@ -104,10 +125,6 @@ public actor RestoreService {
                 )
             }
             return entitlements
-        }
-        self.entitlementSync = entitlementSync ?? {
-            try await syncEntitlement(jws: $0)
-        }
     }
 
     /// User-initiated restore. NEVER call from app launch — triggers an
@@ -128,6 +145,19 @@ public actor RestoreService {
     ///    bought via another platform.
     @discardableResult
     public func restore() async throws -> RestoreOutcome {
+        guard scopedSync == nil else { throw CredentialAuthenticationFailure.accountChanged }
+        return try await restoreCaptured(credentialContext: nil)
+    }
+
+    func restore(credentialContext: CredentialRequestContext) async throws -> RestoreOutcome {
+        guard let scopedSync, case .normal(let lease) = credentialContext,
+              scopedSync.authority.isCurrent(lease), !Task.isCancelled else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        return try await restoreCaptured(credentialContext: credentialContext)
+    }
+
+    private func restoreCaptured(credentialContext: CredentialRequestContext?) async throws -> RestoreOutcome {
         Log.event("iap.restore.start", level: .info)
         do {
             try await appStoreSync()
@@ -145,7 +175,15 @@ public actor RestoreService {
         for entitlement in entitlements {
             guard RishiProductID.all.contains(entitlement.productID) else { continue }
             do {
-                let result = try await entitlementSync(entitlement.jws)
+                let result: EntitlementSyncResult
+                if let scopedSync, let credentialContext {
+                    // Capture happened before AppStore.sync. No loop iteration
+                    // may recapture the account after that suspension.
+                    result = try await scopedSync.client.sync(transactionJWS: entitlement.jws,
+                                                              credentialContext: credentialContext)
+                } else if let legacySyncClient, credentialContext == nil {
+                    result = try await legacySyncClient.sync(transactionJWS: entitlement.jws)
+                } else { throw CredentialAuthenticationFailure.accountChanged }
                 guard result.verified else {
                     throw RestoreError.entitlementSyncFailed(result.reason ?? "server rejected entitlement")
                 }
@@ -162,6 +200,10 @@ public actor RestoreService {
         }
 
         await MainActor.run {
+            if let scopedSync = self.scopedSync {
+                guard case .some(.normal(let lease)) = credentialContext,
+                      scopedSync.authority.isCurrent(lease), !Task.isCancelled else { return }
+            }
             self.reconciler.setOnDevice(.subscribed)
         }
         Log.event(
@@ -184,7 +226,23 @@ public actor RestoreService {
     /// StoreKit-test purchases — never aware of the purchase at all). Safe to
     /// call unconditionally at launch. No-op when `StoreKitIAPFlag` is OFF
     /// (the flip goes through `setOnDevice`, which is flag-gated).
+    nonisolated func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        scopedSync?.authority === authority
+    }
+
+    func refreshOnDeviceEntitlementAtLaunch(credentialContext: CredentialRequestContext) async {
+        guard let scopedSync, case .normal(let lease) = credentialContext,
+              scopedSync.authority.isCurrent(lease), !Task.isCancelled else { return }
+        let granted = await activeEntitlements().map(\.productID)
+        guard !granted.isEmpty else { return }
+        await MainActor.run {
+            guard scopedSync.authority.isCurrent(lease), !Task.isCancelled else { return }
+            self.reconciler.setOnDevice(.subscribed)
+        }
+    }
+
     public func refreshOnDeviceEntitlementAtLaunch() async {
+        guard scopedSync == nil else { return }
         let granted = await activeEntitlements().map(\.productID)
         guard !granted.isEmpty else {
             Log.event("iap.launch_reconcile.none", level: .info)
@@ -211,4 +269,4 @@ public actor RestoreService {
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any RestoreProtocol`; production passes the concrete actor.
 @available(iOS 18.4, macOS 15.4, *)
-extension RestoreService: RestoreProtocol, EntitlementLaunchRefresh {}
+extension RestoreService: RestoreProtocol, CredentialBoundEntitlementLaunchRefresh {}

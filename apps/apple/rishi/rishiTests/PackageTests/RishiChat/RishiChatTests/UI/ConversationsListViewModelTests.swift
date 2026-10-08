@@ -12,7 +12,7 @@ import Foundation
 /// level — no GRDB, no SwiftUI, no network. Suite is `@MainActor` because the
 /// viewmodel is `@MainActor`-isolated.
 @MainActor
-@Suite("ConversationsListViewModel", .serialized)
+@Suite("ConversationsListViewModel", .serialized, .timeLimit(.minutes(1)))
 struct ConversationsListViewModelTests {
 
     // MARK: - 1. load(userId:) populates conversations in updatedAt-desc order.
@@ -49,7 +49,7 @@ struct ConversationsListViewModelTests {
 
     // MARK: - 2. load(userId:) hydrates messagesByConversation index.
 
-    @Test("load hydrates messagesByConversation for every conversation")
+    @Test("load leaves transcripts lazy; explicit content search hydrates the index")
     func loadHydratesMessagesIndex() async {
         let userId = UUID()
         let c1 = Conversation(userId: userId, title: "C1", updatedAt: Date(timeIntervalSince1970: 1_700_000_200))
@@ -65,6 +65,9 @@ struct ConversationsListViewModelTests {
         )
 
         await vm.load(userId: userId)
+        #expect(vm.messagesByConversation.isEmpty)
+        vm.searchQuery = "hi"
+        await vm.ensureSearchIndex(userId: userId, requestRevision: vm.indexRequestRevision)
         #expect(vm.messagesByConversation[c1.id]?.count == 1)
         #expect(vm.messagesByConversation[c2.id]?.count == 2)
     }
@@ -106,6 +109,7 @@ struct ConversationsListViewModelTests {
 
         await vm.load(userId: userId)
         vm.searchQuery = "transcendence"
+        await vm.ensureSearchIndex(userId: userId, requestRevision: vm.indexRequestRevision)
         #expect(vm.filteredConversations.count == 1)
         #expect(vm.filteredConversations.first?.id == c1.id)
     }
@@ -198,6 +202,201 @@ struct ConversationsListViewModelTests {
         #expect(vm.conversations.isEmpty)
         #expect(vm.messagesByConversation.isEmpty)
     }
+    @Test("rows and title hits publish before gated transcripts; blank queries do no reads")
+    func rowsBeforeSearchHydration() async {
+        let user = UUID()
+        let row = Conversation(userId: user, title: "Café title")
+        let message = Message(conversationId: row.id, role: .assistant, content: "unique body")
+        let store = ListMessagesStore(rows: [message])
+        let vm = ConversationsListViewModel(conversationStore: ListRowsStore(rows: [row]), messageStore: store)
+        await vm.load(userId: user)
+        #expect(vm.conversations == [row])
+        #expect(await store.readCount == 0)
+        vm.searchQuery = " \n "
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        #expect(await store.readCount == 0)
+        vm.searchQuery = "cafe"
+        #expect(vm.filteredConversations == [row])
+        let gate = ListReadGate()
+        await store.holdNextRead(gate)
+        let task = Task { await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision) }
+        defer { task.cancel(); Task { await gate.open() } }
+        await store.waitForReads(1)
+        #expect(vm.conversations == [row])
+        #expect(vm.filteredConversations == [row])
+        if case .indexing = vm.searchIndexState {} else { Issue.record("Expected indexing") }
+        // Nonblank typing filters without changing the index request revision.
+        let revision = vm.indexRequestRevision
+        vm.searchQuery = "unique body"
+        #expect(vm.indexRequestRevision == revision)
+        await gate.open()
+        await task.value
+        #expect(vm.filteredConversations == [row])
+        #expect(await store.readCount == 1)
+    }
+
+    @Test("same-account refresh failure retains rows; late earlier refresh loses")
+    func rowLoadOwnershipAndFailure() async {
+        let user = UUID()
+        let old = Conversation(userId: user, title: "old")
+        let newer = Conversation(userId: user, title: "new")
+        let store = ListRowsStore(rows: [old])
+        let vm = ConversationsListViewModel(conversationStore: store, messageStore: ListMessagesStore())
+        await vm.load(userId: user)
+        await store.setFailure(true)
+        await vm.load(userId: user)
+        #expect(vm.conversations == [old])
+        #expect(vm.loadError is FakeError)
+        await store.setFailure(false)
+        let gate = ListReadGate()
+        await store.holdNextRead(gate)
+        let first = Task { await vm.load(userId: user) }
+        defer { first.cancel(); Task { await gate.open() } }
+        await store.waitForReads(3)
+        await store.setRows([newer])
+        await vm.load(userId: user)
+        await gate.open()
+        await first.value
+        #expect(vm.conversations == [newer])
+        #expect(vm.loadError == nil)
+        #expect(!vm.isLoading)
+    }
+
+    @Test("account switch hides old rows immediately and fences suspended old index")
+    func accountChangeFencesOldIndex() async {
+        let a = UUID(), b = UUID()
+        let rowA = Conversation(userId: a, title: "A")
+        let rowB = Conversation(userId: b, title: "B")
+        let rows = ListRowsStore(rows: [rowA, rowB])
+        let messages = ListMessagesStore(rows: [Message(conversationId: rowA.id, role: .user, content: "old account")])
+        let vm = ConversationsListViewModel(conversationStore: rows, messageStore: messages)
+        await vm.load(userId: a)
+        vm.searchQuery = "old account"
+        let indexGate = ListReadGate()
+        await messages.holdNextRead(indexGate)
+        let index = Task { await vm.ensureSearchIndex(userId: a, requestRevision: vm.indexRequestRevision) }
+        defer { index.cancel(); Task { await indexGate.open() } }
+        await messages.waitForReads(1)
+        let rowGate = ListReadGate()
+        await rows.holdNextRead(rowGate)
+        let loadB = Task { await vm.load(userId: b) }
+        defer { loadB.cancel(); Task { await rowGate.open() } }
+        await rows.waitForReads(2)
+        #expect(vm.conversations.isEmpty)
+        #expect(vm.messagesByConversation.isEmpty)
+        await rowGate.open()
+        await loadB.value
+        await indexGate.open()
+        await index.value
+        #expect(vm.conversations == [rowB])
+        #expect(vm.messagesByConversation[rowA.id] == nil)
+    }
+
+    @Test("partial search is explicit and retry/same-ID sync rereads current content")
+    func partialSearchRetryAndSync() async throws {
+        let user = UUID()
+        let good = Conversation(userId: user, title: "one")
+        let bad = Conversation(userId: user, title: "two")
+        let messages = ListMessagesStore(rows: [Message(conversationId: good.id, role: .user, content: "needle")])
+        let vm = ConversationsListViewModel(conversationStore: ListRowsStore(rows: [good, bad]), messageStore: messages)
+        await messages.failReads(for: bad.id, enabled: true)
+        await vm.load(userId: user)
+        vm.searchQuery = "needle"
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        #expect(vm.filteredConversations == [good])
+        if case .partial(let error) = vm.searchIndexState { #expect(error is FakeError) }
+        else { Issue.record("Read failure must leave search incomplete") }
+        await messages.failReads(for: bad.id, enabled: false)
+        try await messages.upsert(Message(conversationId: bad.id, role: .assistant, content: "needle"))
+        vm.retrySearchIndex()
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        #expect(Set(vm.filteredConversations.map(\.id)) == Set([good.id, bad.id]))
+        if case .ready = vm.searchIndexState {} else { Issue.record("Expected ready index") }
+        let revision = vm.indexRequestRevision
+        try await messages.upsert(Message(conversationId: bad.id, role: .assistant, content: "new inbound"))
+        await vm.refreshAfterSync(userId: user)
+        #expect(vm.indexRequestRevision > revision)
+        #expect(vm.messagesByConversation.isEmpty)
+        vm.searchQuery = "new inbound"
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        #expect(vm.filteredConversations.map(\.id) == [bad.id])
+    }
+
+    @Test("canceled old index cannot clear a newer ready index")
+    func canceledIndexOwnership() async {
+        let user = UUID()
+        let row = Conversation(userId: user, title: "row")
+        let messages = ListMessagesStore(rows: [Message(conversationId: row.id, role: .user, content: "hit")])
+        let vm = ConversationsListViewModel(conversationStore: ListRowsStore(rows: [row]), messageStore: messages)
+        await vm.load(userId: user)
+        vm.searchQuery = "hit"
+        let gate = ListReadGate()
+        await messages.holdNextRead(gate)
+        let old = Task { await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision) }
+        defer { old.cancel(); Task { await gate.open() } }
+        await messages.waitForReads(1)
+        old.cancel()
+        vm.retrySearchIndex()
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        await gate.open()
+        await old.value
+        if case .ready = vm.searchIndexState {} else { Issue.record("Old cancellation cleared new state") }
+        #expect(vm.filteredConversations == [row])
+    }
+
+    @Test("deletion reads fresh children despite a stale index; read failure is actionable")
+    func deletionIgnoresCacheAndExposesFailure() async throws {
+        let user = UUID()
+        let row = Conversation(userId: user, title: "delete")
+        let first = Message(conversationId: row.id, role: .user, content: "first")
+        let second = Message(conversationId: row.id, role: .assistant, content: "later")
+        let rows = ListRowsStore(rows: [row])
+        let messages = ListMessagesStore(rows: [first])
+        let vm = ConversationsListViewModel(conversationStore: rows, messageStore: messages)
+        await vm.load(userId: user)
+        vm.searchQuery = "first"
+        await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision)
+        try await messages.upsert(second)
+        await messages.failReads(for: row.id, enabled: true)
+        #expect(await vm.delete(id: row.id) == false)
+        #expect(vm.deleteError is FakeError)
+        #expect(vm.conversations == [row])
+        #expect(await messages.deletedIDs.isEmpty)
+        #expect(await rows.deletes == 0)
+        await messages.failReads(for: row.id, enabled: false)
+        #expect(await vm.delete(id: row.id))
+        #expect(Set(await messages.deletedIDs) == Set([first.id, second.id]))
+        #expect(vm.conversations.isEmpty)
+        #expect(vm.messagesByConversation.isEmpty)
+        #expect(vm.deleteError == nil)
+    }
+
+    @Test("successful delete fences pre-delete row refresh and suspended hydration")
+    func deleteFencesOldReads() async {
+        let user = UUID()
+        let row = Conversation(userId: user, title: "gone")
+        let rows = ListRowsStore(rows: [row])
+        let messages = ListMessagesStore(rows: [Message(conversationId: row.id, role: .user, content: "cached")])
+        let vm = ConversationsListViewModel(conversationStore: rows, messageStore: messages)
+        await vm.load(userId: user)
+        vm.searchQuery = "cached"
+        let indexGate = ListReadGate(), rowGate = ListReadGate()
+        await messages.holdNextRead(indexGate)
+        await rows.holdNextRead(rowGate)
+        let index = Task { await vm.ensureSearchIndex(userId: user, requestRevision: vm.indexRequestRevision) }
+        let refresh = Task { await vm.load(userId: user) }
+        defer { index.cancel(); refresh.cancel(); Task { await indexGate.open(); await rowGate.open() } }
+        await messages.waitForReads(1)
+        await rows.waitForReads(2)
+        #expect(await vm.delete(id: row.id))
+        await indexGate.open()
+        await rowGate.open()
+        await index.value
+        await refresh.value
+        #expect(vm.conversations.isEmpty)
+        #expect(vm.messagesByConversation.isEmpty)
+    }
+
 }
 
 // MARK: - Fakes
@@ -213,4 +412,75 @@ private final class ThrowingConversationStore: ConversationStore, @unchecked Sen
     func conversation(_ id: ConversationID) async throws -> Conversation? { nil }
     func upsert(_ conversation: Conversation) async throws {}
     func delete(_ id: ConversationID) async throws {}
+}
+
+
+private actor ListReadGate {
+    private var opened = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func wait() async { if !opened { await withCheckedContinuation { waiting.append($0) } } }
+    func open() { opened = true; let pending = waiting; waiting = []; for continuation in pending { continuation.resume() } }
+}
+private actor ListCountSignal {
+    private var count = 0
+    private var waiting: [(Int, CheckedContinuation<Void, Never>)] = []
+    func record(_ count: Int) {
+        self.count = count
+        let ready = waiting.filter { $0.0 <= count }
+        waiting.removeAll { $0.0 <= count }
+        for (_, continuation) in ready { continuation.resume() }
+    }
+    func wait(_ target: Int) async {
+        if count < target { await withCheckedContinuation { waiting.append((target, $0)) } }
+    }
+}
+private actor ListRowsStore: ConversationStore {
+    private var rows: [Conversation]
+    private var fails = false
+    private var nextGate: ListReadGate?
+    private var reads = 0
+    private let signal = ListCountSignal()
+    private(set) var deletes = 0
+    init(rows: [Conversation]) { self.rows = rows }
+    func setRows(_ value: [Conversation]) { rows = value }
+    func setFailure(_ value: Bool) { fails = value }
+    func holdNextRead(_ gate: ListReadGate) { nextGate = gate }
+    func waitForReads(_ target: Int) async { await signal.wait(target) }
+    func conversations(for userId: UserID) async throws -> [Conversation] {
+        let captured = rows.filter { $0.userId == userId }, failure = fails, gate = nextGate
+        nextGate = nil; reads += 1
+        await signal.record(reads)
+        await gate?.wait()
+        if failure { throw FakeError.boom }
+        return captured
+    }
+    func conversation(_ id: ConversationID) async throws -> Conversation? { rows.first { $0.id == id } }
+    func upsert(_ conversation: Conversation) async throws { rows.removeAll { $0.id == conversation.id }; rows.append(conversation) }
+    func delete(_ id: ConversationID) async throws { deletes += 1; rows.removeAll { $0.id == id } }
+}
+private actor ListMessagesStore: MessageStore {
+    private var rows: [Message]
+    private var failures: Set<ConversationID> = []
+    private var nextGate: ListReadGate?
+    private let signal = ListCountSignal()
+    private(set) var readCount = 0
+    private(set) var deletedIDs: [MessageID] = []
+    init(rows: [Message] = []) { self.rows = rows }
+    func failReads(for id: ConversationID, enabled: Bool) {
+        if enabled { failures.insert(id) } else { failures.remove(id) }
+    }
+    func holdNextRead(_ gate: ListReadGate) { nextGate = gate }
+    func waitForReads(_ count: Int) async { await signal.wait(count) }
+    func messages(for conversationId: ConversationID) async throws -> [Message] {
+        let captured = rows.filter { $0.conversationId == conversationId }
+        let failure = failures.contains(conversationId), gate = nextGate
+        nextGate = nil; readCount += 1
+        await signal.record(readCount)
+        await gate?.wait()
+        if failure { throw FakeError.boom }
+        return captured
+    }
+    func message(_ id: MessageID) async throws -> Message? { rows.first { $0.id == id } }
+    func upsert(_ message: Message) async throws { rows.removeAll { $0.id == message.id }; rows.append(message) }
+    func delete(_ id: MessageID) async throws { deletedIDs.append(id); rows.removeAll { $0.id == id } }
 }

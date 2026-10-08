@@ -3,6 +3,233 @@ import TipKit
 
 
 import SwiftUI
+
+struct FirstPromptImportLifecycleEvent {
+    enum Kind: Equatable {
+        case cancelled
+        case began(supportedCount: Int)
+        case registered(BookID)
+        case finished([BookID])
+        case retired
+        case accepted(BookID)
+        case rejected
+    }
+
+    let attemptID: UUID
+    let identity: LibraryAccountIdentity
+    let kind: Kind
+}
+
+struct FirstPromptImportReducer {
+    enum Event {
+        case cancelled
+        case began(supportedCount: Int)
+        case registered(BookID)
+        case finished(candidateBookIDs: [BookID])
+        case acceptanceFinished(BookID, accepted: Bool)
+        case retired
+    }
+
+    enum Action: Equatable {
+        case accept(BookID)
+        case publishAccepted(BookID)
+        case finishAccepted(BookID)
+        case finishRejected
+        case wait
+        case ignore
+    }
+
+    private(set) var began = false
+    private(set) var terminal = false
+    private(set) var selectedCandidate: BookID?
+    private(set) var accepted = false
+    private(set) var retired = false
+    private var acceptanceStarted = false
+    private var acceptanceFinished = false
+    private var acceptancePublished = false
+    private var completed = false
+
+    mutating func reduce(_ event: Event) -> Action {
+        guard !completed else { return .ignore }
+        switch event {
+        case .cancelled, .retired:
+            terminal = true
+            if case .retired = event { retired = true }
+            completed = true
+            return .finishRejected
+        case .began:
+            guard !began, !terminal else { return .ignore }
+            began = true
+            return .wait
+        case let .registered(bookID):
+            guard began, !terminal else { return .ignore }
+            guard selectedCandidate == nil else { return .ignore }
+            selectedCandidate = bookID
+            acceptanceStarted = true
+            return .accept(bookID)
+        case let .finished(candidateBookIDs):
+            guard began, !terminal else { return .ignore }
+            terminal = true
+            if let selectedCandidate {
+                guard acceptanceFinished else { return .wait }
+                completed = true
+                return accepted ? .finishAccepted(selectedCandidate) : .finishRejected
+            }
+            guard let first = candidateBookIDs.first else {
+                completed = true
+                return .finishRejected
+            }
+            selectedCandidate = first
+            acceptanceStarted = true
+            return .accept(first)
+        case let .acceptanceFinished(bookID, succeeded):
+            guard acceptanceStarted, selectedCandidate == bookID else { return .ignore }
+            accepted = succeeded
+            acceptanceFinished = true
+            guard terminal else {
+                guard succeeded, !acceptancePublished else { return .wait }
+                acceptancePublished = true
+                return .publishAccepted(bookID)
+            }
+            completed = true
+            return succeeded ? .finishAccepted(bookID) : .finishRejected
+        }
+    }
+}
+
+@MainActor
+final class FirstPromptImportAdapter {
+    let attemptID: UUID
+    let identity: LibraryAccountIdentity
+    private let isCurrent: @MainActor () -> Bool
+    private let onLifecycle: @MainActor (FirstPromptImportLifecycleEvent) -> Void
+    private let acceptCandidate: @MainActor (Book) async -> Bool
+    private let onAccepted: @MainActor (BookID) -> Void
+    private let onTerminated: @MainActor (Bool) -> Void
+    private var reducer = FirstPromptImportReducer()
+    private var candidates: [BookID: Book] = [:]
+    private var acceptanceTask: Task<Void, Never>?
+    private var importTask: Task<Void, Never>?
+    private var didTerminate = false
+    private var didPublishAcceptance = false
+
+    var wasRetired: Bool { reducer.retired }
+
+    init(
+        attemptID: UUID,
+        identity: LibraryAccountIdentity,
+        isCurrent: @escaping @MainActor () -> Bool,
+        onLifecycle: @escaping @MainActor (FirstPromptImportLifecycleEvent) -> Void,
+        acceptCandidate: @escaping @MainActor (Book) async -> Bool,
+        onAccepted: @escaping @MainActor (BookID) -> Void,
+        onTerminated: @escaping @MainActor (Bool) -> Void
+    ) {
+        self.attemptID = attemptID
+        self.identity = identity
+        self.isCurrent = isCurrent
+        self.onLifecycle = onLifecycle
+        self.acceptCandidate = acceptCandidate
+        self.onAccepted = onAccepted
+        self.onTerminated = onTerminated
+    }
+
+    func cancelled() {
+        emit(.cancelled)
+        apply(.cancelled)
+    }
+
+    func began(supportedCount: Int) {
+        emit(.began(supportedCount: supportedCount))
+        apply(.began(supportedCount: supportedCount))
+    }
+
+    func registered(_ outcome: ImportCoordinator.ImportOutcome) {
+        guard let book = outcome.book, isSupported(book) else { return }
+        candidates[book.id] = book
+        emit(.registered(book.id))
+        apply(.registered(book.id))
+    }
+
+    func finished(_ outcomes: [ImportCoordinator.ImportOutcome]) {
+        let books = outcomes.compactMap(\.book).filter(isSupported)
+        for book in books { candidates[book.id] = book }
+        let ids = books.map(\.id)
+        emit(.finished(ids))
+        apply(.finished(candidateBookIDs: ids))
+    }
+
+    func cancelIfStillPicking() {
+        guard !reducer.began, !didTerminate else { return }
+        cancelled()
+    }
+
+    func retainImportTask(_ task: Task<Void, Never>) {
+        guard isCurrent(), !didTerminate else {
+            task.cancel()
+            return
+        }
+        importTask = task
+    }
+
+    func retire() {
+        guard !didTerminate else { return }
+        acceptanceTask?.cancel()
+        importTask?.cancel()
+        emit(.retired)
+        apply(.retired)
+    }
+
+    private func isSupported(_ book: Book) -> Bool {
+        book.formatType == .epub || book.formatType == .pdf
+    }
+
+    private func emit(_ kind: FirstPromptImportLifecycleEvent.Kind) {
+        guard isCurrent() else { return }
+        onLifecycle(.init(attemptID: attemptID, identity: identity, kind: kind))
+    }
+
+    private func apply(_ event: FirstPromptImportReducer.Event) {
+        guard isCurrent(), !didTerminate else { return }
+        let action = reducer.reduce(event)
+        switch action {
+        case let .accept(bookID):
+            guard let book = candidates[bookID] else {
+                apply(.acceptanceFinished(bookID, accepted: false))
+                return
+            }
+            acceptanceTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await self.acceptCandidate(book)
+                guard self.isCurrent(), !Task.isCancelled else { return }
+                self.emit(result ? .accepted(bookID) : .rejected)
+                self.apply(.acceptanceFinished(bookID, accepted: result))
+            }
+        case let .publishAccepted(bookID):
+            guard !didPublishAcceptance else { return }
+            didPublishAcceptance = true
+            onAccepted(bookID)
+        case let .finishAccepted(bookID):
+            didTerminate = true
+            if !didPublishAcceptance {
+                didPublishAcceptance = true
+                onAccepted(bookID)
+            }
+            importTask = nil
+            acceptanceTask = nil
+            candidates.removeAll()
+            onTerminated(true)
+        case .finishRejected:
+            didTerminate = true
+            importTask = nil
+            acceptanceTask = nil
+            candidates.removeAll()
+            onTerminated(false)
+        case .wait, .ignore:
+            break
+        }
+    }
+}
+
 private enum LibraryMacCommandNotification {
     static let importBook = Notification.Name("RishiCommand.importBook")
     static let focusSearch = Notification.Name("RishiCommand.focusSearch")
@@ -12,6 +239,7 @@ private enum LibraryMacCommandNotification {
 public struct LibraryRootView: View {
     @Environment(LibraryViewModel.self) private var vm: LibraryViewModel
     @Environment(AppRouter.self) private var router
+    @Environment(TrialIntroPresentationState.self) private var trialPresentationState
 
 
     public let importCoordinator: ImportCoordinator
@@ -19,16 +247,21 @@ public struct LibraryRootView: View {
 
     public let onShowSettings: (() -> Void)
     public let onShowChats: (() -> Void)?
-
+    
     private var importTip = ImportBooksTip()
 
     public let onImported:
         (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)?
+    let firstPromptImportAdapter: FirstPromptImportAdapter?
 
     public let sharePackageService: SharePackageService?
     let sharedReadingAPI: SharedReadingAPI?
     let sharedReadingRepair: (@Sendable (BookID) async -> Bool)?
     private let closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)?
+    private let accountIdentity: LibraryAccountIdentity?
+    @State private var trialRegistration: TrialIntroPresentationState.Registration?
+    @State private var activeImportOperationIDs: Set<UUID> = []
+    @State private var activeDeletionOperationIDs: Set<UUID> = []
 
     ///
 
@@ -76,58 +309,66 @@ public struct LibraryRootView: View {
     }
 
     init(
-
+      
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
+        firstPromptImportAdapter: FirstPromptImportAdapter? = nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
         sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
         closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
+        accountIdentity: LibraryAccountIdentity? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
-
+ 
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
         self.onShowChats = onShowChats
         self.onImported = onImported
+        self.firstPromptImportAdapter = firstPromptImportAdapter
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
         self.closeReaderBeforeBookDeletion = closeReaderBeforeBookDeletion
+        self.accountIdentity = accountIdentity
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
 
     init(
-
+     
         path: Binding<NavigationPath>,
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
+        firstPromptImportAdapter: FirstPromptImportAdapter? = nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
         sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
         closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
+        accountIdentity: LibraryAccountIdentity? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
-
+       
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
         self.onShowChats = onShowChats
         self.onImported = onImported
+        self.firstPromptImportAdapter = firstPromptImportAdapter
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
         self.closeReaderBeforeBookDeletion = closeReaderBeforeBookDeletion
+        self.accountIdentity = accountIdentity
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -135,7 +376,7 @@ public struct LibraryRootView: View {
     public var body: some View {
         @Bindable var vm = vm
         let content = libraryContent(vm: vm)
-
+       
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
 
             Task {
@@ -145,14 +386,36 @@ public struct LibraryRootView: View {
         }
 
 #if canImport(UIKit)
-        .sheet(isPresented: documentPickerPresented) {
+        .sheet(isPresented: documentPickerPresented, onDismiss: {
+            firstPromptImportAdapter?.cancelIfStillPicking()
+        }) {
             DocumentPickerView { urls in
+                let promptAdapter = firstPromptImportAdapter
+                if let promptAdapter {
+                    guard !urls.isEmpty else {
+                        promptAdapter.cancelled()
+                        documentPickerPresented.wrappedValue = false
+                        return
+                    }
+                    promptAdapter.began(supportedCount: ImportCoordinator.filterSupported(urls).count)
+                }
                 documentPickerPresented.wrappedValue = false
-                Task {
+                let operationID = UUID()
+                activeImportOperationIDs.insert(operationID)
+                trialPresentationState.update()
+                let importTask = Task {
+                    defer {
+                        activeImportOperationIDs.remove(operationID)
+                        trialPresentationState.update()
+                    }
                     let singleSelection = ImportCoordinator.filterSupported(urls).count == 1
                     let onSingleRegistration: (@MainActor @Sendable (ImportCoordinator.ImportOutcome) -> Void)?
                     if singleSelection {
                         onSingleRegistration = { outcome in
+                            if let promptAdapter {
+                                promptAdapter.registered(outcome)
+                                return
+                            }
                             let didOpen = onImported?([outcome]) ?? false
                             if didOpen, let book = outcome.book {
                                 vm.markImportReaderOpenRequested(bookID: book.id)
@@ -165,10 +428,13 @@ public struct LibraryRootView: View {
                         urls,
                         onSingleRegistration: onSingleRegistration
                     )
-                    if !singleSelection {
+                    if let promptAdapter {
+                        promptAdapter.finished(outcomes)
+                    } else if !singleSelection {
                         handleImportedAndMarkReaderOpen(outcomes)
                     }
                 }
+                promptAdapter?.retainImportTask(importTask)
             }
         }
 #endif
@@ -203,6 +469,51 @@ public struct LibraryRootView: View {
             Task { await refreshLibraryAndPrewarm(vm) }
         }
         return addingLibraryCommandNotifications(to: content, vm: vm)
+            .onAppear {
+                guard trialRegistration == nil, let accountIdentity else { return }
+                trialRegistration = trialPresentationState.register(.libraryRoot, identity: accountIdentity) {
+                    var safety = TrialChildSafety()
+                    safety.signedIn = true
+                    safety.consent = true
+                    safety.conversation = true
+                    safety.voice = true
+                    safety.libraryReady = true
+                    safety.libraryModal = !documentPickerPresented.wrappedValue
+                        && vm.importError == nil
+                        && vm.deletionError == nil
+                        && activeImportOperationIDs.isEmpty
+                        && activeDeletionOperationIDs.isEmpty
+                        && !selectionMode
+                        && !showShareComposer
+                        && !showSharedReadingComposer
+                        && !showSharedReadingSwitchConfirmation
+                        && pendingCreatorInvitation == nil
+                        && (externalPath?.wrappedValue.isEmpty ?? true)
+                        && router.sharedReaderRoute == nil
+                    safety.firstBookFlowActive = false
+                    return safety
+                }
+                trialPresentationState.update()
+            }
+            .onDisappear {
+                guard let trialRegistration else { return }
+                trialPresentationState.unregister(
+                    trialRegistration,
+                    deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
+                )
+                self.trialRegistration = nil
+            }
+            .onChange(of: documentPickerPresented.wrappedValue) { _, _ in trialPresentationState.update() }
+            .onChange(of: vm.importError?.id) { _, _ in trialPresentationState.update() }
+            .onChange(of: vm.deletionError) { _, _ in trialPresentationState.update() }
+            .onChange(of: selectionMode) { _, _ in trialPresentationState.update() }
+            .onChange(of: showShareComposer) { _, _ in trialPresentationState.update() }
+            .onChange(of: showSharedReadingComposer) { _, _ in trialPresentationState.update() }
+            .onChange(of: showSharedReadingSwitchConfirmation) { _, _ in trialPresentationState.update() }
+            .onChange(of: pendingCreatorInvitation?.sessionID) { _, _ in trialPresentationState.update() }
+            .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update() }
+            .onChange(of: activeImportOperationIDs) { _, _ in trialPresentationState.update() }
+            .onChange(of: activeDeletionOperationIDs) { _, _ in trialPresentationState.update() }
     }
 
     private func addingLibraryCommandNotifications<Content: View>(
@@ -224,8 +535,8 @@ public struct LibraryRootView: View {
         }
     }
 
-
-
+    
+    
     @ViewBuilder
     private func libraryContent(vm: LibraryViewModel) -> some View {
         @Bindable var vm = vm
@@ -239,7 +550,16 @@ public struct LibraryRootView: View {
             onDelete: { book in
                 guard let deletion = vm.beginDeletion(book) else { return }
                 selectedBookIDs.remove(book.id)
-                Task { await vm.completeDeletion(deletion, closePresentedReader: closeReaderBeforeBookDeletion) }
+                let operationID = UUID()
+                activeDeletionOperationIDs.insert(operationID)
+                trialPresentationState.update()
+                Task {
+                    defer {
+                        activeDeletionOperationIDs.remove(operationID)
+                        trialPresentationState.update()
+                    }
+                    await vm.completeDeletion(deletion, closePresentedReader: closeReaderBeforeBookDeletion)
+                }
             },
             selectionMode: selectionMode,
             selectedBookIDs: eligibleSelectedBookIDs,
@@ -259,6 +579,12 @@ public struct LibraryRootView: View {
             },
             onStartSharedReading: { book in
                 beginSharedReading(ids: [book.id], books: [book])
+            },
+            onGridBookVisibilityChange: { bookID, visible in
+                vm.setGridBookVisible(bookID, visible: visible)
+            },
+            onReadingNowBookVisibilityChange: { bookID, visible in
+                vm.setReadingNowBookVisible(bookID, visible: visible)
             }
         )
 
@@ -293,7 +619,14 @@ public struct LibraryRootView: View {
                         if RishiE2EConfiguration.fixtureURL != nil {
                             Button("Import shared-reading book") {
                                 guard let fixtureURL = RishiE2EConfiguration.fixtureURL else { return }
+                                let operationID = UUID()
+                                activeImportOperationIDs.insert(operationID)
+                                trialPresentationState.update()
                                 Task {
+                                    defer {
+                                        activeImportOperationIDs.remove(operationID)
+                                        trialPresentationState.update()
+                                    }
                                     let outcomes = await vm.importPicked([fixtureURL])
                                     handleImportedAndMarkReaderOpen(outcomes)
                                 }
@@ -620,11 +953,11 @@ struct ImportBooksTip: Tip {
     var title: Text {
         Text("Bring your library with you")
     }
-
+    
     var message: Text? {
         Text("Import your EPUB and PDF books to read, listen, and chat with them in one place.")
     }
-
+    
     var image: Image? {
         Image(systemName: "square.and.arrow.down")
     }

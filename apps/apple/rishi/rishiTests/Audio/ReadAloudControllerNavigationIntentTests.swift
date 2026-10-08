@@ -180,6 +180,25 @@ struct ReadAloudControllerNavigationIntentTests {
         )
     }
 
+    @Test("destination containing the new whole paragraph spends the new utterance credit")
+    func currentWholeParagraphWinsOverOldFragment() {
+        let controller = makeControllerForNavIntent()
+        let spoken = String(repeating: "Cross page paragraph text for credit. ", count: 3)
+        let next = spoken + " advanced"
+        controller.simulateSpeakingForTests(paragraph: spoken)
+        let snapshot = controller.beginUserNavigationIntent()
+        controller.notifyUtterancePlayingForTests(text: next)
+        #expect(controller.resolveUserNavigationIntent(
+            snapshot: snapshot,
+            destinationParagraphs: [spoken, next],
+            destinationPage: nil
+        ) == .continuePlaying(consumesFollowCredit: true))
+        let fresh = controller.beginUserNavigationIntent()
+        #expect(controller.resolveUserNavigationIntent(
+            snapshot: fresh, destinationParagraphs: [next], destinationPage: nil
+        ) == .stopPlaying)
+    }
+
     @Test("PDF page on spoken locator is snapshotted for same-page continue")
     func pdfSamePageViaSimulatedLocator() {
         let controller = makeControllerForNavIntent()

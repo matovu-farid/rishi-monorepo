@@ -4,6 +4,98 @@ import Testing
 
 @Suite(.serialized)
 struct BookImportRecoveryTests {
+    @Test("a claimed recovery lookup error wakes joined readers and preserves the lookup error")
+    func claimedLookupErrorWakesJoinedReader() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Lookup error", formatType: .epub, fileURL: "Books/lookup-error.epub")
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: book.id, attemptID: UUID())
+        let job = recoveryJob(book: book, token: token)
+        let persistence = RecoveryPersistence(jobs: [book.id: job], currentGeneration: 9, pendingRecoveryFailureOnCall: 2)
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        let recovery = BookImportRecovery(rootURL: FileManager.default.temporaryDirectory,
+            bookStore: RecoveryBookStore([book]), persistence: persistence,
+            lifecycle: BookImportLifecycle(sourceRegistry: registry))
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) { await Task.yield() }
+
+        await #expect(throws: RecoveryInjectedPersistenceError.self) { try await recovery.recover(ownerID: owner, generation: 9) }
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
+    }
+
+    @Test("a claimed adoption error wakes joined readers and preserves the CAS error")
+    func claimedAdoptionErrorWakesJoinedReader() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("BookImportRecovery-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stage = root.appendingPathComponent("Books/cas-error.staging")
+        try FileManager.default.createDirectory(at: stage.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("data".utf8).write(to: stage)
+        let owner = UUID()
+        let book = Book(userId: owner, title: "CAS error", formatType: .epub, fileURL: "Books/cas-error.epub")
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: book.id, attemptID: UUID())
+        let revision = UUID()
+        let version = try #require(try FileManagedFileVersionInspector().managedFileVersion(at: stage, materializationRevision: revision))
+        let job = PendingBookMaterialization(token: token, sourceKind: .ownedStaging, sourceBookmark: nil,
+            ownedSourceRelativePath: nil, sourceVersion: version,
+            expectedSHA256: "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7",
+            expectedByteCount: 4, stagingRelativePath: "Books/cas-error.staging",
+            destinationRelativePath: book.fileURL, phase: .prepared, preparedFileIdentifier: version.fileIdentifier)
+        let persistence = RecoveryPersistence(jobs: [book.id: job], currentGeneration: 9, adoptionThrows: true)
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        let recovery = BookImportRecovery(rootURL: root, bookStore: RecoveryBookStore([book]), persistence: persistence,
+            lifecycle: BookImportLifecycle(sourceRegistry: registry))
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) { await Task.yield() }
+
+        await #expect(throws: RecoveryInjectedPersistenceError.self) { try await recovery.recover(ownerID: owner, generation: 9) }
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
+    }
+
+    @Test("a processing error wakes waiters for every later claimed book")
+    func processingErrorWakesLaterClaimedBookWaiter() async throws {
+        let owner = UUID()
+        let first = Book(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, userId: owner, title: "First", formatType: .pdf, fileURL: "Books/first.pdf")
+        let second = Book(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, userId: owner, title: "Second", formatType: .pdf, fileURL: "Books/second.pdf")
+        let firstToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: first.id, attemptID: UUID())
+        let secondToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: second.id, attemptID: UUID())
+        let persistence = RecoveryPersistence(
+            jobs: [first.id: recoveryJob(book: first, token: firstToken), second.id: recoveryJob(book: second, token: secondToken)],
+            currentGeneration: 9,
+            adoptionThrows: true
+        )
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        let recovery = BookImportRecovery(rootURL: FileManager.default.temporaryDirectory,
+            bookStore: OrderedRecoveryBookStore(orderedBooks: [first, second]), persistence: persistence,
+            lifecycle: BookImportLifecycle(sourceRegistry: registry))
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: second) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: second.id)) { await Task.yield() }
+
+        await #expect(throws: RecoveryInjectedPersistenceError.self) { try await recovery.recover(ownerID: owner, generation: 9) }
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
+    }
+
+    @Test("a discovery error wakes readers for books claimed earlier in the scan")
+    func discoveryErrorWakesEarlierClaimedBookWaiter() async throws {
+        let owner = UUID()
+        let first = Book(userId: owner, title: "First", formatType: .pdf, fileURL: "Books/first.pdf")
+        let second = Book(userId: owner, title: "Second", formatType: .pdf, fileURL: "Books/second.pdf")
+        let firstToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: first.id, attemptID: UUID())
+        let secondToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: second.id, attemptID: UUID())
+        let persistence = RecoveryPersistence(
+            jobs: [first.id: recoveryJob(book: first, token: firstToken), second.id: recoveryJob(book: second, token: secondToken)],
+            currentGeneration: 9,
+            pendingRecoveryFailureOnCall: 2
+        )
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        let recovery = BookImportRecovery(rootURL: FileManager.default.temporaryDirectory,
+            bookStore: OrderedRecoveryBookStore(orderedBooks: [first, second]), persistence: persistence,
+            lifecycle: BookImportLifecycle(sourceRegistry: registry))
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: first) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: first.id)) { await Task.yield() }
+
+        await #expect(throws: RecoveryInjectedPersistenceError.self) { try await recovery.recover(ownerID: owner, generation: 9) }
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
+    }
+
     @Test("recovery adopts verified same-owner artifacts from an older generation")
     func adoptsOwnedVerifiedArtifacts() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("BookImportRecovery-\(UUID())", isDirectory: true)
@@ -202,17 +294,60 @@ struct BookImportRecoveryTests {
             destinationRelativePath: book.fileURL, phase: .prepared, preparedFileIdentifier: "missing-stage"
         )
         let persistence = RecoveryPersistence(jobs: [book.id: job], currentGeneration: 9)
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
         let recovery = BookImportRecovery(
             rootURL: root,
             bookStore: RecoveryBookStore([book]),
             persistence: persistence,
-            lifecycle: BookImportLifecycle(sourceRegistry: makeRegistry())
+            lifecycle: BookImportLifecycle(sourceRegistry: registry)
         )
 
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) {
+            await Task.yield()
+        }
+
         #expect(try await recovery.recover(ownerID: owner, generation: 9).isEmpty)
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
         #expect(await persistence.quarantinedBookIDs == [book.id])
         #expect(try await recovery.recover(ownerID: owner, generation: 9).isEmpty)
         #expect(await persistence.quarantinedBookIDs == [book.id])
+    }
+
+    @Test("adoption CAS refusal wakes only the recovery-joined source waiter")
+    func adoptionRefusalWakesJoinedSourceWaiter() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("BookImportRecovery-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stagingURL = root.appendingPathComponent("Books/refusal.staging")
+        try FileManager.default.createDirectory(at: stagingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("data".utf8).write(to: stagingURL)
+        let owner = UUID()
+        let book = Book(userId: owner, title: "CAS refusal", formatType: .epub, fileURL: "Books/refusal.epub")
+        let oldToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: book.id, attemptID: UUID())
+        let revision = UUID()
+        let version = try #require(try FileManagedFileVersionInspector().managedFileVersion(at: stagingURL, materializationRevision: revision))
+        let job = PendingBookMaterialization(
+            token: oldToken, sourceKind: .ownedStaging, sourceBookmark: nil, ownedSourceRelativePath: nil,
+            sourceVersion: version, expectedSHA256: "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7",
+            expectedByteCount: 4, stagingRelativePath: "Books/refusal.staging", destinationRelativePath: book.fileURL,
+            phase: .prepared, preparedFileIdentifier: version.fileIdentifier
+        )
+        let persistence = RecoveryPersistence(jobs: [book.id: job], currentGeneration: 9, refusesAdoption: true)
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        let recovery = BookImportRecovery(
+            rootURL: root, bookStore: RecoveryBookStore([book]), persistence: persistence,
+            lifecycle: BookImportLifecycle(sourceRegistry: registry)
+        )
+        let joinedWaiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) {
+            await Task.yield()
+        }
+
+        await #expect(throws: BookImportRecovery.RecoveryError.retryableWorkRemains) {
+            try await recovery.recover(ownerID: owner, generation: 9)
+        }
+        #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
+        #expect(await persistence.adoptedBookIDs.isEmpty)
     }
 
     @Test("waiting-for-picker recovery authorizes each new generation without rotating the attempt")
@@ -330,6 +465,91 @@ struct BookImportRecoveryTests {
         laterAttempt.release()
     }
 
+    @Test("retry claim drains the exact prior attempt and transfers one owner lease")
+    func retryClaimDrainsOldAttemptAndActivatesExactlyOnce() async throws {
+        let owner = UUID()
+        let bookID = UUID()
+        let lifecycle = BookImportLifecycle(sourceRegistry: makeRegistry(), currentAccountGeneration: { 12 })
+        let old = BookMaterializationToken(ownerID: owner, accountGeneration: 10, bookID: bookID, attemptID: UUID())
+        let competing = BookMaterializationToken(ownerID: owner, accountGeneration: 9, bookID: bookID, attemptID: UUID())
+        let competingAdmission = try #require(lifecycle.admitBookMaterialization(competing))
+        let promotionGate = RetryDrainTestGate()
+        let competingPromotion = Task {
+            try await lifecycle.withPromotionPermit(token: competing) {
+                await promotionGate.hold()
+            }
+        }
+        #expect(await promotionGate.waitUntilEntered())
+        #expect(lifecycle.claimAttemptRetry(
+            accountPermit: AccountMutationPermit(ownerID: owner, accountGeneration: 12), retiring: old
+        ) == nil)
+        await promotionGate.release()
+        try await competingPromotion.value
+        competingAdmission.release()
+        lifecycle.fenceAccount(ownerID: owner, generation: 9)
+        await lifecycle.drainAccount(owner, generation: 9)
+        #expect(lifecycle.activateAccount(ownerID: owner, generation: 12))
+
+        let oldAdmission = try #require(lifecycle.admitBookMaterialization(old))
+        let claim = try #require(lifecycle.claimAttemptRetry(
+            accountPermit: AccountMutationPermit(ownerID: owner, accountGeneration: 12), retiring: old
+        ))
+        defer { claim.release() }
+
+        let drainCompletion = RetryDrainCompletionRecorder()
+        let drain = Task {
+            await drainCompletion.markStarted()
+            let drained = await claim.drain()
+            await drainCompletion.markFinished(drained)
+        }
+        #expect(await drainCompletion.waitUntilStarted())
+        #expect(await waitUntilBookAttemptDrainWaiter(lifecycle: lifecycle, token: old))
+        #expect(!(await drainCompletion.isFinished()))
+        oldAdmission.release()
+        #expect(await drainCompletion.waitUntilFinished())
+        #expect(await drainCompletion.drainedToken == old)
+
+        let adopted = BookMaterializationToken(ownerID: owner, accountGeneration: 12, bookID: bookID, attemptID: UUID())
+        #expect(lifecycle.admitBookRegistration(ownerID: owner, generation: 12, bookID: bookID) == nil)
+        let activation = try #require(claim.activate(adopted))
+        #expect(claim.activate(adopted) == nil)
+        #expect(lifecycle.admitBookMaterialization(old) == nil)
+        let joinedRegistration = try #require(lifecycle.admitBookRegistration(ownerID: owner, generation: 12, bookID: bookID))
+        joinedRegistration.release()
+        activation.release()
+        claim.release()
+        let registration = try #require(lifecycle.admitBookRegistration(ownerID: owner, generation: 12, bookID: bookID))
+        registration.release()
+    }
+
+    @Test("account drain waits for an owned retry claim")
+    func accountDrainWaitsForRetryClaim() async throws {
+        let owner = UUID()
+        let bookID = UUID()
+        let lifecycle = BookImportLifecycle(sourceRegistry: makeRegistry(), currentAccountGeneration: { 12 })
+        let old = BookMaterializationToken(ownerID: owner, accountGeneration: 10, bookID: bookID, attemptID: UUID())
+        let claim = try #require(lifecycle.claimAttemptRetry(
+            accountPermit: AccountMutationPermit(ownerID: owner, accountGeneration: 12), retiring: old
+        ))
+        let drainCompletion = RetryDrainCompletionRecorder()
+        let admissionProbe = BookMaterializationToken(ownerID: owner, accountGeneration: 12, bookID: UUID(), attemptID: UUID())
+        let probeAdmission = try #require(lifecycle.admitBookMaterialization(admissionProbe))
+        probeAdmission.release()
+        let drain = Task {
+            await drainCompletion.markStarted()
+            await lifecycle.drainAccount(owner, generation: 12)
+            await drainCompletion.markFinished()
+        }
+        #expect(await drainCompletion.waitUntilStarted())
+        #expect(await waitForAdmissionClosure(lifecycle: lifecycle, token: admissionProbe))
+        #expect(!(await drainCompletion.isFinished()))
+        claim.release()
+        #expect(await drainCompletion.waitUntilFinished())
+        #expect(lifecycle.claimAttemptRetry(
+            accountPermit: AccountMutationPermit(ownerID: owner, accountGeneration: 12), retiring: old
+        ) == nil)
+    }
+
     @Test("registration admission prevents recovery from claiming before materialization starts")
     func registrationAdmissionClosesPickerRace() async throws {
         let owner = UUID()
@@ -433,6 +653,8 @@ struct BookImportRecoveryTests {
             bookID: unrelatedBook
         ))
 
+        #expect(claim.promoteMaterialization(token) == nil)
+        #expect(claim.allowMaterialization(token))
         let activeAttempt = try #require(claim.promoteMaterialization(token))
         claim.release()
         #expect(lifecycle.admitBookRegistration(
@@ -540,9 +762,7 @@ struct BookImportRecoveryTests {
         await #expect(throws: BookImportRecovery.RecoveryError.retryableWorkRemains) {
             try await recovery.recover(ownerID: owner, generation: 9)
         }
-        await #expect(throws: BookSourceRegistryError.unavailable) {
-            try await joinedWaiter.value
-        }
+       #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
         await #expect(throws: BookSourceRegistryError.unavailable) {
             try await registry.awaitManagedSource(for: book)
         }
@@ -579,9 +799,7 @@ struct BookImportRecoveryTests {
         #expect(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id))
 
         await registry.failPendingSource(ownerID: owner, generation: 9, bookID: book.id)
-        await #expect(throws: BookSourceRegistryError.unavailable) {
-            try await joinedWaiter.value
-        }
+       #expect(await joinedWaiterFailedUnavailable(joinedWaiter))
     }
 
     @Test("recovery with no pending jobs leaves active owner admission open")
@@ -735,6 +953,16 @@ struct BookImportRecoveryTests {
 }
 
 private enum RecoveryResumeTestError: Error { case providerTemporarilyUnavailable }
+private enum RecoveryInjectedPersistenceError: Error { case lookup; case adoption }
+
+private func recoveryJob(book: Book, token: BookMaterializationToken) -> PendingBookMaterialization {
+    PendingBookMaterialization(token: token, sourceKind: .ownedStaging, sourceBookmark: nil,
+        ownedSourceRelativePath: "Imports/lookup/source.epub",
+        sourceVersion: ManagedFileVersion(byteCount: 4, modificationDate: Date(timeIntervalSince1970: 1), fileIdentifier: nil, materializationRevision: UUID()),
+        expectedSHA256: "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7",
+        expectedByteCount: 4, stagingRelativePath: "Imports/lookup/content.partial",
+        destinationRelativePath: book.fileURL, phase: .copying)
+}
 private enum StaleAttemptSourceFailure: Error { case previousAttempt }
 
 private struct FailingRecoveryVersionInspector: ManagedFileVersionInspecting {
@@ -750,6 +978,145 @@ private actor RecoveryResumeRecorder {
         books.append(book)
         tokens.append(token)
     }
+}
+
+private actor RetryDrainTestGate {
+    private var entered = false
+    private var released = false
+    private var releaseContinuation: AsyncStream<Void>.Continuation?
+
+    func hold() async {
+        entered = true
+        guard !released else { return }
+        let stream = AsyncStream<Void> { continuation in
+            releaseContinuation = continuation
+        }
+        await withTaskCancellationHandler {
+            for await _ in stream { break }
+        } onCancel: {
+            Task { await self.cancelWait() }
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<200 {
+            if entered { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return entered
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.yield(())
+        releaseContinuation?.finish()
+        releaseContinuation = nil
+    }
+
+    private func cancelWait() {
+        releaseContinuation?.finish()
+        releaseContinuation = nil
+    }
+}
+
+private actor RetryDrainCompletionRecorder {
+    private var started = false
+    private var finished = false
+    private(set) var drainedToken: BookMaterializationToken?
+
+    func markStarted() { started = true }
+    func markFinished(_ token: RetiredBookMaterializationAttempt? = nil) { drainedToken = token?.token; finished = true }
+    func isFinished() -> Bool { finished }
+
+    func waitUntilStarted() async -> Bool {
+        for _ in 0..<200 {
+            if started { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return started
+    }
+
+    func waitUntilFinished() async -> Bool {
+        for _ in 0..<200 {
+            if finished { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return finished
+    }
+}
+
+
+private func joinedWaiterFailedUnavailable(_ waiter: Task<ManagedBookSource, Error>) async -> Bool {
+    let gate = ManagedWaiterCompletionGate()
+    let observer = Task {
+        do {
+            _ = try await waiter.value
+            gate.resolve(false)
+        } catch {
+            gate.resolve((error as? BookSourceRegistryError) == .unavailable)
+        }
+    }
+    let timeout = Task {
+        try? await Task.sleep(for: .seconds(2))
+        gate.resolve(false)
+    }
+    let result = await gate.wait()
+    timeout.cancel()
+    if !result {
+        waiter.cancel()
+        observer.cancel()
+    }
+    return result
+}
+
+private final class ManagedWaiterCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var resolution: Bool?
+
+    func wait() async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let resolution {
+                lock.unlock()
+                continuation.resume(returning: resolution)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func resolve(_ value: Bool) {
+        lock.lock()
+        guard resolution == nil else { lock.unlock(); return }
+        resolution = value
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: value)
+    }
+}
+
+private func waitUntilBookAttemptDrainWaiter(lifecycle: BookImportLifecycle, token: BookMaterializationToken) async -> Bool {
+    for _ in 0..<200 {
+        if lifecycle.hasBookAttemptDrainWaiterForTesting(
+            ownerID: token.ownerID, generation: token.accountGeneration, bookID: token.bookID
+        ) { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return lifecycle.hasBookAttemptDrainWaiterForTesting(
+        ownerID: token.ownerID, generation: token.accountGeneration, bookID: token.bookID
+    )
+}
+
+private func waitForAdmissionClosure(lifecycle: BookImportLifecycle, token: BookMaterializationToken) async -> Bool {
+    for _ in 0..<200 {
+        guard let admission = lifecycle.admitBookMaterialization(token) else { return true }
+        admission.release()
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return false
 }
 
 private actor RecoveryDrainRecorder {
@@ -771,17 +1138,27 @@ private actor RecoveryPersistence: BookImportPersistence {
     private var jobs: [BookID: PendingBookMaterialization]
     private let fingerprints: [BookID: BookFileFingerprint]
     private let currentGeneration: UInt64
+    private let refusesAdoption: Bool
+    private let pendingRecoveryFailureOnCall: Int?
+    private let adoptionThrows: Bool
+    private var recoveryLookupCalls = 0
     private(set) var adoptedBookIDs: [BookID] = []
     private(set) var quarantinedBookIDs: [BookID] = []
     private(set) var reauthorizedGenerations: [UInt64] = []
     init(
         jobs: [BookID: PendingBookMaterialization],
         currentGeneration: UInt64,
-        fingerprints: [BookID: BookFileFingerprint] = [:]
+        fingerprints: [BookID: BookFileFingerprint] = [:],
+        refusesAdoption: Bool = false,
+        pendingRecoveryFailureOnCall: Int? = nil,
+        adoptionThrows: Bool = false
     ) {
         self.jobs = jobs
         self.currentGeneration = currentGeneration
         self.fingerprints = fingerprints
+        self.refusesAdoption = refusesAdoption
+        self.pendingRecoveryFailureOnCall = pendingRecoveryFailureOnCall
+        self.adoptionThrows = adoptionThrows
     }
     func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? {
         guard let job = jobs[bookID], job.token.ownerID == ownerID,
@@ -789,15 +1166,31 @@ private actor RecoveryPersistence: BookImportPersistence {
         return job
     }
     func pendingMaterializationForRecovery(bookID: BookID, ownerID: UserID, currentGeneration: UInt64) async throws -> PendingBookMaterialization? {
+        recoveryLookupCalls += 1
+        if recoveryLookupCalls == pendingRecoveryFailureOnCall { throw RecoveryInjectedPersistenceError.lookup }
         guard let job = jobs[bookID], job.token.ownerID == ownerID else { return nil }
         return job
     }
     func adoptRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID, verifiedArtifacts: VerifiedBookArtifacts) async throws -> BookMaterializationToken? {
-        guard let job = jobs[expectedToken.bookID], job.token == expectedToken,
+        if adoptionThrows { throw RecoveryInjectedPersistenceError.adoption }
+        guard !refusesAdoption,
+              let job = jobs[expectedToken.bookID], job.token == expectedToken,
               currentOwnerID == expectedToken.ownerID,
               verifiedArtifacts.preparedFileIdentifier == jobs[expectedToken.bookID]?.preparedFileIdentifier else { return nil }
         adoptedBookIDs.append(expectedToken.bookID)
-        return BookMaterializationToken(ownerID: currentOwnerID, accountGeneration: currentGeneration, bookID: expectedToken.bookID, attemptID: newAttemptID)
+        let token = BookMaterializationToken(ownerID: currentOwnerID, accountGeneration: currentGeneration, bookID: expectedToken.bookID, attemptID: newAttemptID)
+        jobs[expectedToken.bookID] = PendingBookMaterialization(
+            token: token, sourceKind: job.sourceKind, sourceBookmark: job.sourceBookmark,
+            ownedSourceRelativePath: job.ownedSourceRelativePath, sourceVersion: job.sourceVersion,
+            expectedSHA256: job.expectedSHA256, expectedByteCount: job.expectedByteCount,
+            stagingRelativePath: verifiedArtifacts.stagingRelativePath,
+            destinationRelativePath: verifiedArtifacts.destinationRelativePath,
+            phase: job.phase, retryableErrorCode: job.retryableErrorCode,
+            preparedFileIdentifier: verifiedArtifacts.preparedFileIdentifier,
+            destinationFileIdentifier: verifiedArtifacts.destinationFileIdentifier,
+            promotionRevision: verifiedArtifacts.promotionRevision
+        )
+        return token
     }
     func quarantineRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID) async throws -> BookMaterializationToken? {
         guard let job = jobs[expectedToken.bookID], job.token == expectedToken,
@@ -834,7 +1227,20 @@ private actor RecoveryPersistence: BookImportPersistence {
     }
     func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration { fatalError("unused") }
     func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration? { fatalError("unused") }
-    func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool { fatalError("unused") }
+    func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool {
+        guard let job = jobs[token.bookID], job.token == token, job.phase == from else { return false }
+        jobs[token.bookID] = PendingBookMaterialization(
+            token: token, sourceKind: job.sourceKind, sourceBookmark: job.sourceBookmark,
+            ownedSourceRelativePath: job.ownedSourceRelativePath, sourceVersion: job.sourceVersion,
+            expectedSHA256: job.expectedSHA256, expectedByteCount: job.expectedByteCount,
+            stagingRelativePath: job.stagingRelativePath, destinationRelativePath: job.destinationRelativePath,
+            phase: to, retryableErrorCode: job.retryableErrorCode,
+            preparedFileIdentifier: job.preparedFileIdentifier,
+            destinationFileIdentifier: job.destinationFileIdentifier,
+            promotionRevision: job.promotionRevision
+        )
+        return true
+    }
     func commitManaged(token: BookMaterializationToken, fingerprint: BookFileFingerprint) async throws -> Bool { fatalError("unused") }
     func patchCover(bookID: BookID, token: BookMaterializationToken, relativePath: String) async throws -> Bool { fatalError("unused") }
     func recordPrepared(token: BookMaterializationToken, artifacts: VerifiedBookArtifacts) async throws -> Bool { false }
@@ -844,9 +1250,26 @@ private actor RecoveryPersistence: BookImportPersistence {
         guard let fingerprint = fingerprints[bookID], fingerprint.ownerID == ownerID else { return nil }
         return fingerprint
     }
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
     func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {}
     func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws {}
+
+    // Explicit negative results for operations outside this fixture's controlled scenario.
+    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
+    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool { false }
+    func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit? { nil }
+    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? { nil }
+    func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome { .writeFailed }
+    func discardUnpublishedRegistration(token: BookMaterializationToken) async throws -> Bool { false }
+    func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation? { nil }
+    func retryPendingMaterialization(expected: BookImportRetryExpectation, accountPermit: AccountMutationPermit, newSource: PendingBookMaterialization, verifiedSourceSHA256: String, verifiedSourceByteCount: Int64, verifiedSourceVersion: ManagedFileVersion, retiredAttempt: RetiredBookMaterializationAttempt) async throws -> BookRegistration? { nil }
+    func refreshSourceBookmark(token: BookMaterializationToken, refreshedData: Data) async throws -> Bool { false }
+    func pendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? { try await pendingMaterialization(bookID: bookID, ownerID: ownerID) }
+    func pendingMaterializationsForDeletionCleanup(ownerID: UserID) async throws -> [PendingBookMaterialization] { [] }
+    func isBookPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool { false }
+    func deletePendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID, expectedToken: BookMaterializationToken) async throws -> Bool { false }
+    func sampleRepairFingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? { try await fingerprint(bookID: bookID, ownerID: ownerID) }
+    func recordServerAcceptance(permit: BookReadingPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
+    func recordServerAcceptance(accountPermit: AccountMutationPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
 }
 
 private struct RecoveryBookStore: BookStore {
@@ -854,6 +1277,14 @@ private struct RecoveryBookStore: BookStore {
     init(_ books: [Book]) { booksByID = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0) }) }
     func books(for userId: UserID) async throws -> [Book] { booksByID.values.filter { $0.userId == userId } }
     func book(_ id: BookID) async throws -> Book? { booksByID[id] }
+    func upsert(_ book: Book) async throws {}
+    func delete(_ id: BookID) async throws {}
+}
+
+private struct OrderedRecoveryBookStore: BookStore {
+    let orderedBooks: [Book]
+    func books(for userId: UserID) async throws -> [Book] { orderedBooks.filter { $0.userId == userId } }
+    func book(_ id: BookID) async throws -> Book? { orderedBooks.first { $0.id == id } }
     func upsert(_ book: Book) async throws {}
     func delete(_ id: BookID) async throws {}
 }

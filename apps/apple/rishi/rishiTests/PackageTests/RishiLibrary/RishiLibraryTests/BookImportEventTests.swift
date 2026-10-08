@@ -20,6 +20,54 @@ struct BookImportEventTests {
         #expect(await iterator.next()?.kind == .managedReady(book.id))
     }
 
+    @Test("cancelled registration caller is rejected at event actor ingress")
+    func cancelledQueuedRegistrationDoesNotFanOut() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Cancelled Registration", formatType: .epub, fileURL: "Books/cancelled.epub")
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: 14, bookID: book.id, attemptID: UUID())
+        let events = BookImportEvents()
+        var iterator = await events.stream().makeAsyncIterator()
+        let barrier = BookImportEvent(ownerID: owner, accountGeneration: 14, token: token,
+                                      kind: .failed(book.id, retryableCode: "completion_barrier"))
+        let gate = EventActorIngressGate()
+        let dispatch = Task<Bool, Error> {
+            await gate.holdCaller()
+            return await events.publishIfNotCancelled(
+                BookImportEvent(ownerID: owner, accountGeneration: 14, token: token, kind: .registered(book))
+            )
+        }
+
+        _ = try #require(await gate.waitUntilEntered())
+        dispatch.cancel()
+        await gate.release()
+        #expect(try await boundedEventValue(dispatch) == false)
+        await events.publish(barrier)
+        #expect(await iterator.next() == barrier)
+    }
+
+    @Test("cancelled retry still delivers its terminal failure event")
+    func cancelledRetryStillPublishesFailure() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Cancelled Retry", formatType: .epub, fileURL: "Books/retry-failure.epub")
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: 15, bookID: book.id, attemptID: UUID())
+        let event = BookImportEvent(ownerID: owner, accountGeneration: 15, token: token,
+                                    kind: .failed(book.id, retryableCode: "selected_source_changed"))
+        let events = BookImportEvents()
+        var iterator = await events.stream().makeAsyncIterator()
+        let gate = EventActorIngressGate()
+        let dispatch = Task<Bool, Error> {
+            await gate.holdCaller()
+            await events.publish(event)
+            return true
+        }
+
+        _ = try #require(await gate.waitUntilEntered())
+        dispatch.cancel()
+        await gate.release()
+        #expect(try await boundedEventValue(dispatch))
+        #expect(await iterator.next() == event)
+    }
+
     @Test("pending registration publishes the normal fallback without extracting a cover")
     func pendingBookDoesNotExtractCover() async throws {
         let owner = UUID()
@@ -252,6 +300,75 @@ struct BookImportEventTests {
     }
 }
 
+private actor EventActorIngressGate {
+    private var entered = false
+    private var released = false
+
+    func holdCaller() async {
+        entered = true
+        for _ in 0..<400 {
+            if released { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<200 {
+            if entered { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return entered
+    }
+
+    func release() { released = true }
+}
+
+private final class EventActorIngressResult<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var outcome: Result<Value, Error>?
+
+    func value() async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let outcome {
+                lock.unlock()
+                continuation.resume(with: outcome)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    @discardableResult
+    func resolve(_ outcome: Result<Value, Error>) -> Bool {
+        lock.lock()
+        guard case .none = self.outcome else { lock.unlock(); return false }
+        self.outcome = outcome
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: outcome)
+        return true
+    }
+}
+
+private func boundedEventValue<Value: Sendable>(_ task: Task<Value, Error>, timeout: Duration = .seconds(4)) async throws -> Value {
+    let result = EventActorIngressResult<Value>()
+    Task {
+        do { _ = result.resolve(.success(try await task.value)) }
+        catch { _ = result.resolve(.failure(error)) }
+    }
+    Task {
+        try? await Task.sleep(for: timeout)
+        if result.resolve(.failure(EventActorIngressTimeout.expired)) { task.cancel() }
+    }
+    return try await result.value()
+}
+
+private enum EventActorIngressTimeout: Error { case expired }
+
 private actor CountingBookStore: BookStore {
     private var values: [Book]
     private(set) var booksReadCount = 0
@@ -279,6 +396,9 @@ private actor DelayedSnapshotBookStore: BookStore {
 
     func books(for userId: UserID) async throws -> [Book] {
         let snapshot = values.filter { $0.userId == userId }
+        // Only the pre-registration read is held. Registration invalidates
+        // that snapshot and refresh legitimately rereads the current store.
+        guard !readStarted else { return snapshot }
         readStarted = true
         let waiters = readWaiters
         readWaiters.removeAll()

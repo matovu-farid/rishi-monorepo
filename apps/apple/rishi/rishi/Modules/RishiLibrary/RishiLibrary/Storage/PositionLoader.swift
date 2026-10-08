@@ -1,14 +1,12 @@
 import Foundation
 
 
-/// Loads reading positions for a set of books, fanning out the per-book
-/// `PositionStore` reads concurrently.
+/// Loads reading positions for a set of books in one store operation.
 ///
 /// Extracted from `LibraryViewModel.refresh()` (Plan 34-11) so the
-/// view-model no longer performs storage fan-out inline. `PositionStore` is
-/// `Sendable` + nonisolated, so each spawned task runs off the MainActor;
-/// the only hop back is for the caller's final state assignment. The
-/// `PositionStore` protocol is unchanged — the fan-out lives here.
+/// view-model no longer performs storage work inline. Concrete persistence
+/// stores can perform one actor-confined batch read; compatibility stores use
+/// the protocol's default implementation.
 public struct PositionLoader: Sendable {
 
     private let positionStore: any PositionStore
@@ -17,22 +15,14 @@ public struct PositionLoader: Sendable {
         self.positionStore = positionStore
     }
 
-    /// Fans out `positionStore.position(for:)` across `books` concurrently
-    /// and returns the `BookID -> Position` map. Books with no saved
-    /// position (or a read error) are omitted.
+    /// Returns the newest saved position per requested book. Missing positions
+    /// and read errors are omitted, matching the previous best-effort behavior.
     public func positions(for books: [Book]) async -> [BookID: Position] {
-        await withTaskGroup(of: (BookID, Position?).self) { group in
-            for book in books {
-                group.addTask { [positionStore] in
-                    let p = try? await positionStore.position(for: book.id)
-                    return (book.id, p)
-                }
-            }
-            var out: [BookID: Position] = [:]
-            for await (id, position) in group {
-                if let position { out[id] = position }
-            }
-            return out
+        let requestedIDs = Set(books.map(\.id))
+        do {
+            let positions = try await positionStore.positions(for: requestedIDs)
+            return positions.filter { requestedIDs.contains($0.key) }
         }
+        catch { return [:] }
     }
 }

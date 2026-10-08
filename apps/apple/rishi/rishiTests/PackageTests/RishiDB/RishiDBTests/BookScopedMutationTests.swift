@@ -1,6 +1,7 @@
 @testable import rishi
 import Foundation
 import SwiftData
+import Synchronization
 import Testing
 
 @Suite("Book scoped mutation guards", .serialized)
@@ -284,6 +285,65 @@ struct BookScopedMutationTests {
         #expect(await base.theme(for: bookID) == .dark)
     }
 
+    @Test("memory settings capability holds admission and rejects stale or wrong owners", arguments: ["wrongBook", "sourceClosed", "bookRevoked", "staleAccount", "contentReplaced"])
+    func synchronousSettingsCapabilityPreservesAdmission(rejection: String) async throws {
+        let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let owner = UUID()
+        let bookID = UUID()
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 4, bookID: bookID, contentRevision: UUID())
+        let source = BookSourceAccessPermit()
+        let effects = TestBookSourceEffects()
+        try await db.write { context in
+            context.insert(BookEntity(id: bookID, userId: owner, title: "Book", author: nil, formatTypeRawValue: "pdf", addedAt: .now, openedAt: nil, fileURL: "book.pdf", coverPath: nil, positionId: nil, conversationId: nil))
+        }
+        try await db.activateAccountMutation(permit: AccountMutationPermit(ownerID: owner, accountGeneration: 4))
+        try await db.activateBookReading(permit: permit)
+        let base = SynchronousMemoryReaderSettings(admissionIsHeld: {
+            effects.admissionCount > effects.releaseCount
+        })
+        let capability: any SynchronousReaderSettingsStore = base
+        let scoped = ScopedReaderSettingsStore(
+            base: capability, mutations: BookScopedMutationStore(dbStore: db),
+            permit: permit, originatingSource: source, sourceEffects: effects
+        )
+        let typography = ReaderTypography(fontFamily: .serif, fontSize: ReaderFontSize(points: 22))
+        await scoped.setTheme(.dark, for: bookID)
+        await scoped.setTypography(typography, for: bookID)
+        #expect(base.themeWriteCount == 1)
+        #expect(base.typographyWriteCount == 1)
+        #expect(base.writesWhileAdmitted == [true, true])
+        #expect(effects.admissionCount == 2)
+        #expect(effects.releaseCount == 2)
+
+        var targetBookID = bookID
+        switch rejection {
+        case "wrongBook": targetBookID = UUID()
+        case "sourceClosed": effects.closeAdmission(source)
+        case "bookRevoked": try await db.revokeBookReading(permit: permit)
+        case "staleAccount":
+            try await db.activateAccountMutation(permit: AccountMutationPermit(ownerID: owner, accountGeneration: 5))
+        case "contentReplaced":
+            try await db.write { context in
+                let authorization = try #require(context.fetch(FetchDescriptor<BookReadingAuthorizationEntity>()).first)
+                authorization.contentRevision = UUID()
+            }
+        default: Issue.record("Unrecognized rejection fixture")
+        }
+        await scoped.setTheme(.sepia, for: targetBookID)
+        await scoped.setTypography(.default, for: targetBookID)
+        #expect(await base.theme(for: bookID) == .dark)
+        #expect(await base.typography(for: bookID) == typography)
+        #expect(base.themeWriteCount == 1)
+        #expect(base.typographyWriteCount == 1)
+        #expect(base.asyncWriteCount == 0)
+        #expect(effects.admissionCount == effects.releaseCount)
+        if rejection == "wrongBook" {
+            #expect(await scoped.theme(for: targetBookID) == .default)
+            #expect(await scoped.typography(for: targetBookID) == .default)
+            #expect(scoped.peekPersistedTheme(for: targetBookID) == nil)
+        }
+    }
+
     @Test("non-database reader effects are rejected after source admission closes")
     func sourceClosedReaderEffectIsRejected() async throws {
         let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
@@ -332,6 +392,119 @@ struct BookScopedMutationTests {
             try await store.upsert(conversation, authority: .book(permit), originatingSource: source, sourceEffects: effects)
         }
         #expect(try await db.read { context in try context.fetch(FetchDescriptor<ConversationEntity>()).isEmpty })
+    }
+    private func publicationFixture() async throws -> (RishiDBStore, BookReadingPermit) {
+        let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let permit = BookReadingPermit(ownerID: UUID(), accountGeneration: 5, bookID: UUID(), contentRevision: UUID())
+        try await db.write { context in
+            context.insert(BookEntity(id: permit.bookID, userId: permit.ownerID, title: "Book", author: nil, formatTypeRawValue: "epub", addedAt: .now, openedAt: nil, fileURL: "book.epub", coverPath: nil, positionId: nil, conversationId: nil))
+        }
+        try await db.activateAccountMutation(permit: .init(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration))
+        try await db.activateBookReading(permit: permit)
+        return (db, permit)
+    }
+
+    @Test("Reading side-effect admissions release on success and throw", arguments: [false, true])
+    func readingEffectAlwaysReleases(_ throwsError: Bool) async throws {
+        let (db, permit) = try await publicationFixture()
+        let effects = TestBookSourceEffects(); let source = BookSourceAccessPermit()
+        do {
+            try await db.withReadingEffect(permit: permit, originatingSource: source, sourceEffects: effects) {
+                if throwsError { throw URLError(.cancelled) }
+            }
+            #expect(!throwsError)
+        } catch { #expect(throwsError) }
+        #expect(effects.admissionCount == 1)
+        #expect(effects.releaseCount == 1)
+        await db.drainBookAdmission(permit: permit)
+        await db.drainAccountAdmission(permit: .init(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration))
+    }
+
+    @Test("Metadata publication survives ordinary source close and rejects explicit invalidation")
+    func publicationAfterSourceClose() async throws {
+        let (db, permit) = try await publicationFixture()
+        let effects = TestBookSourceEffects(); let source = BookSourceAccessPermit()
+        let signal = BookSourceInvalidationSignal()
+        let authority = BookScopedMutationStore(dbStore: db).publicationAuthority(permit: permit, source: source) {
+            if signal.isInvalidated { throw BookSourceAccessError.revoked }
+        }
+        effects.closeAdmission(source)
+        await effects.drain(source)
+        let admission = try await authority.admitMetadata()
+        admission.release()
+        #expect(effects.admissionCount == 0)
+        signal.invalidate()
+        await #expect(throws: BookSourceAccessError.revoked) { try await authority.admitMetadata() }
+    }
+
+    @Test("Captured metadata authority rejects replacement, account revocation, and deletion", arguments: ["revision", "account", "deleted"])
+    func publicationRejectsChangedAuthority(_ invalidation: String) async throws {
+        let (db, permit) = try await publicationFixture()
+        let authority = BookScopedMutationStore(dbStore: db).publicationAuthority(permit: permit, source: BookSourceAccessPermit())
+        if invalidation == "account" {
+            try await db.revokeAccountMutation(permit: .init(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration))
+        } else {
+            try await db.write { context in
+                if invalidation == "revision" {
+                    let row = try #require(context.fetch(FetchDescriptor<BookReadingAuthorizationEntity>()).first)
+                    row.contentRevision = UUID()
+                } else {
+                    let row = try #require(context.fetch(FetchDescriptor<BookEntity>()).first)
+                    context.delete(row)
+                }
+            }
+        }
+        await #expect(throws: BookScopedMutationError.unauthorized) { try await authority.admitMetadata() }
+        await db.drainBookAdmission(permit: permit)
+    }
+
+}
+
+private final class SynchronousMemoryReaderSettings: SynchronousReaderSettingsStore {
+    private struct State {
+        var themes: [BookID: ReaderTheme] = [:]
+        var typography: [BookID: ReaderTypography] = [:]
+        var themeWrites = 0
+        var typographyWrites = 0
+        var asyncWrites = 0
+        var writesWhileAdmitted: [Bool] = []
+    }
+    private let state = Mutex(State())
+    private let admissionIsHeld: @Sendable () -> Bool
+    init(admissionIsHeld: @escaping @Sendable () -> Bool) {
+        self.admissionIsHeld = admissionIsHeld
+    }
+    var themeWriteCount: Int { state.withLock { $0.themeWrites } }
+    var typographyWriteCount: Int { state.withLock { $0.typographyWrites } }
+    var asyncWriteCount: Int { state.withLock { $0.asyncWrites } }
+    var writesWhileAdmitted: [Bool] { state.withLock { $0.writesWhileAdmitted } }
+    func peekPersistedTheme(for bookId: BookID) -> ReaderTheme? { state.withLock { $0.themes[bookId] } }
+    func persistedTheme(for bookId: BookID) async -> ReaderTheme? { peekPersistedTheme(for: bookId) }
+    func theme(for bookId: BookID) async -> ReaderTheme { peekPersistedTheme(for: bookId) ?? .default }
+    func typography(for bookId: BookID) async -> ReaderTypography { state.withLock { $0.typography[bookId] ?? .default } }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async {
+        state.withLock { $0.asyncWrites += 1 }
+        writeThemeSynchronously(theme, for: bookId)
+    }
+    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async {
+        state.withLock { $0.asyncWrites += 1 }
+        writeTypographySynchronously(typography, for: bookId)
+    }
+    func writeThemeSynchronously(_ theme: ReaderTheme, for bookId: BookID) {
+        let held = admissionIsHeld()
+        state.withLock {
+            $0.themes[bookId] = theme
+            $0.themeWrites += 1
+            $0.writesWhileAdmitted.append(held)
+        }
+    }
+    func writeTypographySynchronously(_ typography: ReaderTypography, for bookId: BookID) {
+        let held = admissionIsHeld()
+        state.withLock {
+            $0.typography[bookId] = typography
+            $0.typographyWrites += 1
+            $0.writesWhileAdmitted.append(held)
+        }
     }
 }
 

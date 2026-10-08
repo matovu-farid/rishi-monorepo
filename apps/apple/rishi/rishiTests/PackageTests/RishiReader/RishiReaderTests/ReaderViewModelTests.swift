@@ -10,6 +10,7 @@ import ReadiumShared
 
 
 @Suite("ReaderViewModel", .serialized)
+@MainActor
 struct ReaderViewModelTests {
 
     private func aliceURL() throws -> URL {
@@ -758,9 +759,8 @@ struct ReaderViewModelTests {
 }
 
 /// Minimal thread-safe box so test closures can capture mutable state
-/// without tripping Swift 6 concurrency diagnostics. The VM is
-/// `@unchecked Sendable` and the closure is non-isolated, so the
-/// captured storage must be Sendable.
+/// without changing the existing callback-recording helpers during the
+/// reader model's MainActor migration.
 private final class LockedBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var _value: Value

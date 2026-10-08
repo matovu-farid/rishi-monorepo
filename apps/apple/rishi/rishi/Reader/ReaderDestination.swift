@@ -63,11 +63,8 @@ struct ReaderDestinationDependencies {
                 originatingSource: source,
                 sourceEffects: effects
             )
-            guard let settings = services.library.readerSettingsStore as? UserDefaultsReaderSettingsStore else {
-                throw ReaderDestinationCompositionError.readerSettingsUnavailable
-            }
             readerSettingsStore = ScopedReaderSettingsStore(
-                base: settings,
+                base: services.library.readerSettingsStore,
                 mutations: services.library.scopedMutationStore,
                 permit: permit,
                 originatingSource: source,
@@ -189,7 +186,6 @@ struct ReaderDestinationDependencies {
 }
 
 private enum ReaderDestinationCompositionError: Error {
-    case readerSettingsUnavailable
     case localPreviewMustUsePreviewReader
 }
 
@@ -339,13 +335,13 @@ private struct ReaderLeaseChapterSource: ChapterSource, Sendable {
 @MainActor
 @Observable
 final class ReaderPaywallRequestHandoff {
-    private var pendingRequest: String?
+    private var pendingRequest: PaywallRequest?
 
-    func queue(_ request: String) {
+    func queue(_ request: PaywallRequest) {
         pendingRequest = request
     }
 
-    func takeAfterPromptDismissal() -> String? {
+    func takeAfterPromptDismissal() -> PaywallRequest? {
         defer { pendingRequest = nil }
         return pendingRequest
     }
@@ -363,6 +359,9 @@ final class ReaderPaywallRequestHandoff {
 
 
 struct ReaderDestination: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.appDependencies) private var appDependencies
+    @State private var positionLifecycleDrain = ReaderPositionLifecycleDrain()
     let dependencies: ReaderDestinationDependencies
     let userId: UserID
     let onRequestPaywall: (String) -> Void
@@ -595,9 +594,8 @@ struct ReaderDestination: View {
 
         .ttsErrorAlert(
             state: dependencies.ttsState,
-            onRetry: { [weak readAloud] in
-                guard let readAloud else { return }
-                Task { @MainActor in await readAloud.repeatCurrent() }
+            onRetry: {
+                startReadAloud()
             }
         )
         .task {
@@ -609,14 +607,19 @@ struct ReaderDestination: View {
             )
         }
         .task {
-            sourceAttachment?.dispose()
+            if let previous = sourceAttachment {
+                let result = await previous.flush()
+                positionFlushFailureReporter()(result)
+                previous.dispose()
+            }
             let attachment = ReaderSourceAttachment(
                 viewModel: vm,
                 sourceLease: sourceLease,
                 syncEngine: dependencies.syncEngine,
                 playbackOwner: dependencies.playbackOwner,
                 voiceEntry: voiceEntry,
-                cleanup: sourceInvalidationCleanup
+                cleanup: sourceInvalidationCleanup,
+                scopedMutationStore: dependencies.scopedMutationStore
             )
             sourceAttachment = attachment
             await attachment.registerCleanup()
@@ -628,8 +631,12 @@ struct ReaderDestination: View {
                 let voiceEntry = voiceEntry
                 let host = readAloudHost
                 let readAloud = readAloud
+                let drain = positionLifecycleDrain
+                let reportFailure = positionFlushFailureReporter()
                 readerWindowCloseHandle.register {
-                    await playbackOwner.stop(host: host)
+                    await attachment.close(using: drain, stop: {
+                        await playbackOwner.stop(host: host)
+                    }, reportFailure: reportFailure)
                     await readAloud?.clearSharedSessionRate()
                     await playbackOwner.setSharedSessionFollower(false, host: host)
                     await voiceEntry.endForReader()
@@ -672,9 +679,20 @@ struct ReaderDestination: View {
         } message: {
             Text(sharedNavigationError ?? "The shared position could not be opened.")
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .inactive || phase == .background else { return }
+            let attachment = sourceAttachment
+            let drain = positionLifecycleDrain
+            let reportFailure = positionFlushFailureReporter()
+            Task { @MainActor in
+                let result = await drain.flush { if let attachment { return await attachment.flush() }
+                    return await vm.flush() }
+                reportFailure(result)
+            }
+        }
         .onDisappear {
             didScheduleReaderIndexBackfill = false
-            sourceAttachment?.dispose()
+            let exitingAttachment = sourceAttachment
             sourceAttachment = nil
             readAloudStartTask?.cancel()
             readAloudStartTask = nil
@@ -688,26 +706,42 @@ struct ReaderDestination: View {
                 revision: sharedRateRevision
             )
 
+            let exitingController = readAloud
+            let exitingStartRequest = readAloudStartRequest
+            let exitingHost = readAloudHost
+            let playbackOwner = dependencies.playbackOwner
+            playbackOwner.cancelPendingStarts(host: exitingHost)
+            let exitingGeneration = playbackOwner.activeHost == exitingHost ? playbackOwner.generation : nil
+            let drain = positionLifecycleDrain
+            let reportFailure = positionFlushFailureReporter()
             Task { @MainActor [voiceEntry, voicePresenter = dependencies.voicePresenter, viewModel = vm] in
-                voicePresenter.cancelPrewarm()
+                var stoppedGeneration: UInt64?
+                let stop: @MainActor () async -> Void = {
+                    voicePresenter.cancelPrewarm()
+                    if let exitingGeneration {
+                        stoppedGeneration = await playbackOwner.stop(host: exitingHost, ifGeneration: exitingGeneration)
+                    }
+                }
+                if let exitingAttachment {
+                    await exitingAttachment.close(using: drain, stop: stop, reportFailure: reportFailure)
+                } else {
+                    reportFailure(await drain.flush { await viewModel.flush() })
+                    await stop()
+                    reportFailure(await drain.flush { await viewModel.flush() })
+                }
                 if sharedReadingCoordinator != nil {
-                    await dependencies.playbackOwner.stop(host: readAloudHost)
-                    await readAloud?.clearSharedSessionRate(fence: sharedRateExitFence)
+                    await exitingController?.clearSharedSessionRate(fence: sharedRateExitFence)
                 }
 #if !targetEnvironment(macCatalyst)
                 await voiceEntry.endForReader()
 #endif
-                await viewModel.flush()
-                if sharedReadingCoordinator != nil {
-                    await dependencies.playbackOwner.setVolume(1)
-                    dependencies.playbackOwner.setSharedSessionFollower(false, host: readAloudHost)
+                if sharedReadingCoordinator != nil, let stoppedGeneration {
+                    await playbackOwner.resetSharedSessionAfterStop(
+                        host: exitingHost, generation: stoppedGeneration
+                    )
                 }
-                else {
-#if !targetEnvironment(macCatalyst)
-                    await dependencies.playbackOwner.release(host: readAloudHost)
-#endif
-                }
-                readAloud = nil
+                if readAloudStartRequest == exitingStartRequest,
+                   readAloud === exitingController { readAloud = nil }
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -752,6 +786,14 @@ struct ReaderDestination: View {
                     ttsState: dependencies.ttsState,
                     voiceState: dependencies.voicePresenter.state,
                     readAloud: readAloud,
+                    onPlayPauseReadAloud: {
+                        switch ReaderReadAloudPlayAction.select(controller: readAloud) {
+                        case .restart:
+                            startReadAloud()
+                        case .toggle:
+                            Task { @MainActor in await readAloud?.togglePlayback() }
+                        }
+                    },
                     onOpenVoiceChat: {
                         Task {
                             let controller = ensureReadAloudController()
@@ -764,28 +806,8 @@ struct ReaderDestination: View {
                             )
                         }
                     },
-                    onOpenReadAloud: {
-                        Task {
-                            await dependencies.voicePresenter.requestEnd()
-                            guard !sharedIsFollowingController && !sharedControlsLocked else { return }
-                            let controller = ensureReadAloudController()
-                            if dependencies.playbackOwner.activeController === controller {
-                                await controller.openReadAloudFromVoice(vm: vm)
-                            } else {
-                                _ = await dependencies.playbackOwner.start(
-                                    controller: controller,
-                                    reader: vm,
-                                    host: readAloudHost
-                                )
-                            }
-                        }
-                    },
-                    onEndVoice: {
-                        Task {
-                            await dependencies.voicePresenter.dismissVoiceChrome()
-                            await readAloud?.resumeAfterVoiceIfNeeded()
-                        }
-                    },
+                    onOpenReadAloud: { endVoiceForReadAloud(startIfNeeded: true) },
+                    onEndVoice: { endVoiceForReadAloud(startIfNeeded: false) },
                     onOpenTextChat: { showVoiceTextChat = true },
                 )
             }
@@ -814,6 +836,7 @@ struct ReaderDestination: View {
                         viewModel: voiceTextVM,
                         initialQuote: dependencies.voicePresenter.pendingInitialQuote
                     )
+                    .id(ObjectIdentifier(voiceTextVM))
                 } else {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -869,7 +892,7 @@ struct ReaderDestination: View {
             AIFeatureUpgradePrompt(
                 reason: reason,
                 onUpgrade: {
-                    paywallRequestHandoff.queue("narration_exhausted")
+                    paywallRequestHandoff.queue(.narrationExhausted)
                     pendingNarrationUpgradePrompt = nil
                 },
                 onDismiss: {
@@ -890,7 +913,7 @@ struct ReaderDestination: View {
             AIFeatureUpgradePrompt(
                 reason: reason,
                 onUpgrade: {
-                    paywallRequestHandoff.queue("voice_chat_exhausted")
+                    paywallRequestHandoff.queue(.voiceChatExhausted)
                     voiceEntry.dismissUpgradePrompt()
                 },
                 onDismiss: { voiceEntry.dismissUpgradePrompt() }
@@ -1475,7 +1498,23 @@ struct ReaderDestination: View {
     @MainActor
     private func forwardPaywallRequestIfNeeded() {
         guard let request = paywallRequestHandoff.takeAfterPromptDismissal() else { return }
-        onRequestPaywall(request)
+        onRequestPaywall(request.name)
+    }
+
+    /// Capture only original account authority and notice values. This finite
+    /// callback does not retain the VM or its physical source lease.
+    @MainActor
+    private func positionFlushFailureReporter() -> @MainActor (ReaderPositionFlushResult) -> Void {
+        guard let appDependencies, case let .account(permit) = sourceLease.access else { return { _ in } }
+        let identity = LibraryAccountIdentity(userID: permit.ownerID, generation: permit.accountGeneration)
+        let bookID = vm.book.id
+        let title = vm.book.title
+        return { result in
+            appDependencies.readerPositionSaveFailures.record(
+                result, bookID: bookID, bookTitle: title, identity: identity,
+                currentIdentity: appDependencies.activeAccountIdentity
+            )
+        }
     }
 
     @MainActor
@@ -1504,6 +1543,42 @@ struct ReaderDestination: View {
         )
         readAloud = controller
         return controller
+    }
+
+    @MainActor
+    private func endVoiceForReadAloud(startIfNeeded: Bool) {
+        readAloudStartTask?.cancel()
+        let request = UUID()
+        readAloudStartRequest = request
+        readAloudStartTask = Task { @MainActor in
+            defer {
+                if readAloudStartRequest == request { readAloudStartTask = nil }
+            }
+            await ReaderVoiceReadAloudHandoff.perform(
+                endVoice: {
+                    if startIfNeeded {
+                        await dependencies.voicePresenter.requestEnd()
+                    } else {
+                        await dependencies.voicePresenter.dismissVoiceChrome()
+                    }
+                },
+                canContinue: {
+                    readAloudStartRequest == request
+                        && !sharedIsFollowingController && !sharedControlsLocked
+                },
+                openReadAloud: {
+                    if let controller = readAloud,
+                       dependencies.playbackOwner.activeController === controller,
+                       controller.hasActivePlaybackSession,
+                       !controller.requiresPlaybackRestart,
+                       controller.wantsAutoResumeAfterVoice {
+                        await controller.resumeAfterVoiceIfNeeded()
+                    } else if startIfNeeded {
+                        startReadAloud()
+                    }
+                }
+            )
+        }
     }
 
     @MainActor
@@ -1612,6 +1687,7 @@ enum ReaderIndexBackfillFence {
               permit.bookID == book.id,
               let managed = try? await resolveManagedSource(),
               managed.bookID == book.id,
+              managed.readingPermit == permit,
               managed.accountGeneration == permit.accountGeneration,
               managed.fingerprint.bookID == book.id,
               managed.fingerprint.ownerID == permit.ownerID,
@@ -1620,7 +1696,7 @@ enum ReaderIndexBackfillFence {
               managedPermit.ownerID == permit.ownerID,
               managedPermit.accountGeneration == permit.accountGeneration,
               managedPermit.bookID == book.id,
-              managedPermit.contentRevision == managed.fingerprint.version.materializationRevision,
+              managedPermit == managed.readingPermit,
               case let .managed(managedBookID, managedVersion) = managedLease.cachePolicy,
               managedBookID == book.id,
               managedVersion == managed.fingerprint.version,

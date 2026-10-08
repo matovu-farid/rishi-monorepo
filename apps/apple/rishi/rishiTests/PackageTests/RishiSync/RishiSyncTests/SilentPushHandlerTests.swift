@@ -92,12 +92,17 @@ struct SilentPushHandlerTests {
             if request.url?.path == "/api/sync/changes" {
                 return (200, changesResponseBody, nil)
             }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
             return (404, Data(), nil)
         }
         let client = WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
         let metadata = StubMetadata()
         let queue = SyncQueue(metadataStore: metadata)
@@ -114,7 +119,17 @@ struct SilentPushHandlerTests {
         let messageUploader = MessageUploader(workerClient: client, messageStore: StubMessageStore(), metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
+        let applier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
+        )
         let conversationStore = StubConversationStore()
         let messageStore = StubMessageStore()
         let chapterIndexUploader = ChapterIndexUploader(

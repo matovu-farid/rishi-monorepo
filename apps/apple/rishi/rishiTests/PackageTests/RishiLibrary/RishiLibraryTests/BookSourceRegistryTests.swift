@@ -49,10 +49,166 @@ private actor CompletionProbe {
     }
 }
 
+private final class RegistryScopeCounts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var startCount = 0
+    private var stopCount = 0
+    private var stopWaiters: [ScopeStopWaiter] = []
+
+    var counts: (starts: Int, stops: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (startCount, stopCount)
+    }
+
+    func didStart() { lock.lock(); startCount += 1; lock.unlock() }
+    func didStop() {
+        lock.lock()
+        stopCount += 1
+        let completed = stopWaiters.filter { stopCount >= $0.expected }
+        stopWaiters.removeAll { stopCount >= $0.expected }
+        lock.unlock()
+        completed.forEach { $0.complete(.success(())) }
+    }
+
+    func waitForStops(_ expected: Int, timeout: Duration = .seconds(5)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await self.waitUntilStopped(expected) }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw ScopeStopWaitError.timedOut
+            }
+
+            do {
+                try await group.next()
+                group.cancelAll()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
+    private func waitUntilStopped(_ expected: Int) async throws {
+        let waiter = ScopeStopWaiter(expected: expected)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiter.install(continuation)
+                lock.lock()
+                let alreadyStopped = stopCount >= expected
+                if !alreadyStopped { stopWaiters.append(waiter) }
+                lock.unlock()
+                if alreadyStopped { waiter.complete(.success(())) }
+            }
+        } onCancel: {
+            self.remove(waiter)
+            waiter.complete(.failure(CancellationError()))
+        }
+    }
+
+    private func remove(_ waiter: ScopeStopWaiter) {
+        lock.lock()
+        stopWaiters.removeAll { $0 === waiter }
+        lock.unlock()
+    }
+}
+
+private enum ScopeStopWaitError: Error {
+    case timedOut
+}
+
+private final class ScopeStopWaiter: @unchecked Sendable {
+    let expected: Int
+    private let lock = NSLock()
+    private var result: Result<Void, Error>?
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(expected: Int) { self.expected = expected }
+
+    func install(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.lock()
+        if let result {
+            lock.unlock()
+            continuation.resume(with: result)
+        } else {
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func complete(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard self.result == nil else { lock.unlock(); return }
+        self.result = result
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
+
+private final class WeakBookSourceRegistryBox {
+    weak var value: BookSourceRegistry?
+    init(_ value: BookSourceRegistry?) { self.value = value }
+}
+
 private actor SourceCompletionProbe {
     private var completed = false
     func mark() { completed = true }
     func isCompleted() -> Bool { completed }
+}
+
+private actor RegistryCancellationGate {
+    private var entered = false
+    private var released = false
+
+    func holdCaller() async {
+        entered = true
+        for _ in 0..<400 {
+            if released { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<200 {
+            if entered { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return entered
+    }
+
+    func release() { released = true }
+}
+
+private final class RecoveryFailureCommitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let commitEntered = DispatchSemaphore(value: 0)
+    private let finishCommit = DispatchSemaphore(value: 0)
+    private var order = 0
+    private var commitOrder = 0
+    private var advanceOrder = 0
+    private var advanceAttempted = false
+
+    func holdCommit() -> Bool {
+        commitEntered.signal()
+        finishCommit.wait()
+        lock.lock(); order += 1; commitOrder = order; lock.unlock()
+        return true
+    }
+    func waitForCommit() { commitEntered.wait() }
+    func releaseCommit() { finishCommit.signal() }
+    func markAdvanceAttempted() { lock.lock(); advanceAttempted = true; lock.unlock() }
+    func didAttemptAdvance() -> Bool { lock.lock(); defer { lock.unlock() }; return advanceAttempted }
+    func markAdvanced() { lock.lock(); order += 1; advanceOrder = order; lock.unlock() }
+    func commitFinishedBeforeAdvance() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return commitOrder > 0 && advanceOrder > commitOrder
+    }
+}
+
+private actor ManagedFingerprintBackfillProbe {
+    private(set) var callCount = 0
+    func recordCall() { callCount += 1 }
 }
 
 private final class ScopeReleaseProbe: @unchecked Sendable {
@@ -70,17 +226,21 @@ private final class MutableGeneration: @unchecked Sendable {
     func set(_ generation: UInt64) { lock.lock(); stored = generation; lock.unlock() }
 }
 
-private actor SourceTestPersistence: BookImportPersistence {
+private actor SourceTestPersistence: BookReadingSourcePersistence {
     private var storedFingerprint: BookFileFingerprint?
     private let fingerprintGate: AsyncTestGate?
+    private let managedPermitGate: AsyncTestGate?
     private let gateFingerprintOnCall: Int?
+    private let captureFingerprintBeforeGate: Bool
     private let allowsManagedReauthorization: Bool
     private var fingerprintCalls = 0
 
-    init(fingerprint: BookFileFingerprint?, fingerprintGate: AsyncTestGate? = nil, gateFingerprintOnCall: Int? = nil, allowsManagedReauthorization: Bool = true) {
+    init(fingerprint: BookFileFingerprint?, fingerprintGate: AsyncTestGate? = nil, gateFingerprintOnCall: Int? = nil, managedPermitGate: AsyncTestGate? = nil, captureFingerprintBeforeGate: Bool = false, allowsManagedReauthorization: Bool = true) {
         storedFingerprint = fingerprint
         self.fingerprintGate = fingerprintGate
         self.gateFingerprintOnCall = gateFingerprintOnCall
+        self.managedPermitGate = managedPermitGate
+        self.captureFingerprintBeforeGate = captureFingerprintBeforeGate
         self.allowsManagedReauthorization = allowsManagedReauthorization
     }
 
@@ -89,24 +249,31 @@ private actor SourceTestPersistence: BookImportPersistence {
     func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? { nil }
     func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? {
         fingerprintCalls += 1
-        if fingerprintCalls == gateFingerprintOnCall { await fingerprintGate?.wait() }
-        guard storedFingerprint?.bookID == bookID, storedFingerprint?.ownerID == ownerID else { return nil }
-        return storedFingerprint
+        let shouldGate = fingerprintCalls == gateFingerprintOnCall
+        let captured = shouldGate && captureFingerprintBeforeGate ? storedFingerprint : nil
+        if shouldGate { await fingerprintGate?.wait() }
+        let fingerprint = shouldGate && captureFingerprintBeforeGate ? captured : storedFingerprint
+        guard fingerprint?.bookID == bookID, fingerprint?.ownerID == ownerID else { return nil }
+        return fingerprint
     }
-    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? {
-        guard storedFingerprint == fingerprint else { return nil }
-        return BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: generation, bookID: fingerprint.bookID, contentRevision: fingerprint.version.materializationRevision)
+    func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit? {
+        guard let fingerprint = storedFingerprint,
+              fingerprint.bookID == bookID, fingerprint.ownerID == ownerID else { return nil }
+        return BookReadingPermit(ownerID: ownerID, accountGeneration: generation, bookID: bookID, contentRevision: fingerprint.version.materializationRevision)
     }
-    func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration { throw TestError.unused }
-    func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration? { throw TestError.unused }
+    func readingPermit(forManagedFingerprint expected: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? {
+        await managedPermitGate?.wait()
+        guard let fingerprint = storedFingerprint,
+              expectedRelativePath.hasPrefix("Books/"),
+              fingerprint.bookID == expected.bookID,
+              fingerprint.ownerID == expected.ownerID,
+              fingerprint.sha256.caseInsensitiveCompare(expected.sha256) == .orderedSame,
+              fingerprint.version == expected.version else { return nil }
+        return BookReadingPermit(ownerID: expected.ownerID, accountGeneration: generation, bookID: expected.bookID, contentRevision: fingerprint.version.materializationRevision)
+    }
     func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool { throw TestError.unused }
-    func commitManaged(token: BookMaterializationToken, fingerprint: BookFileFingerprint) async throws -> Bool { throw TestError.unused }
-    func patchCover(bookID: BookID, token: BookMaterializationToken, relativePath: String) async throws -> Bool { throw TestError.unused }
-    func adoptRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID, verifiedArtifacts: VerifiedBookArtifacts) async throws -> BookMaterializationToken? { throw TestError.unused }
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { throw TestError.unused }
+    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { throw TestError.unused }
     func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool { allowsManagedReauthorization }
-    func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws { throw TestError.unused }
-    func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws { throw TestError.unused }
 
     enum TestError: Error { case unused }
 }
@@ -360,6 +527,213 @@ struct BookSourceRegistryTests {
         #expect(try await registry.managedSource(for: book) == nil)
     }
 
+    @Test("a verified backfill makes a legacy managed book readable when its fingerprint is missing")
+    func missingLegacyFingerprintIsBackfilledBeforeAcquiringSource() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let relativePath = "Books/\(bookID.uuidString)/legacy.epub"
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("legacy managed EPUB".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let version = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let book = Book(id: bookID, userId: userID, title: "Legacy", formatType: .epub, fileURL: relativePath)
+        let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "verified-legacy-digest", version: version)
+        let persistence = SourceTestPersistence(fingerprint: nil)
+        let backfill = ManagedFingerprintBackfillProbe()
+        let registry = BookSourceRegistry(
+            persistence: persistence,
+            currentGeneration: { 31 },
+            currentOwnerID: { userID },
+            backfillManagedFingerprintIfNeeded: { candidate in
+                guard candidate.id == book.id, candidate.userId == userID else { return false }
+                await backfill.recordCall()
+                await persistence.replaceFingerprint(fingerprint)
+                return true
+            },
+            managedURL: { _ in url }
+        )
+
+        let lease = try await registry.acquireReadableSource(for: book)
+
+        #expect(lease.url == url)
+        #expect(await backfill.callCount == 1)
+        #expect(lease.access == .account(BookReadingPermit(
+            ownerID: userID,
+            accountGeneration: 31,
+            bookID: bookID,
+            contentRevision: version.materializationRevision
+        )))
+    }
+
+    @Test("managed books with a fingerprint do not invoke legacy backfill")
+    func existingManagedFingerprintSkipsBackfill() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let relativePath = "Books/\(bookID.uuidString)/book.epub"
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("already fingerprinted EPUB".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let version = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let book = Book(id: bookID, userId: userID, title: "Known", formatType: .epub, fileURL: relativePath)
+        let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "cached-digest", version: version)
+        let backfill = ManagedFingerprintBackfillProbe()
+        let registry = BookSourceRegistry(
+            persistence: SourceTestPersistence(fingerprint: fingerprint),
+            currentGeneration: { 32 },
+            currentOwnerID: { userID },
+            backfillManagedFingerprintIfNeeded: { _ in
+                await backfill.recordCall()
+                return false
+            },
+            managedURL: { _ in url }
+        )
+
+        #expect(try await registry.managedSource(for: book) != nil)
+        #expect(await backfill.callCount == 0)
+    }
+
+    @Test("a failed legacy fingerprint backfill keeps the managed source unavailable")
+    func failedLegacyFingerprintBackfillIsRejected() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let relativePath = "Books/\(bookID.uuidString)/legacy.epub"
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("legacy managed EPUB".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let book = Book(id: bookID, userId: userID, title: "Legacy", formatType: .epub, fileURL: relativePath)
+        let persistence = SourceTestPersistence(fingerprint: nil)
+        let backfill = ManagedFingerprintBackfillProbe()
+        let registry = BookSourceRegistry(
+            persistence: persistence,
+            currentGeneration: { 33 },
+            currentOwnerID: { userID },
+            backfillManagedFingerprintIfNeeded: { candidate in
+                guard candidate.id == book.id else { return false }
+                await backfill.recordCall()
+                return false
+            },
+            managedURL: { _ in url }
+        )
+
+        #expect(try await registry.managedSource(for: book) == nil)
+        #expect(await backfill.callCount == 1)
+        #expect(try await persistence.fingerprint(bookID: bookID, ownerID: userID) == nil)
+    }
+
+    @Test("a generation change during legacy fingerprint backfill rejects the stale acquisition")
+    func generationChangeDuringLegacyFingerprintBackfillIsRejected() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let relativePath = "Books/\(bookID.uuidString)/legacy.epub"
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("legacy managed EPUB".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let generation = MutableGeneration(34)
+        let gate = AsyncTestGate()
+        let backfill = ManagedFingerprintBackfillProbe()
+        let book = Book(id: bookID, userId: userID, title: "Legacy", formatType: .epub, fileURL: relativePath)
+        let version = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "verified-legacy-digest", version: version)
+        let persistence = SourceTestPersistence(fingerprint: nil)
+        let registry = BookSourceRegistry(
+            persistence: persistence,
+            currentGeneration: { generation.value },
+            currentOwnerID: { userID },
+            backfillManagedFingerprintIfNeeded: { candidate in
+                guard candidate.id == book.id else { return false }
+                await backfill.recordCall()
+                await gate.wait()
+                await persistence.replaceFingerprint(fingerprint)
+                return true
+            },
+            managedURL: { _ in url }
+        )
+
+        let acquisition = Task { try await registry.acquireReadableSource(for: book) }
+        await gate.waitUntilEntered()
+        generation.set(35)
+        await gate.open()
+
+        await #expect(throws: BookSourceRegistryError.unavailable) {
+            try await acquisition.value
+        }
+        #expect(await backfill.callCount == 1)
+    }
+
+    @Test("concurrent stale-nil acquisitions avoid duplicate legacy verification")
+    func concurrentStaleNilAcquisitionsAvoidDuplicateVerification() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let relativePath = "Books/\(bookID.uuidString)/legacy.epub"
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("shared legacy managed EPUB".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let book = Book(id: bookID, userId: userID, title: "Legacy", formatType: .epub, fileURL: relativePath)
+        let version = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "verified-shared-digest", version: version)
+        let backfillGate = AsyncTestGate()
+        let secondLookupGate = AsyncTestGate()
+        let backfill = ManagedFingerprintBackfillProbe()
+        // The first fingerprint read is the caller lookup and the second is
+        // the verifier's recheck. Hold the third read to prove the second
+        // acquisition has reached persistence lookup while verification is
+        // still blocked.
+        let persistence = SourceTestPersistence(
+            fingerprint: nil,
+            fingerprintGate: secondLookupGate,
+            gateFingerprintOnCall: 3,
+            captureFingerprintBeforeGate: true
+        )
+        let registry = BookSourceRegistry(
+            persistence: persistence,
+            currentGeneration: { 36 },
+            currentOwnerID: { userID },
+            backfillManagedFingerprintIfNeeded: { candidate in
+                guard candidate.id == book.id else { return false }
+                await backfill.recordCall()
+                await backfillGate.wait()
+                await persistence.replaceFingerprint(fingerprint)
+                return true
+            },
+            managedURL: { _ in url }
+        )
+
+        let first = Task { try await registry.acquireReadableSource(for: book) }
+        await backfillGate.waitUntilEntered()
+        let second = Task { try await registry.acquireReadableSource(for: book) }
+        await secondLookupGate.waitUntilEntered()
+        #expect(await backfill.callCount == 1)
+        await secondLookupGate.open()
+        await backfillGate.open()
+
+        let firstLease = try await first.value
+        let secondLease = try await second.value
+        #expect(firstLease.url == url)
+        #expect(secondLease.url == url)
+        #expect(firstLease.owner.access == .account(BookReadingPermit(
+            ownerID: userID,
+            accountGeneration: 36,
+            bookID: bookID,
+            contentRevision: version.materializationRevision
+        )))
+        #expect(secondLease.owner.access == firstLease.owner.access)
+        #expect(await backfill.callCount == 1)
+    }
+
     @Test("a ready notification wakes a registered waiter which validates persisted provenance")
     func readyEventRaceIsClosed() async throws {
         let userID = UUID()
@@ -373,14 +747,13 @@ struct BookSourceRegistryTests {
         let revision = UUID()
         let firstVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let gate = AsyncTestGate()
-        let persistence = SourceTestPersistence(fingerprint: nil, fingerprintGate: gate, gateFingerprintOnCall: 3)
+        let persistence = SourceTestPersistence(fingerprint: nil, fingerprintGate: gate, gateFingerprintOnCall: 2)
         let registry = BookSourceRegistry(persistence: persistence, currentGeneration: { 13 }, currentOwnerID: { userID }, managedURL: { _ in url })
         let waiter = Task { try await registry.awaitManagedSource(for: book) }
-        await gate.waitUntilEntered() // Missing-fingerprint backfill precedes waiter registration.
-        #expect(await registry.hasManagedWaiterForTesting(ownerID: userID, generation: 13, bookID: bookID))
+        await gate.waitUntilEntered() // The waiter has been registered before its recheck.
         let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "first", version: firstVersion)
         await persistence.replaceFingerprint(fingerprint)
-        let readySource = ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: 13, bookID: bookID, contentRevision: fingerprint.version.materializationRevision))
+        let readySource = ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 13, bookID: bookID, contentRevision: revision))
         await registry.managedSourceBecameReady(readySource)
         await gate.open()
         #expect(try await waiter.value == readySource)
@@ -400,8 +773,7 @@ struct BookSourceRegistryTests {
         let oldVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let persistence = SourceTestPersistence(fingerprint: BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "old", version: oldVersion))
         let registry = BookSourceRegistry(persistence: persistence, currentGeneration: { 14 }, currentOwnerID: { userID }, managedURL: { _ in url })
-        let staleFingerprint = try #require(await persistence.fingerprint(bookID: bookID, ownerID: userID))
-        let staleSource = ManagedBookSource(bookID: bookID, url: url, fingerprint: staleFingerprint, readingPermit: BookReadingPermit(ownerID: staleFingerprint.ownerID, accountGeneration: 14, bookID: bookID, contentRevision: staleFingerprint.version.materializationRevision))
+        let staleSource = ManagedBookSource(bookID: bookID, url: url, fingerprint: try #require(await persistence.fingerprint(bookID: bookID, ownerID: userID)), readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 14, bookID: bookID, contentRevision: revision))
         try Data("after with different size".utf8).write(to: url)
 
         let completed = SourceCompletionProbe()
@@ -418,9 +790,39 @@ struct BookSourceRegistryTests {
         let currentVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let currentFingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "new", version: currentVersion)
         await persistence.replaceFingerprint(currentFingerprint)
-        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: currentFingerprint, readingPermit: BookReadingPermit(ownerID: currentFingerprint.ownerID, accountGeneration: 14, bookID: bookID, contentRevision: currentFingerprint.version.materializationRevision)))
+        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: currentFingerprint, readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 14, bookID: bookID, contentRevision: revision)))
         let resolved = try await waiter.value
         #expect(resolved.fingerprint == currentFingerprint)
+    }
+
+    @Test("managed fingerprint replacement between lookup and permit resolution fails closed")
+    func managedFingerprintAndPermitAreResolvedAsOneSnapshot() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = root.appendingPathComponent("Books/\(bookID.uuidString)/race.pdf")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("fingerprint A".utf8).write(to: url)
+        let book = Book(id: bookID, userId: userID, title: "Race", formatType: .pdf, fileURL: "Books/\(bookID.uuidString)/race.pdf")
+        let oldVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let oldFingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "digest-a", version: oldVersion)
+        let gate = AsyncTestGate()
+        let persistence = SourceTestPersistence(fingerprint: oldFingerprint, managedPermitGate: gate)
+        let registry = BookSourceRegistry(persistence: persistence, currentGeneration: { 21 }, currentOwnerID: { userID }, managedURL: { _ in url })
+
+        let pendingResolution = Task { try await registry.managedSource(for: book) }
+        await gate.waitUntilEntered()
+        try Data("different verified fingerprint B".utf8).write(to: url)
+        let newVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: UUID()))
+        let newFingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "digest-b", version: newVersion)
+        await persistence.replaceFingerprint(newFingerprint)
+        await gate.open()
+
+        #expect(try await pendingResolution.value == nil)
+        let currentSource = try #require(try await registry.managedSource(for: book))
+        #expect(currentSource.fingerprint == newFingerprint)
+        #expect(currentSource.readingPermit.contentRevision == newFingerprint.version.materializationRevision)
     }
 
     @Test("book retirement synchronously rejects previously ready managed sources")
@@ -438,7 +840,7 @@ struct BookSourceRegistryTests {
         let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "valid", version: version)
         let registry = BookSourceRegistry(persistence: SourceTestPersistence(fingerprint: fingerprint), currentGeneration: { 15 }, currentOwnerID: { userID }, managedURL: { _ in url })
         let lifecycle = BookImportLifecycle(sourceRegistry: registry)
-        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: 15, bookID: bookID, contentRevision: fingerprint.version.materializationRevision)))
+        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 15, bookID: bookID, contentRevision: revision)))
 
         lifecycle.retireBook(ownerID: userID, generation: 15, bookID: bookID)
         #expect(try await registry.managedSource(for: book) == nil)
@@ -460,6 +862,71 @@ struct BookSourceRegistryTests {
         await #expect(throws: BookSourceRegistryError.unavailable) { try await waiter.value }
     }
 
+    @Test("recovery failure permit cannot complete a waiter after a newer attempt advances")
+    func staleRecoveryFailurePermitDoesNotFailNewEpochWaiter() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Epoch", formatType: .epub, fileURL: "Books/epoch.epub")
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        #expect(registry.activateBookSynchronously(ownerID: owner, generation: 9, bookID: book.id))
+        let oldToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: book.id, attemptID: UUID())
+        let stalePermit = BookImportRecoverySourceFailurePermit(ownerID: owner, generation: 9, bookID: book.id, token: oldToken, attemptEpoch: 1)
+        #expect(registry.activateBookSynchronously(ownerID: owner, generation: 9, bookID: book.id))
+
+        let waiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) {
+            await Task.yield()
+        }
+        #expect(!(await registry.failRecoveryWaiters(for: book, permit: stalePermit)))
+        #expect(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id))
+        waiter.cancel()
+        await #expect(throws: CancellationError.self) { try await waiter.value }
+    }
+
+    @Test("recovery failure permit wakes waiters admitted before its epoch")
+    func recoveryFailurePermitWakesEarlierEpochWaiters() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Epoch", formatType: .epub, fileURL: "Books/epoch.epub")
+        let registry = BookSourceRegistry(currentGeneration: { 9 }, currentOwnerID: { owner }, managedURL: { _ in nil })
+        #expect(registry.activateBookSynchronously(ownerID: owner, generation: 9, bookID: book.id))
+        let oldToken = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: book.id, attemptID: UUID())
+        let waiter = Task { try await registry.awaitManagedSource(for: book) }
+        while !(await registry.hasManagedWaiterForTesting(ownerID: owner, generation: 9, bookID: book.id)) {
+            await Task.yield()
+        }
+        #expect(registry.activateBookSynchronously(ownerID: owner, generation: 9, bookID: book.id))
+        let permit = BookImportRecoverySourceFailurePermit(ownerID: owner, generation: 9, bookID: book.id, token: oldToken, attemptEpoch: 2)
+        #expect(await registry.failRecoveryWaiters(for: book, permit: permit))
+        await #expect(throws: BookSourceRegistryError.unavailable) { try await waiter.value }
+    }
+
+    @Test("synchronous attempt advance linearizes after an in-flight recovery failure commit")
+    func recoveryFailureCommitIsAtomicAgainstAttemptAdvance() async throws {
+        let owner = UUID()
+        let bookID = UUID()
+        let fence = BookSourceRegistryFence()
+        #expect(fence.activateBook(ownerID: owner, generation: 9, bookID: bookID))
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: 8, bookID: bookID, attemptID: UUID())
+        let permit = BookImportRecoverySourceFailurePermit(ownerID: owner, generation: 9, bookID: bookID, token: token, attemptEpoch: 1)
+        let gate = RecoveryFailureCommitGate()
+        let commit = Task.detached(priority: .userInitiated) {
+            fence.commitRecoveryFailureIfCurrent(permit) { gate.holdCommit() }
+        }
+        gate.waitForCommit()
+        let advance = Task.detached(priority: .userInitiated) {
+            gate.markAdvanceAttempted()
+            let advanced = fence.activateBook(ownerID: owner, generation: 9, bookID: bookID)
+            gate.markAdvanced()
+            return advanced
+        }
+        while !gate.didAttemptAdvance() { await Task.yield() }
+        #expect(!gate.commitFinishedBeforeAdvance())
+        gate.releaseCommit()
+        #expect(await commit.value)
+        #expect(await advance.value)
+        #expect(gate.commitFinishedBeforeAdvance())
+        #expect(fence.bookAttemptEpoch(ownerID: owner, generation: 9, bookID: bookID) == 2)
+    }
+
     @Test("a source that cannot start security-scoped access is rejected")
     func securityScopeFailureDoesNotCreateOwner() throws {
         let permit = BookSourceAccessPermit()
@@ -470,8 +937,8 @@ struct BookSourceRegistryTests {
         }
     }
 
-    @Test("a drained retry attempt reopens only its retired book admission")
-    func retryAttemptReopensRetiredBook() async throws {
+    @Test("retry cannot reopen a permanent book retirement fence")
+    func retryAttemptCannotReopenRetiredBook() async throws {
         let userID = UUID()
         let book = Book(userId: userID, title: "Retry", formatType: .epub, fileURL: "Books/retry.epub")
         let registry = BookSourceRegistry(currentGeneration: { 29 }, currentOwnerID: { userID }, managedURL: { _ in nil })
@@ -480,17 +947,99 @@ struct BookSourceRegistryTests {
         await lifecycle.drainBook(ownerID: userID, generation: 29, bookID: book.id)
 
         let token = BookMaterializationToken(ownerID: userID, accountGeneration: 29, bookID: book.id, attemptID: UUID())
-        #expect(lifecycle.activatePromotionAttempt(token))
-        try await registry.registerSource(
-            for: book,
-            url: URL(fileURLWithPath: "/tmp/retried.epub"),
-            accountGeneration: 29,
-            readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 29, bookID: book.id, contentRevision: UUID()),
-            token: token,
-            requiresSecurityScope: false,
-            observeChanges: false
-        )
-        #expect(try await registry.acquireReadableSource(for: book).url == URL(fileURLWithPath: "/tmp/retried.epub"))
+        #expect(!lifecycle.activatePromotionAttempt(token))
+        await #expect(throws: BookSourceRegistryError.accountRevoked) {
+            try await registry.registerSource(
+                for: book,
+                url: URL(fileURLWithPath: "/tmp/retried.epub"),
+                accountGeneration: 29,
+                readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 29, bookID: book.id, contentRevision: UUID()),
+                token: token,
+                requiresSecurityScope: false,
+                observeChanges: false
+            )
+        }
+        await #expect(throws: BookSourceRegistryError.unavailable) {
+            try await registry.acquireReadableSource(for: book)
+        }
+    }
+
+    @Test("registry scope adapters balance scoped owners without retaining the registry")
+    func sourceScopeAdapterBalancesAndDoesNotRetainRegistry() async throws {
+        for requiresScope in [false, true] {
+            let userID = UUID()
+            let book = Book(userId: userID, title: "Scope", formatType: .epub, fileURL: "Books/scope.epub")
+            let scopeCounts = RegistryScopeCounts()
+            var registry: BookSourceRegistry? = BookSourceRegistry(
+                currentGeneration: { 73 },
+                currentOwnerID: { userID },
+                startSecurityScope: { _ in scopeCounts.didStart(); return true },
+                stopSecurityScope: { _ in scopeCounts.didStop() },
+                managedURL: { _ in nil }
+            )
+            let weakRegistry = WeakBookSourceRegistryBox(registry)
+            try await registry?.registerSource(
+                for: book,
+                url: URL(fileURLWithPath: "/tmp/scope-source.epub"),
+                accountGeneration: 73,
+                readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 73, bookID: book.id, contentRevision: UUID()),
+                requiresSecurityScope: requiresScope,
+                observeChanges: false
+            )
+            #expect(scopeCounts.counts.starts == (requiresScope ? 1 : 0))
+            await registry?.retire(ownerID: userID, generation: 73)
+            await registry?.drain(ownerID: userID, generation: 73)
+            #expect(scopeCounts.counts.stops == (requiresScope ? 1 : 0))
+            registry = nil
+            #expect(weakRegistry.value == nil)
+        }
+    }
+
+    @Test("dropping a registry with a live scoped entry releases its owner without retirement")
+    func liveScopedEntryDoesNotRetainRegistry() async throws {
+        let userID = UUID()
+        let book = Book(userId: userID, title: "Live Scope", formatType: .epub, fileURL: "Books/live-scope.epub")
+        let scopeCounts = RegistryScopeCounts()
+        var weakRegistry: WeakBookSourceRegistryBox!
+        do {
+            var registry: BookSourceRegistry? = BookSourceRegistry(
+                currentGeneration: { 74 },
+                currentOwnerID: { userID },
+                startSecurityScope: { _ in scopeCounts.didStart(); return true },
+                stopSecurityScope: { _ in scopeCounts.didStop() },
+                managedURL: { _ in nil }
+            )
+            weakRegistry = WeakBookSourceRegistryBox(registry)
+            try await registry?.registerSource(
+                for: book,
+                url: URL(fileURLWithPath: "/tmp/live-scope-source.epub"),
+                accountGeneration: 74,
+                readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 74, bookID: book.id, contentRevision: UUID()),
+                requiresSecurityScope: true,
+                observeChanges: false
+            )
+            #expect(scopeCounts.counts == (starts: 1, stops: 0))
+            registry = nil
+        }
+
+        #expect(weakRegistry.value == nil)
+        try await scopeCounts.waitForStops(1)
+        #expect(scopeCounts.counts == (starts: 1, stops: 1))
+    }
+
+    @Test("scope release wait reports timeout and safely responds to cancellation")
+    func scopeReleaseWaitIsBoundedAndCancellable() async throws {
+        let scopeCounts = RegistryScopeCounts()
+        await #expect(throws: ScopeStopWaitError.timedOut) {
+            try await scopeCounts.waitForStops(1, timeout: .milliseconds(1))
+        }
+
+        let cancelledWait = Task { try await scopeCounts.waitForStops(1) }
+        cancelledWait.cancel()
+        await #expect(throws: CancellationError.self) { try await cancelledWait.value }
+
+        scopeCounts.didStop()
+        try await scopeCounts.waitForStops(1)
     }
 
     @Test("owned-source cleanup atomically blocks new transient leases and waits for existing leases")
@@ -503,7 +1052,7 @@ struct BookSourceRegistryTests {
             for: book,
             url: URL(fileURLWithPath: "/tmp/owned-source.epub"),
             accountGeneration: 41,
-            readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 41, bookID: book.id, contentRevision: UUID()),
+            readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 41, bookID: book.id, contentRevision: UUID()),
             token: token,
             requiresSecurityScope: false,
             observeChanges: false
@@ -527,6 +1076,39 @@ struct BookSourceRegistryTests {
         }
     }
 
+    @Test("cancelled transient publication is rejected at registry actor ingress")
+    func cancelledTransientPublicationRemainsUnavailable() async throws {
+        let userID = UUID()
+        let book = Book(userId: userID, title: "Cancelled transient", formatType: .epub, fileURL: "Books/cancelled-transient.epub")
+        let token = BookMaterializationToken(ownerID: userID, accountGeneration: 42, bookID: book.id, attemptID: UUID())
+        let registry = BookSourceRegistry(currentGeneration: { 42 }, currentOwnerID: { userID }, managedURL: { _ in nil })
+        let accessPermit = try await registry.registerSource(
+            for: book,
+            url: URL(fileURLWithPath: "/tmp/cancelled-transient.epub"),
+            accountGeneration: 42,
+            readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 42, bookID: book.id, contentRevision: UUID()),
+            token: token,
+            requiresSecurityScope: false,
+            observeChanges: false,
+            published: false
+        )
+        let gate = RegistryCancellationGate()
+        let dispatch = Task<Bool, Error> {
+            await gate.holdCaller()
+            return await registry.publishTransientSource(
+                ownerID: userID, generation: 42, bookID: book.id, token: token, permit: accessPermit
+            )
+        }
+
+        _ = try #require(await gate.waitUntilEntered())
+        dispatch.cancel()
+        await gate.release()
+        #expect(try await dispatch.value == false)
+        await #expect(throws: BookSourceRegistryError.unavailable) {
+            try await registry.acquireReadableSource(for: book)
+        }
+    }
+
     @Test("provider deletion callback waits for admitted source effects to drain")
     func providerDeletionWaitsForDrain() async throws {
         let gate = AsyncTestGate()
@@ -543,5 +1125,33 @@ struct BookSourceRegistryTests {
         await completion.wait()
         #expect(await completion.isCompleted())
         presenter.invalidateAndStop()
+    }
+
+    @Test("artwork admission uses owner generation and synchronous retirement fences")
+    func artworkAdmissionFailsClosedAtRegistryFences() async {
+        let owner = UUID()
+        let generation = MutableGeneration(73)
+        let book = Book(userId: owner, title: "Artwork", formatType: .epub, fileURL: "Books/\(UUID().uuidString)/book.epub")
+        let registry = BookSourceRegistry(
+            currentGeneration: { generation.value },
+            currentOwnerID: { owner },
+            managedURL: { _ in nil }
+        )
+
+        #expect(await registry.allowsArtworkRead(for: book, generation: 73))
+        registry.fenceBookSynchronously(ownerID: owner, generation: 73, bookID: book.id)
+        #expect(!(await registry.allowsArtworkRead(for: book, generation: 73)))
+        #expect(registry.activateBookSynchronously(ownerID: owner, generation: 73, bookID: book.id))
+        #expect(await registry.allowsArtworkRead(for: book, generation: 73))
+
+        generation.set(74)
+        #expect(!(await registry.allowsArtworkRead(for: book, generation: 73)))
+        let epoch = registry.fenceAccountSynchronously(ownerID: owner, generation: 74)
+        #expect(!(await registry.allowsArtworkRead(for: book, generation: 74)))
+        #expect(registry.activateAccountSynchronously(ownerID: owner, generation: 74, epoch: epoch))
+        #expect(await registry.allowsArtworkRead(for: book, generation: 74))
+
+        let foreign = Book(userId: UUID(), title: book.title, formatType: book.formatType, fileURL: book.fileURL)
+        #expect(!(await registry.allowsArtworkRead(for: foreign, generation: 74)))
     }
 }

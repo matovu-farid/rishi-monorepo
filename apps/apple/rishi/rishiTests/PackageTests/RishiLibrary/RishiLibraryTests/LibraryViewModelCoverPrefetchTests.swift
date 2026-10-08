@@ -5,13 +5,35 @@ import Testing
 
 
 
-/// Phase 21 Plan 21-01 — `LibraryViewModel.refresh()` must populate
-/// `coverURLs` BEFORE returning, using the nonisolated cache fast path,
-/// so the library grid renders real covers on the very first paint.
-/// Cache-cold books deliberately stay off `coverURLs` (gradient fallback).
+/// Cover hydration is a bounded follow-up to base-book publication. Warm
+/// cache results still resolve through the fast path; cold misses resolve nil.
 @MainActor
 @Suite("LibraryViewModel cover prefetch")
 struct LibraryViewModelCoverPrefetchTests {
+
+    private actor CoverPrefetchGate {
+        private var started = false
+        private var startWaiters: [CheckedContinuation<Void, Never>] = []
+        private var release: CheckedContinuation<Void, Never>?
+
+        func pause() async {
+            started = true
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { release = $0 }
+        }
+
+        func waitUntilPaused() async {
+            guard !started else { return }
+            await withCheckedContinuation { startWaiters.append($0) }
+        }
+
+        func open() {
+            release?.resume()
+            release = nil
+        }
+    }
 
     /// No-op extractor — present only so `BookFileStorage` initialises a
     /// non-nil `CoverCache`. The cache-warm tests never invoke the slow
@@ -73,7 +95,30 @@ struct LibraryViewModelCoverPrefetchTests {
         try Data(String(pinnedDate.timeIntervalSince1970).utf8).write(to: mtimeURL)
     }
 
-    @Test("refresh populates coverURLs for cache-warm books before returning")
+    @Test("grid and Reading Now visibility are deduplicated until both surfaces report disappearance")
+    func visiblePriorityCombinesGridAndShelf() async {
+        let (storage, root, _, userId, bookStore, _) = Self.makeFixture(label: "visibility")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vm = LibraryViewModel(
+            bookStore: bookStore,
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId }),
+            positionLoader: PositionLoader(positionStore: InMemoryPositionStore()),
+            coverResolver: BookCoverResolver(storage: storage),
+            deleteBook: { _ in }
+        )
+        let sharedID = UUID()
+
+        vm.setGridBookVisible(sharedID, visible: true)
+        vm.setReadingNowBookVisible(sharedID, visible: true)
+        #expect(vm.prioritizedCoverBookIDs == [sharedID])
+        vm.setGridBookVisible(sharedID, visible: false)
+        #expect(vm.prioritizedCoverBookIDs == [sharedID])
+        vm.setReadingNowBookVisible(sharedID, visible: false)
+        #expect(vm.prioritizedCoverBookIDs.isEmpty)
+    }
+
+    @Test("bounded hydration populates coverURLs for cache-warm books")
     func cacheWarmBooksHaveCoverURLsAfterRefresh() async throws {
         let (storage, root, cacheDir, userId, bookStore, positionStore) = Self.makeFixture(label: "warm")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -105,6 +150,7 @@ struct LibraryViewModelCoverPrefetchTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
+        await vm.waitForHydration()
 
         #expect(vm.books.count == 2)
         #expect(vm.coverURLs[bookA.id] != nil)
@@ -134,6 +180,7 @@ struct LibraryViewModelCoverPrefetchTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
+        await vm.waitForHydration()
 
         #expect(vm.books.count == 1)
         #expect(vm.coverURLs[cold.id] == nil)
@@ -152,13 +199,16 @@ struct LibraryViewModelCoverPrefetchTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { nil })
         )
         await vm.refresh()
+        await vm.waitForHydration()
         #expect(vm.coverURLs.isEmpty)
     }
 
-    @Test("refresh ordering — coverURLs and books visible in the same MainActor turn")
-    func coverURLsAndBooksAreVisibleTogether() async throws {
-        let (storage, root, cacheDir, userId, bookStore, positionStore) = Self.makeFixture(label: "ordering")
+    @Test("base books publish while a gated cover is unresolved")
+    func booksPublishBeforeCoverHydration() async throws {
+        let (storage, root, _, userId, bookStore, positionStore) = Self.makeFixture(label: "ordering")
         defer { try? FileManager.default.removeItem(at: root) }
+        let coverGate = CoverPrefetchGate()
+        let expectedURL = URL(fileURLWithPath: "/tmp/gated-cover.heic")
 
         let book = Book(
             userId: userId,
@@ -168,22 +218,24 @@ struct LibraryViewModelCoverPrefetchTests {
             coverPath: "Books/O/cover.png"
         )
         try await bookStore.upsert(book)
-        try Self.seedWarmCache(book: book, root: root, cacheDir: cacheDir)
-
         let vm = LibraryViewModel(
             bookStore: bookStore,
-            positionStore: positionStore,
-            storage: storage,
             currentUserId: { userId },
-            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId }),
+            positionLoader: PositionLoader(positionStore: positionStore),
+            coverResolver: BookCoverResolver(resolve: { _ in
+                await coverGate.pause()
+                return expectedURL
+            }),
+            deleteBook: { _ in }
         )
         await vm.refresh()
-
-        // After refresh returns, both must be populated; the grid binds to
-        // both in the same render pass, so there is no observable state in
-        // which books.count > 0 && coverURLs.isEmpty for cache-warm books.
         #expect(!vm.books.isEmpty)
-        #expect(!vm.coverURLs.isEmpty)
-        #expect(vm.coverURLs[book.id] != nil)
+        #expect(vm.coverURLs.isEmpty)
+        await coverGate.waitUntilPaused()
+        #expect(vm.coverURLs.isEmpty)
+        await coverGate.open()
+        await vm.waitForHydration()
+        #expect(vm.coverURLs[book.id] == expectedURL)
     }
 }

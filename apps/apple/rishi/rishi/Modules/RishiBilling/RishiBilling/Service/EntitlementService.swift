@@ -36,6 +36,15 @@ public actor EntitlementService {
     private var latest: EntitlementLevel
     private var latestResolution: EntitlementSnapshotResolution = .unresolved
     private var boundUserId: String?
+    private var boundLease: CredentialLease?
+    private let credentialAuthority: SessionCredentialAuthority?
+
+    /// Construction-time identity includes the actual transport chain, not
+    /// merely a copied credential record with an equal lease value.
+    nonisolated func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        credentialAuthority === authority && workerClient.usesCredentialAuthority(authority)
+    }
+
 
     /// UserDefaults key used for the binary level cache.
     public static let defaultsKey = "billing.entitlement.level"
@@ -46,8 +55,17 @@ public actor EntitlementService {
         workerClient: WorkerClient,
         defaults: UserDefaults = .standard
     ) {
+        self.init(workerClient: workerClient, defaults: defaults, stagedAuthority: nil)
+    }
+
+    init(workerClient: WorkerClient, defaults: UserDefaults, credentialAuthority: SessionCredentialAuthority) {
+        self.init(workerClient: workerClient, defaults: defaults, stagedAuthority: credentialAuthority)
+    }
+
+    private init(workerClient: WorkerClient, defaults: UserDefaults, stagedAuthority: SessionCredentialAuthority?) {
         self.workerClient = workerClient
         self.defaults = defaults
+        credentialAuthority = stagedAuthority
 
         let cachedRaw = defaults.string(forKey: Self.defaultsKey)
         let cached = cachedRaw.flatMap(EntitlementLevel.init(rawValue:)) ?? .unsubscribed
@@ -67,6 +85,7 @@ public actor EntitlementService {
     /// Associate cached snapshot storage with the signed-in user and hydrate
     /// from disk when available.
     public func bindToUser(userId: String) {
+        guard credentialAuthority == nil else { return }
         boundUserId = userId
         if let cached = loadCachedResolution(for: userId) {
             setCachedResolution(cached.resolution, fetchedAt: cached.fetchedAt)
@@ -76,6 +95,7 @@ public actor EntitlementService {
     }
 
     public func setCached(_ level: EntitlementLevel) {
+        guard credentialAuthority == nil else { return }
         guard level != latest else { return }
         latest = level
         defaults.set(level.rawValue, forKey: Self.defaultsKey)
@@ -85,6 +105,7 @@ public actor EntitlementService {
 
     @discardableResult
     public func refresh() async -> Result<EntitlementLevel, Error> {
+        guard credentialAuthority == nil else { return .failure(EntitlementRefreshError.accountChanged) }
         do {
             let response = try await workerClient.send(GetSessionEndpoint())
             let level = EntitlementLevel(hasPro: response?.hasPro ?? false)
@@ -98,6 +119,11 @@ public actor EntitlementService {
     }
 
     public func clearCache() {
+        guard credentialAuthority == nil else { return }
+        clearLevelCache()
+    }
+
+    private func clearLevelCache() {
         latest = .unsubscribed
         defaults.set(EntitlementLevel.unsubscribed.rawValue, forKey: Self.defaultsKey)
         continuation.yield(.unsubscribed)
@@ -111,6 +137,7 @@ public actor EntitlementService {
         expectedUserId: String,
         isCurrentUser: @Sendable @escaping () -> Bool
     ) async -> Result<EntitlementSnapshot, Error> {
+        guard credentialAuthority == nil else { return .failure(EntitlementRefreshError.accountChanged) }
         do {
             let snapshot = try await workerClient.send(BillingMeEndpoint())
 
@@ -139,12 +166,60 @@ public actor EntitlementService {
 
     /// Clear cached snapshot for a user and reset to unresolved.
     public func clearSnapshotCache(for userId: String? = nil) {
+        guard credentialAuthority == nil else { return }
         let targetUserId = userId ?? boundUserId
         if let targetUserId {
             defaults.removeObject(forKey: Self.snapshotCacheKey(for: targetUserId))
         }
         boundUserId = nil
         setCachedResolution(.unresolved, fetchedAt: nil)
+    }
+
+    /// Lease validation encloses the actual actor bind/cache publication.
+    func bindToUser(userId: String, lease: CredentialLease) -> Bool {
+        guard let authority = credentialAuthority, userId == lease.rawUserID else { return false }
+        return authority.performIfCurrent(lease) {
+            boundUserId = userId
+            boundLease = lease
+            if let cached = loadCachedResolution(for: userId) {
+                setCachedResolution(cached.resolution, fetchedAt: cached.fetchedAt)
+            } else {
+                setCachedResolution(.unresolved, fetchedAt: nil)
+            }
+        }
+    }
+
+    func refreshSnapshot(lease: CredentialLease) async -> Result<EntitlementSnapshot, Error> {
+        guard let authority = credentialAuthority, boundLease == lease,
+              authority.isCurrent(lease) else { return .failure(EntitlementRefreshError.accountChanged) }
+        do {
+            let snapshot = try await workerClient.send(BillingMeEndpoint(), credentialContext: .normal(lease))
+            var applied = false
+            _ = authority.performIfCurrent(lease) {
+                guard boundLease == lease, boundUserId == lease.rawUserID else { return }
+                let fetchedAt = Date()
+                setCachedResolution(.resolved(snapshot, fetchedAt: fetchedAt), fetchedAt: fetchedAt)
+                applied = true
+            }
+            return applied ? .success(snapshot) : .failure(EntitlementRefreshError.accountChanged)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Used only inside the owning app cleanup reservation. Ordinary lease
+    /// publication is already closed while this transition is pending.
+    func clearCache(in transition: CredentialTransition) -> Bool {
+        guard let authority = credentialAuthority else { return false }
+        return authority.performIfCurrent(transition) {
+            if case .loaded(let outgoing) = transition.outgoing {
+                defaults.removeObject(forKey: Self.snapshotCacheKey(for: outgoing.lease.rawUserID))
+            }
+            boundUserId = nil
+            boundLease = nil
+            setCachedResolution(.unresolved, fetchedAt: nil)
+            clearLevelCache()
+        }
     }
 
     // MARK: - Private

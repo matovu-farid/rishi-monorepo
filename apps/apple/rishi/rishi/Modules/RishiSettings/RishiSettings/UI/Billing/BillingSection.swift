@@ -47,9 +47,10 @@ public struct BillingSection: View {
 
     var subscriptionAction: BillingSubscriptionAction {
         guard !allowanceLoading else { return .neutral }
-        return entitlementSnapshot?.isPaidActive == true || storeKitIsSubscribed
-            ? .manage
-            : .subscribe
+        return SubscriptionManagementPolicy.isSubscribed(
+            serverPaidActive: entitlementSnapshot?.isPaidActive == true,
+            deviceSubscriptionActive: storeKitIsSubscribed
+        ) ? .manage : .subscribe
     }
 
     public var body: some View {
@@ -75,7 +76,7 @@ public struct BillingSection: View {
                     EmptyView()
                 }
             case .manage:
-                ManageSubscriptionRow()
+                if let onSubscribe { ManageSubscriptionRow(onChange: onSubscribe) }
             }
         } header: {
             Text("Subscription")

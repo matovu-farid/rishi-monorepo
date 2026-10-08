@@ -11,7 +11,7 @@ import Testing
 ///   1. AppStore.sync() forces a refresh from Apple servers.
 ///   2. Transaction.currentEntitlements is re-walked.
 ///   3. Verified + non-revoked transactions whose productID belongs to the
-///      active Reader/Voice catalog flip `EntitlementReconciler.setOnDevice(.pro)`.
+///      active Reader/Voice catalog flip `EntitlementReconciler.setOnDevice(.subscribed)`.
 ///
 /// The `revocationDate == nil` filter is load-bearing — refunded transactions
 /// can linger in `currentEntitlements` briefly (RESEARCH §10 Pitfall 5). Tests
@@ -67,9 +67,9 @@ struct RestoreServiceTests {
         }
     }
 
-    /// Helper: build a fresh `.free` reconciler on MainActor.
+    /// Helper: build a fresh `.unsubscribed` reconciler on MainActor.
     private func makeReconciler() -> EntitlementReconciler {
-        EntitlementReconciler(initial: .free)
+        EntitlementReconciler(initial: .unsubscribed)
     }
 
     @Test
@@ -85,7 +85,7 @@ struct RestoreServiceTests {
                     RestoreEntitlement(productID: RishiProductID.readerMonthly, jws: "reader"),
                 ]
             },
-            entitlementSync: { jws in
+            entitlementSyncClient: RestoreFixtureSyncClient { jws in
                 await lock.append(jws)
                 return EntitlementSyncResult(verified: true, reason: nil)
             }
@@ -104,7 +104,7 @@ struct RestoreServiceTests {
             reconciler: makeReconciler(),
             appStoreSync: {},
             activeEntitlements: { [] },
-            entitlementSync: { _ in
+            entitlementSyncClient: RestoreFixtureSyncClient { _ in
                 await lock.append("unexpected")
                 return EntitlementSyncResult(verified: true, reason: nil)
             }
@@ -123,13 +123,13 @@ struct RestoreServiceTests {
             activeEntitlements: {
                 [RestoreEntitlement(productID: RishiProductID.readerMonthly, jws: "reader")]
             },
-            entitlementSync: { _ in throw RestoreTestError.syncFailed }
+            entitlementSyncClient: RestoreFixtureSyncClient { _ in throw RestoreTestError.syncFailed }
         )
 
         await #expect(throws: RestoreError.self) {
             _ = try await service.restore()
         }
-        #expect(reconciler.level == .free)
+        #expect(reconciler.level == .unsubscribed)
     }
 
     private actor CallRecorder {
@@ -149,11 +149,11 @@ struct RestoreServiceTests {
         // .nothingToRestore. If sync itself throws on hosts without the
         // daemon, we accept that as a known-issue soft-skip.
         let reconciler = makeReconciler()
-        let service = RestoreService(reconciler: reconciler)
+        let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
         do {
             let outcome = try await service.restore()
             #expect(outcome == .nothingToRestore)
-            #expect(reconciler.level == .free)
+            #expect(reconciler.level == .unsubscribed)
         } catch RestoreError.syncFailed {
             // Host without daemon — sync threw. Soft-skip via known-issue.
             withKnownIssue("AppStore.sync() failed on this host (no SKTestSession daemon).") {
@@ -177,7 +177,7 @@ struct RestoreServiceTests {
             _ = try await self.session.buyProduct(identifier: self.monthlyId)
 
             let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
+            let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
             let outcome = try await service.restore()
 
             guard case let .restored(ids) = outcome else {
@@ -185,7 +185,7 @@ struct RestoreServiceTests {
                 return
             }
             #expect(ids.contains(self.monthlyId))
-            #expect(reconciler.level == .pro)
+            #expect(reconciler.level == .subscribed)
         }
     }
 
@@ -204,7 +204,7 @@ struct RestoreServiceTests {
             try self.session.refundTransaction(identifier: UInt(tx.id))
 
             let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
+            let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
             let outcome = try await service.restore()
 
             // The refunded transaction may either be absent from
@@ -217,8 +217,8 @@ struct RestoreServiceTests {
             } else {
                 #expect(outcome == .nothingToRestore)
             }
-            #expect(reconciler.level == .free,
-                    "reconciler granted .pro from a refunded transaction (Pitfall 5)")
+            #expect(reconciler.level == .unsubscribed,
+                    "reconciler granted .subscribed from a refunded transaction (Pitfall 5)")
         }
     }
 
@@ -234,16 +234,16 @@ struct RestoreServiceTests {
             _ = try await self.session.buyProduct(identifier: self.monthlyId)
 
             let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
+            let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
             let outcome = try await service.restore()
 
             // The restore CALL still returns the granted ids because the
             // entitlement read is independent of the flag; the flag only
             // gates whether the reconciler accepts the on-device signal.
             if case .restored = outcome {
-                // expected — but reconciler level stays .free
+                // expected — but reconciler level stays .unsubscribed
             }
-            #expect(reconciler.level == .free,
+            #expect(reconciler.level == .unsubscribed,
                     "StoreKitIAPFlag OFF — setOnDevice must no-op")
         }
     }
@@ -263,10 +263,10 @@ struct RestoreServiceTests {
             _ = try await self.session.buyProduct(identifier: self.monthlyId)
 
             let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
+            let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
             await service.refreshOnDeviceEntitlementAtLaunch()
 
-            #expect(reconciler.level == .pro)
+            #expect(reconciler.level == .subscribed)
         }
     }
 
@@ -280,10 +280,10 @@ struct RestoreServiceTests {
             _ = try await self.session.buyProduct(identifier: self.monthlyId)
 
             let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
+            let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
             await service.refreshOnDeviceEntitlementAtLaunch()
 
-            #expect(reconciler.level == .free,
+            #expect(reconciler.level == .unsubscribed,
                     "StoreKitIAPFlag OFF — setOnDevice must no-op")
         }
     }
@@ -291,16 +291,22 @@ struct RestoreServiceTests {
     @Test
     func testRefreshOnDeviceEntitlementAtLaunch_noEntitlements_doesNotFlip() async throws {
         // Daemon-independent: a fresh SKTestSession with cleared transactions
-        // has no entitlements, so the launch reconciler must leave .free intact.
+        // has no entitlements, so the launch reconciler must leave .unsubscribed intact.
         let previousFlag = StoreKitIAPFlag.isEnabled
         StoreKitIAPFlag.setEnabled(true)
         defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
         let reconciler = makeReconciler()
-        let service = RestoreService(reconciler: reconciler)
+        let service = RestoreService(reconciler: reconciler, entitlementSyncClient: RestoreFixtureSyncClient { _ in .init(verified: true) })
         await service.refreshOnDeviceEntitlementAtLaunch()
 
-        #expect(reconciler.level == .free)
+        #expect(reconciler.level == .unsubscribed)
     }
 
+}
+
+private struct RestoreFixtureSyncClient: EntitlementSyncing {
+    let operation: @Sendable (String) async throws -> EntitlementSyncResult
+    init(_ operation: @escaping @Sendable (String) async throws -> EntitlementSyncResult) { self.operation = operation }
+    func sync(transactionJWS: String) async throws -> EntitlementSyncResult { try await operation(transactionJWS) }
 }

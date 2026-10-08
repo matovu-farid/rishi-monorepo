@@ -18,7 +18,7 @@ struct AppRouterTests {
 
     @Test("showLibraryRoot clears the navigation path")
     func showLibraryRootClearsPath() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.path.append(ReaderRoute.epub(UUID()))
         #expect(!router.path.isEmpty)
 
@@ -28,14 +28,14 @@ struct AppRouterTests {
 
     @Test("showConversations sets path to a single ConversationsRoute")
     func showConversationsPushesRoute() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.showConversations()
         #expect(router.path.count == 1)
     }
 
     @Test("showLibraryRoot after showConversations resets to empty")
     func showLibraryRootAfterConversations() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.showConversations()
         router.showLibraryRoot()
         #expect(router.path.isEmpty)
@@ -43,7 +43,7 @@ struct AppRouterTests {
 
     @Test("reader tour request is account-scoped and one-shot")
     func readerTourRequestIsAccountScopedAndOneShot() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let userID = UUID()
         let otherUserID = UUID()
         let bookID = UUID()
@@ -57,7 +57,7 @@ struct AppRouterTests {
 
     @Test("clearing reader tour request does not affect persisted navigation")
     func clearingReaderTourRequestLeavesNavigationPersistenceUntouched() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let bookID = UUID()
         router.requestReaderTour(for: bookID, userID: UUID())
         router.clearReaderTourRequest()
@@ -72,7 +72,7 @@ struct AppRouterTests {
 
     @Test("Unknown/garbage deep link leaves path empty")
     func unknownDeepLinkNoOp() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.handle(
             url: URL(string: "https://other-domain.com/app/book/x")!,
             bookStore: nil,
@@ -83,7 +83,7 @@ struct AppRouterTests {
 
     @Test("authCallback deep link is a no-op (path stays empty)")
     func authCallbackNoOp() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.handle(
             url: URL(string: "rishi://auth/callback?token=xyz")!,
             bookStore: nil,
@@ -94,7 +94,7 @@ struct AppRouterTests {
 
     @Test("shareRedeem deep link is queued without changing navigation")
     func shareRedeemNoOp() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.handle(
             url: URL(string: "rishi://sharing/join?token=abc")!,
             bookStore: nil,
@@ -132,7 +132,7 @@ struct AppRouterTests {
             fileURL: "test.epub"
         )
         let store = InMemoryBookStore(initial: [book])
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         
         router.path.append(ReaderRoute.epub(UUID()))
         #expect(router.path.count == 1)
@@ -172,7 +172,7 @@ struct AppRouterTests {
             title: "Test Conversation"
         )
         let store = InMemoryConversationStore(initial: [convo])
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
 
         var resolvedConvo: Conversation?
         router.onConversationResolved = { c in resolvedConvo = c }
@@ -200,7 +200,7 @@ struct AppRouterTests {
 
     @Test("openBook with nil bookStore is a no-op")
     func openBookNilStorNoOp() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let url = URL(string: "rishi://book/\(UUID().uuidString)")!
         router.handle(url: url, bookStore: nil, conversationStore: nil)
         #expect(router.path.isEmpty)
@@ -210,7 +210,7 @@ struct AppRouterTests {
 
     @Test("persistCells returns non-empty tabRaw (schema continuity)")
     func persistCellsTabRawNonEmpty() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let cells = router.persistCells()
         
         #expect(!cells.tabRaw.isEmpty)
@@ -224,7 +224,7 @@ struct AppRouterTests {
 
     @Test("persistCells returns empty openBookIdRaw when path is empty")
     func persistCellsOpenBookIdRawEmpty() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         router.showLibraryRoot()
         let cells = router.persistCells()
         
@@ -235,7 +235,7 @@ struct AppRouterTests {
 
     @Test("persistCells round-trips a pushed reader route back through decodeFromStorage with matching UUID")
     func persistCellsRoundTripsPath() {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let id = UUID()
         router.path.append(ReaderRoute.epub(id))
 
@@ -261,14 +261,14 @@ struct AppRouterTests {
 
     @Test("applyRestored with empty cells leaves path empty")
     func applyRestoredEmptyCells() async {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         await router.applyRestored(tabRaw: "", openBookIdRaw: "", bookStore: nil)
         #expect(router.path.isEmpty)
     }
 
     @Test("applyRestored ignores a stored full NavigationPath and starts at the library")
     func applyRestoredIgnoresFullPath() async {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         
         var src = NavigationPath()
         src.append(ReaderRoute.epub(UUID()))
@@ -281,7 +281,7 @@ struct AppRouterTests {
 
     @Test("applyRestored ignores a stored Legacy A reader route and starts at the library")
     func applyRestoredIgnoresLegacyA() async {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         let rawRoute = ReaderRoute.encodeForStorage(.pdf(UUID()))
         let tabRaw = RishiSceneState(selectedTab: .library, openBookId: nil).encodeForStorage()
         await router.applyRestored(tabRaw: tabRaw, openBookIdRaw: rawRoute, bookStore: nil)
@@ -299,7 +299,7 @@ struct AppRouterTests {
             fileURL: "legacy.pdf"
         )
         let store = InMemoryBookStore(initial: [book])
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
 
         var resolvedBook: Book?
         router.onBookResolved = { b in resolvedBook = b }
@@ -318,7 +318,7 @@ struct AppRouterTests {
 
     @Test("applyRestored preserves a reader route already pushed by a deep link")
     func applyRestoredPreservesDeepLinkRoute() async {
-        let router = AppRouter()
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
         
         
         router.path.append(ReaderRoute.epub(UUID()))

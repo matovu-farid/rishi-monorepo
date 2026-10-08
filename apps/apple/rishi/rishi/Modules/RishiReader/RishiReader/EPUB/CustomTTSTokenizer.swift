@@ -99,7 +99,8 @@ public enum CustomTTSTokenizer {
     /// Returns `nil` when the selection cannot be located in the element.
     static func trimming(
         _ content: ContentElement,
-        before selection: Locator.Text
+        before selection: Locator.Text,
+        requireContext: Bool = false
     ) -> ContentElement? {
         guard let textContent = content as? TextContentElement,
               let highlight = selection.highlight,
@@ -109,10 +110,33 @@ public enum CustomTTSTokenizer {
         else { return nil }
 
         let selectionRange: Range<String.Index>?
-        if let before = selection.before,
-           let contextualRange = fullText.range(of: before + highlight)
-        {
-            selectionRange = contextualRange
+        if let before = selection.before, !before.isEmpty {
+            if let contextualRange = fullText.range(of: before + highlight) {
+                let selectedStart = fullText.index(contextualRange.lowerBound, offsetBy: before.count)
+                selectionRange = selectedStart..<contextualRange.upperBound
+            } else {
+                // Readium's preceding context can span a <br> boundary while
+                // each yielded text element contains only the next chunk.
+                let prefix = textContent.locator.text.before ?? ""
+                let contextualText = prefix + fullText
+                let contentStart = contextualText.index(contextualText.startIndex, offsetBy: prefix.count)
+                var searchStart = contextualText.startIndex
+                var matchedStart: String.Index?
+                while let range = contextualText.range(of: before + highlight, range: searchStart..<contextualText.endIndex) {
+                    let selectedStart = contextualText.index(range.lowerBound, offsetBy: before.count)
+                    if selectedStart >= contentStart {
+                        let offset = contextualText.distance(from: contentStart, to: selectedStart)
+                        matchedStart = fullText.index(fullText.startIndex, offsetBy: offset)
+                        break
+                    }
+                    searchStart = range.upperBound
+                }
+                if let matchedStart {
+                    selectionRange = matchedStart..<fullText.endIndex
+                } else {
+                    selectionRange = requireContext ? nil : fullText.range(of: highlight)
+                }
+            }
         } else {
             selectionRange = fullText.range(of: highlight)
         }

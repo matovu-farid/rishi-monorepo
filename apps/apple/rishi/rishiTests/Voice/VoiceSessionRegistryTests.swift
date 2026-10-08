@@ -32,6 +32,8 @@ struct VoiceSessionRegistryTests {
         init(id: String? = "rishi-test") { self.id = id }
 
         var rishiSessionId: String? { get async { id } }
+        var serverCreationReceipt: VoiceSessionCreationReceipt? { get async { nil } }
+        var credentialLease: CredentialLease? { get async { nil } }
 
         func parkForBackground() async { parkCount += 1 }
         func resumeFromBackground() async { resumeCount += 1 }
@@ -80,6 +82,8 @@ struct VoiceSessionRegistryTests {
         init(gate: EndGate) { self.gate = gate }
 
         var rishiSessionId: String? { get async { id } }
+        var serverCreationReceipt: VoiceSessionCreationReceipt? { get async { nil } }
+        var credentialLease: CredentialLease? { get async { nil } }
         func parkForBackground() async {}
         func resumeFromBackground() async {}
 
@@ -158,8 +162,8 @@ struct VoiceSessionRegistryTests {
         await registry.register(session)
         await registry.park()
         await registry.close()
-        #expect(session.endCount == 1)
         await registry.waitForServerEnd()
+        #expect(session.endCount == 1)
         #expect(registry.state == .ended)
     }
 

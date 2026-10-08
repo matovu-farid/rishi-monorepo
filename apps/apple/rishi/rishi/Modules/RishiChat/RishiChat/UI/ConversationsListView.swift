@@ -21,6 +21,13 @@ public struct ConversationsListView: View {
     private let onSelect: (Conversation) -> Void
 
     @State private var pendingDelete: Conversation? = nil
+    @State private var failedDelete: Conversation?
+
+    private struct IndexTaskID: Hashable {
+        let userID: UserID
+        let revision: UInt64
+        let isSearching: Bool
+    }
 
     public init(
         viewModel: ConversationsListViewModel,
@@ -33,28 +40,52 @@ public struct ConversationsListView: View {
     }
 
     public var body: some View {
-        Group {
-            if viewModel.conversations.isEmpty && viewModel.searchQuery.isEmpty {
+        VStack(spacing: 0) {
+            if viewModel.isLoading { ProgressView("Loading conversations…") }
+            if let error = viewModel.loadError {
+                VStack {
+                    Text("Could not load conversations: \(error.localizedDescription)")
+                    Button("Reload conversations") { Task { await viewModel.load(userId: userId) } }
+                }
+                .padding(RishiSpacing.s)
+            }
+            if let error = viewModel.deleteError {
+                VStack {
+                    Text("Could not delete conversation: \(error.localizedDescription)")
+                    if let failedDelete { Button("Retry deletion") { delete(failedDelete) } }
+                }
+                .padding(RishiSpacing.s)
+            }
+            if viewModel.hasSearchQuery {
+                switch viewModel.searchIndexState {
+                case .idle, .indexing:
+                    ProgressView("Searching messages…")
+                case .partial(let error):
+                    VStack {
+                        Text("Search is incomplete: \(error.localizedDescription)")
+                        Button("Retry search") { viewModel.retrySearchIndex() }
+                    }
+                    .padding(RishiSpacing.s)
+                case .ready:
+                    if viewModel.filteredConversations.isEmpty { Text("No matching conversations.") }
+                }
+            }
+            if viewModel.conversations.isEmpty && !viewModel.hasSearchQuery
+                && !viewModel.isLoading && viewModel.loadError == nil {
                 ConversationsEmptyState()
             } else {
                 List {
                     ForEach(viewModel.filteredConversations) { convo in
-                        Button {
-                            onSelect(convo)
-                        } label: {
-                            ConversationRow(conversation: convo)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("conversations.row.\(convo.id.uuidString)")
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                pendingDelete = convo
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                        Button { onSelect(convo) } label: { ConversationRow(conversation: convo) }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("conversations.row.\(convo.id.uuidString)")
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) { pendingDelete = convo } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .accessibilityIdentifier("conversations.row.delete")
+                                .accessibilityLabel(A11yLabel.conversationDelete)
                             }
-                            .accessibilityIdentifier("conversations.row.delete")
-                            .accessibilityLabel(A11yLabel.conversationDelete)
-                        }
                     }
                 }
                 .listStyle(.plain)
@@ -63,9 +94,12 @@ public struct ConversationsListView: View {
         }
         .searchable(text: $viewModel.searchQuery, prompt: "Search conversations")
         .navigationTitle("Conversations")
-        .task {
-            await viewModel.load(userId: userId)
+        .task(id: userId) { await viewModel.load(userId: userId) }
+        .task(id: IndexTaskID(userID: userId, revision: viewModel.indexRequestRevision,
+                              isSearching: viewModel.hasSearchQuery)) {
+            await viewModel.ensureSearchIndex(userId: userId, requestRevision: viewModel.indexRequestRevision)
         }
+        .onChange(of: userId) { _, _ in pendingDelete = nil; failedDelete = nil }
         .confirmationDialog(
             "Delete this conversation?",
             isPresented: Binding(
@@ -74,21 +108,25 @@ public struct ConversationsListView: View {
             ),
             presenting: pendingDelete
         ) { convo in
-            Button("Delete", role: .destructive) {
-                // KEEP: delete is a viewModel method that hops onto an actor;
-                // outer Task chains the await. Final @State assignment runs on
-                // the inherited MainActor context.
-                Task {
-                    await viewModel.delete(id: convo.id)
-                    pendingDelete = nil
-                }
-            }
-            .accessibilityIdentifier("conversations.delete.confirm")
+            Button("Delete", role: .destructive) { delete(convo) }
+                .accessibilityIdentifier("conversations.delete.confirm")
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { _ in
             Text("Messages will be removed from this device and from sync.")
         }
     }
+
+    private func delete(_ conversation: Conversation) {
+        Task {
+            if await viewModel.delete(id: conversation.id) {
+                if pendingDelete?.id == conversation.id { pendingDelete = nil }
+                if failedDelete?.id == conversation.id { failedDelete = nil }
+            } else {
+                failedDelete = conversation
+            }
+        }
+    }
+
 }
 
 // MARK: - Previews

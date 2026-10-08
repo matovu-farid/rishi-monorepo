@@ -14,6 +14,14 @@ private enum RemotePlaybackCommandResult: Sendable {
     case failure(RemotePlaybackCommandError)
 }
 
+/// Revoked synchronously by reader navigation, including while the owner queue
+/// is draining a previous controller. Every startup suspension checks it.
+@MainActor
+final class ReadAloudStartAdmission {
+    private(set) var isValid = true
+    func revoke() { isValid = false }
+}
+
 @MainActor
 protocol ReadAloudPlaybackOwnering: AnyObject {
     func install(controller: ReadAloudController, host: UUID) async
@@ -63,6 +71,10 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
     private var startGeneration: UInt64 = 0
     private(set) var generation: UInt64 = 0
     private let lifecycleQueue = PlaybackLifecycleQueue()
+    private var pendingStarts: [UUID: ReadAloudStartAdmission] = [:]
+    #if DEBUG
+    var startReaderForTests: (@MainActor (ReadAloudController, ReaderViewModel, Locator?, ReadAloudStartAdmission) async -> Void)?
+    #endif
     private var remotePlaybackSession: RemotePlaybackSessionCapability?
     private var sharedFollowerHost: UUID?
     /// Unlike activeHost, this survives a scene release while its audio is
@@ -177,23 +189,34 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         from startLocator: Locator? = nil
     ) async -> (started: Bool, generation: UInt64?) {
         remotePlaybackSession?.revoke()
-        return await lifecycleQueue.enqueue { [weak self] in
-            guard let self else { return (false, nil) }
+        pendingStarts[host]?.revoke()
+        let admission = ReadAloudStartAdmission()
+        pendingStarts[host] = admission
+        let result: (started: Bool, generation: UInt64?) = await lifecycleQueue.enqueue { [weak self] in
+            guard let self, admission.isValid else { return (false, nil) }
             let started = await self.startInternal(
                 controller: controller,
                 reader: reader,
                 host: host,
-                from: startLocator
+                from: startLocator,
+                admission: admission
             )
             return (started, started ? self.generation : nil)
         }
+        if pendingStarts[host] === admission { pendingStarts.removeValue(forKey: host) }
+        return result
+    }
+
+    func cancelPendingStarts(host: UUID) {
+        pendingStarts.removeValue(forKey: host)?.revoke()
     }
 
     private func startInternal(
         controller: ReadAloudController,
         reader: ReaderViewModel,
         host: UUID,
-        from startLocator: Locator? = nil
+        from startLocator: Locator? = nil,
+        admission: ReadAloudStartAdmission
     ) async -> Bool {
         let previousController = activeController
         let previousReader = activeReader
@@ -202,6 +225,11 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         let previousBookTitle = watchBookTitle
         startGeneration &+= 1
         let requestGeneration = startGeneration
+
+        // Delegate failure cleanup runs outside this queue. Invalidate and
+        // drain it before the candidate can claim the shared engine/audio mode.
+        await previousController?.stop()
+        guard requestGeneration == startGeneration, admission.isValid else { return false }
 
         activeController = controller
         activeReader = reader
@@ -216,10 +244,19 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             accountGeneration: 0,
             playbackGeneration: generation
         )
-        if let startLocator {
-            await controller.startReader(vm: reader, from: startLocator)
+        #if DEBUG
+        if let startReaderForTests {
+            await startReaderForTests(controller, reader, startLocator, admission)
         } else {
-            await controller.startReader(vm: reader)
+            await controller.startReader(vm: reader, from: startLocator, admission: admission)
+        }
+        #else
+        await controller.startReader(vm: reader, from: startLocator, admission: admission)
+        #endif
+        if !admission.isValid, activeController === controller {
+            await stopAndClear()
+            generation &+= 1
+            return false
         }
 
         guard requestGeneration == startGeneration,
@@ -234,6 +271,11 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             controller.dispose()
             guard requestGeneration == startGeneration,
                   activeController === controller else { return false }
+            guard admission.isValid else {
+                await stopAndClear()
+                generation &+= 1
+                return false
+            }
             activeController = previousController
             activeReader = previousReader
             observeSourceInvalidation(for: previousReader)
@@ -249,7 +291,11 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
                 )
             }
             if let previousController, let previousReader {
-                await previousController.startReader(vm: previousReader)
+                await previousController.startReader(vm: previousReader, from: nil, admission: admission)
+                if !admission.isValid {
+                    await stopAndClear()
+                    generation &+= 1
+                }
             }
             return false
         }
@@ -295,13 +341,28 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
 
     /// Atomically checks ownership inside the lifecycle queue. A stale shared
     /// reader start must not stop playback installed by a newer generation.
-    func stop(host: UUID, ifGeneration expectedGeneration: UInt64) async {
+    @discardableResult
+    func stop(host: UUID, ifGeneration expectedGeneration: UInt64) async -> UInt64? {
         await lifecycleQueue.enqueue { [weak self] in
             guard let self,
                   self.activeHost == host,
-                  self.generation == expectedGeneration else { return }
+                  self.generation == expectedGeneration else { return nil }
             await self.stopAndClear()
             self.generation &+= 1
+            return self.generation
+        }
+    }
+
+    /// Keep the final shared-reader volume/follower cleanup in the same owner
+    /// queue as replacement installation, including its awaited engine call.
+    func resetSharedSessionAfterStop(host: UUID, generation expectedGeneration: UInt64) async {
+        await lifecycleQueue.enqueue { [weak self] in
+            guard let self,
+                  self.generation == expectedGeneration,
+                  self.activeHost == nil else { return }
+            await self.ttsEngine.setVolume(1)
+            guard self.generation == expectedGeneration else { return }
+            self.setSharedSessionFollower(false, host: host)
         }
     }
 
@@ -310,6 +371,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
     }
 
     func stopForAccountChange() async {
+        for admission in pendingStarts.values { admission.revoke() }
+        pendingStarts.removeAll()
         remotePlaybackSession?.revoke()
         await lifecycleQueue.enqueue { [weak self] in
             guard let self else { return }

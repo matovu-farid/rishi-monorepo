@@ -71,6 +71,10 @@ public struct ReaderView: UIViewControllerRepresentable {
     /// coordinator after the SwiftUI representable has installed it.
     /// Mirrors the `pdfViewRef` pattern from Phase 5.
     public let coordinatorRef: ReaderCoordinatorRef
+    public let sharedNavigationRequest: SharedReaderNavigationRequest?
+    public let sharedReadingSessionID: String?
+    public let isSharedFollower: Bool
+    public let onSharedNavigationResult: ((SharedReaderNavigationResult) -> Void)?
 
     public init(
         viewModel: ReaderViewModel,
@@ -84,7 +88,11 @@ public struct ReaderView: UIViewControllerRepresentable {
         onEscape: @escaping () -> Bool = { false },
         onFirstContentReady: @escaping @MainActor () async -> Void = {},
         onTap: @escaping (CGPoint) -> Void = { _ in },
-        coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
+        coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef(),
+        sharedNavigationRequest: SharedReaderNavigationRequest? = nil,
+        sharedReadingSessionID: String? = nil,
+        isSharedFollower: Bool = false,
+        onSharedNavigationResult: ((SharedReaderNavigationResult) -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.pageTheme = pageTheme
@@ -98,6 +106,10 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.onFirstContentReady = onFirstContentReady
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
+        self.sharedNavigationRequest = sharedNavigationRequest
+        self.sharedReadingSessionID = sharedReadingSessionID
+        self.isSharedFollower = isSharedFollower
+        self.onSharedNavigationResult = onSharedNavigationResult
     }
 
     public func makeCoordinator() -> ReaderNavigatorCoordinator {
@@ -126,7 +138,9 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         installContainerTapRecognizer(on: container.view, coordinator: context.coordinator)
+        prepareSharedNavigationUpdate(coordinator: context.coordinator)
         attachNavigatorIfReady(into: container, coordinator: context.coordinator)
+        finishSharedNavigationUpdate(coordinator: context.coordinator)
         return container
     }
 
@@ -143,7 +157,9 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
+        prepareSharedNavigationUpdate(coordinator: context.coordinator)
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
+        finishSharedNavigationUpdate(coordinator: context.coordinator)
     }
 
     public static func dismantleUIViewController(
@@ -151,6 +167,23 @@ public struct ReaderView: UIViewControllerRepresentable {
         coordinator: ReaderNavigatorCoordinator
     ) {
         coordinator.cancelPendingFirstContentCallback()
+        coordinator.retireSharedNavigation()
+    }
+
+    private func prepareSharedNavigationUpdate(coordinator: ReaderNavigatorCoordinator) {
+        if !coordinatorRef.sharedNavigationIsActive {
+            coordinator.setSharedNavigationActive(false)
+        }
+        coordinator.sharedNavigationNavigatorWillUpdate()
+    }
+
+    private func finishSharedNavigationUpdate(coordinator: ReaderNavigatorCoordinator) {
+        coordinator.updateSharedNavigation(
+            request: sharedNavigationRequest, sessionID: sharedReadingSessionID,
+            isFollower: isSharedFollower, onResult: onSharedNavigationResult)
+        coordinator.setSharedNavigationActive(coordinatorRef.sharedNavigationIsActive)
+        // Also runs when attachment was already complete and returned early.
+        coordinator.sharedNavigationNavigatorDidBecomeReady()
     }
 
     /// Installs a single-tap `UITapGestureRecognizer` on the container
@@ -257,6 +290,12 @@ public struct ReaderView: UIViewControllerRepresentable {
 @MainActor
 public final class ReaderCoordinatorRef {
     public weak var coordinator: ReaderNavigatorCoordinator?
+    public private(set) var sharedNavigationIsActive = false
     public init() {}
+
+    func setSharedNavigationActive(_ active: Bool) {
+        sharedNavigationIsActive = active
+        coordinator?.setSharedNavigationActive(active)
+    }
 }
 #endif

@@ -13,8 +13,8 @@ final class CatalystReaderSubscriptionPresentationState {
     private(set) var pendingConfirmation = false
     var showConfirmation = false
 
-    func handlePaywallRequest(_ feature: String) {
-        _ = feature
+    func handlePaywallRequest(_ request: PaywallRequest, serverPaidActive: Bool) {
+        guard request.shouldPresent(serverPaidActive: serverPaidActive) else { return }
         isPresented = true
     }
 
@@ -64,13 +64,21 @@ struct CatalystReaderWindow: View {
         Group {
             if let services = appDependencies?.services,
                let user = signedInUser,
-               user.id == input.id.userID {
+               user.id == input.id.userID,
+               let appDependencies,
+               let snapshot = try? appDependencies.credentialAuthority.snapshot(),
+               DerivedUserID.from(snapshot.lease.rawUserID) == user.id,
+               let identity = appDependencies.activeAccountIdentity,
+               identity.userID == user.id {
                 NavigationStack {
                     let sharedContext = coordinator.sharedContext(for: input)
                     ReaderDestinationView(
                         route: input.route,
                         hint: nil,
-                        onRequestPaywall: subscriptionState.handlePaywallRequest,
+                        onRequestPaywall: { feature in
+                            subscriptionState.handlePaywallRequest(PaywallRequest(feature: feature),
+                                serverPaidActive: services.billing.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive == true)
+                        },
                         pdfViewMode: $presentation.requestedMode,
                         readerWindowCloseHandle: closeHandle,
                         sharedReadingContext: sharedContext
@@ -79,9 +87,9 @@ struct CatalystReaderWindow: View {
                 }
                 .rishiSubscriptionPresentation(isPresented: $subscriptions.isPresented, onDismiss: {
                     Task { @MainActor in
-                        await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-                            reason: .foreground
-                        )
+                        _ = await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
+                            credentialContext: .normal(snapshot.lease))
+                        guard appDependencies.credentialAuthority.isCurrent(snapshot.lease) else { return }
                         subscriptionState.presentConfirmationAfterDismissal()
                     }
                 }) {
@@ -89,15 +97,16 @@ struct CatalystReaderWindow: View {
                         dependencies: SubscriptionDependencies(
                             groupID: services.billing.groupID,
                             entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                            restoreService: services.billing.restoreService
-                        ),
+                            restoreService: services.billing.restoreService,
+                            customerEntitlements: services.billing.customerEntitlements, store: services.billing.store
+                        ), credentialAuthority: appDependencies.credentialAuthority, credentialSnapshot: snapshot,
                         onPurchaseProcessed: {
                             subscriptionState.markPurchaseProcessed()
                         }
                     )
                     .environment(services.billing.entitlementSnapshotStore)
                     .environment(services.billing.manageSubscriptionPresenter)
-                    .environment(Store.shared)
+                    .environment(services.billing.store)
                 }
                 .alert("Subscription active", isPresented: $subscriptions.showConfirmation) {
                     Button("OK", role: .cancel) {}
@@ -132,6 +141,11 @@ struct CatalystReaderWindow: View {
                     services: services,
                     user: user,
                     onSignedOut: {},
+                    deleteAccount: {
+                        let deletion = try appDependencies.accountDeletionCoordinator(snapshot: snapshot,
+                            accountIdentity: identity, publishSignedOut: { currentUser.signedOutAfterCredentialClear() })
+                        try await deletion.run()
+                    },
                     account: nil,
                     pdfViewMode: $presentation.requestedMode
                 )

@@ -37,6 +37,8 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public let viewModel: ReaderViewModel
     public private(set) var navigator: (UIViewController & VisualNavigator)?
 
+    var sharedNavigation = SharedNavigationState()
+
     /// True while a read-aloud session has an active spoken paragraph. It keeps
     /// the active decoration and follow logic in sync with the session. User
     /// navigation is detected separately from this state.
@@ -52,6 +54,9 @@ public final class ReaderNavigatorCoordinator: NSObject {
     private var explicitForward: ExplicitPageForward?
     private var lateExplicitForwardCallback: LateExplicitForwardCallback?
     private var hasReceivedInitialLocation = false
+    private var reflowBaseline: Locator?
+    private var lastEPUBViewportSize: CGSize?
+    private var appliedEPUBPreferences: (ReaderTypography, ReaderTheme, EPUBSpreadMode)?
 
     private struct PDFProgrammaticFollow {
         let requestID: UUID
@@ -634,6 +639,10 @@ public final class ReaderNavigatorCoordinator: NSObject {
     ) {
         guard let nav = navigator else { return }
         if let epub = nav as? EPUBNavigatorViewController {
+            if let previous = appliedEPUBPreferences,
+               previous.0 == typography, previous.1 == theme, previous.2 == spread { return }
+            appliedEPUBPreferences = (typography, theme, spread)
+            reflowBaseline = viewModel.visibleNavigatorLocator ?? viewModel.latestLocator
             EPUBPreferencesBridge.apply(
                 typography: typography,
                 theme: theme,
@@ -944,6 +953,21 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
             && viewModel.publication?.manifest.conforms(to: .pdf) == true
 
         var isProgrammatic = false
+        if let epub = navigator as? EPUBNavigatorViewController {
+            let size = epub.view.bounds.size
+            if let previous = lastEPUBViewportSize, previous != size {
+                reflowBaseline = viewModel.visibleNavigatorLocator ?? viewModel.latestLocator
+            }
+            lastEPUBViewportSize = size
+        }
+        let reflow = reflowBaseline.map { baseline in
+            guard baseline.href.isEquivalentTo(locator.href) else { return false }
+            if let position = baseline.locations.position { return position == locator.locations.position }
+            if let progression = baseline.locations.totalProgression { return progression == locator.locations.totalProgression }
+            if let progression = baseline.locations.progression { return progression == locator.locations.progression }
+            return baseline == locator
+        } ?? false
+        reflowBaseline = nil
         let tokenBefore = programmaticNavigationCallbacks
         if isPDFCallback {
             if let late = lateExplicitForwardCallback {
@@ -981,8 +1005,8 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
                 explicitForward = nil
             }
         } else {
-            isProgrammatic = programmaticNavigationCallbacks > 0
-            if isProgrammatic {
+            isProgrammatic = reflow || programmaticNavigationCallbacks > 0
+            if programmaticNavigationCallbacks > 0 {
                 programmaticNavigationCallbacks -= 1
             }
         }

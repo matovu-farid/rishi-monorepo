@@ -155,12 +155,12 @@ public struct ScopedChapterIndexPersistence: ChapterIndexPersistence, Sendable {
 }
 
 public struct ScopedReaderSettingsStore: ReaderSettingsStore, Sendable {
-    private let base: UserDefaultsReaderSettingsStore
+    private let base: any SynchronousReaderSettingsStore
     private let mutations: BookScopedMutationStore
     private let permit: BookReadingPermit
     private let source: BookSourceAccessPermit
     private let effects: any BookSourceEffectAdmitting
-    public init(base: UserDefaultsReaderSettingsStore, mutations: BookScopedMutationStore, permit: BookReadingPermit, originatingSource: BookSourceAccessPermit, sourceEffects: any BookSourceEffectAdmitting) {
+    public init(base: any SynchronousReaderSettingsStore, mutations: BookScopedMutationStore, permit: BookReadingPermit, originatingSource: BookSourceAccessPermit, sourceEffects: any BookSourceEffectAdmitting) {
         self.base = base; self.mutations = mutations; self.permit = permit; source = originatingSource; effects = sourceEffects
     }
     public func theme(for bookId: BookID) async -> ReaderTheme { bookId == permit.bookID ? await base.theme(for: bookId) : .default }

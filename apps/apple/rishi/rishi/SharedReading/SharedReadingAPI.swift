@@ -67,11 +67,24 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
     private let baseURL: URL
     private let session: URLSession
-    private let tokenProvider: any TokenProvider
-    private let refreshAuthentication: (@Sendable () async throws -> Void)?
+    private enum Authentication: Sendable {
+        case legacy(any TokenProvider, (@Sendable () async throws -> Void)?)
+        case scoped(SessionCredentialAuthority, WorkerClient, CredentialRequestContext)
+        case admittedCleanup(String)
+    }
+    private let authentication: Authentication
+    /// The rejected socket bearer may predate a same-lease HTTP refresh.
+    private var socketRejectionContext: CredentialRejectionContext?
     private let requestTimeout: TimeInterval
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+
+    nonisolated func isBound(to authority: SessionCredentialAuthority,
+                            context: CredentialRequestContext) -> Bool {
+        guard case .normal(let expectedLease) = context,
+              case .scoped(let owner, _, .normal(let capturedLease)) = authentication else { return false }
+        return owner === authority && capturedLease == expectedLease
+    }
 
     init(
         baseURL: URL,
@@ -82,11 +95,59 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     ) {
         self.baseURL = baseURL
         self.session = session
-        self.tokenProvider = tokenProvider
-        self.refreshAuthentication = refreshAuthentication
+        self.authentication = .legacy(tokenProvider, refreshAuthentication)
         self.requestTimeout = requestTimeout
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
+    }
+
+    /// Required captured normal context; construction never reads/migrates storage.
+    init(baseURL: URL, session: URLSession, credentialAuthority: SessionCredentialAuthority,
+         workerClient: WorkerClient, credentialContext: CredentialRequestContext,
+         requestTimeout: TimeInterval = 30) throws {
+        guard case .normal = credentialContext,
+              workerClient.usesCredentialAuthority(credentialAuthority) else { throw CredentialAuthenticationFailure.accountChanged }
+        self.baseURL = baseURL
+        self.session = session
+        self.authentication = .scoped(credentialAuthority, workerClient, credentialContext)
+        self.requestTimeout = requestTimeout
+        self.decoder = JSONDecoder()
+        self.encoder = JSONEncoder()
+    }
+
+    private init(baseURL: URL, session: URLSession, admittedCleanupBearer: String, requestTimeout: TimeInterval) {
+        self.baseURL = baseURL
+        self.session = session
+        self.authentication = .admittedCleanup(admittedCleanupBearer)
+        self.requestTimeout = requestTimeout
+        self.decoder = JSONDecoder()
+        self.encoder = JSONEncoder()
+    }
+
+    private func currentSnapshot() throws -> CredentialSnapshot? {
+        guard case .scoped(let authority, _, let context) = authentication else { return nil }
+        return try authority.snapshot(for: context)
+    }
+
+    private var canRefresh: Bool {
+        switch authentication {
+        case .legacy(_, let refresh): return refresh != nil
+        case .scoped: return true
+        case .admittedCleanup: return false
+        }
+    }
+
+    private func refreshAuthentication(failed: CredentialRejectionContext?) async throws {
+        switch authentication {
+        case .legacy(_, let refresh):
+            guard let refresh else { throw SharedReadingError.from(code: .authRequired) }
+            try await refresh()
+        case .scoped(_, let worker, let context):
+            guard let failed else { throw CredentialAuthenticationFailure.reauthenticationRequired }
+            _ = try await worker.refreshAuthentication(credentialContext: context, failed: failed)
+        case .admittedCleanup:
+            throw SharedReadingError.from(code: .authRequired)
+        }
     }
 
     func create(bookId: String, idempotencyKey: String) async throws -> SharedReadingCreateResponse {
@@ -102,7 +163,8 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     func redeem(token: String) async throws -> SharedReadingRedeemResponse {
-        try await send(path: "\(Self.routePrefix)/redeem", method: "POST", body: ["token": token])
+        if case .scoped = authentication { throw SharedReadingError.from(code: .accountChanged) }
+        return try await send(path: "\(Self.routePrefix)/redeem", method: "POST", body: ["token": token])
     }
 
     /// The cleanup client keeps the *actual* bearer used by this redeem
@@ -116,7 +178,8 @@ actor SharedReadingAPI: SharedReadingAPIClient {
             path: "\(Self.routePrefix)/redeem",
             method: "POST",
             body: ["token": token],
-            didRefreshAuthentication: false
+            didRefreshAuthentication: false,
+            admitsLateCreation: true
         )
         return (response, accountBoundCleanupAPI(bearer: bearer))
     }
@@ -125,7 +188,7 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         SharedReadingAPI(
             baseURL: baseURL,
             session: session,
-            tokenProvider: StaticTokenProvider(bearer),
+            admittedCleanupBearer: bearer,
             requestTimeout: requestTimeout
         )
     }
@@ -135,7 +198,8 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     func rejoin(sessionId: String, contentHash: String) async throws -> SharedReadingAdmission {
-        try await send(path: "\(Self.routePrefix)/\(sessionId)/rejoin", method: "POST", body: ["contentHash": contentHash])
+        if case .scoped = authentication { throw SharedReadingError.from(code: .accountChanged) }
+        return try await send(path: "\(Self.routePrefix)/\(sessionId)/rejoin", method: "POST", body: ["contentHash": contentHash])
     }
 
     func rejoinWithAccountBoundCleanup(sessionId: String, contentHash: String) async throws -> (
@@ -146,7 +210,8 @@ actor SharedReadingAPI: SharedReadingAPIClient {
             path: "\(Self.routePrefix)/\(sessionId)/rejoin",
             method: "POST",
             body: ["contentHash": contentHash],
-            didRefreshAuthentication: false
+            didRefreshAuthentication: false,
+            admitsLateCreation: true
         )
         return (admission, accountBoundCleanupAPI(bearer: bearer))
     }
@@ -196,17 +261,27 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     func bearerToken() async throws -> String {
-        guard let token = await tokenProvider.token() else { throw SharedReadingError.from(code: .authRequired) }
-        return token
+        do {
+            switch authentication {
+            case .legacy(let provider, _):
+                guard let token = await provider.token() else { throw SharedReadingError.from(code: .authRequired) }
+                return token
+            case .scoped:
+                guard let snapshot = try currentSnapshot() else { throw CredentialAuthenticationFailure.reauthenticationRequired }
+                socketRejectionContext = snapshot.rejectionContext
+                return snapshot.session.token
+            case .admittedCleanup(let bearer): return bearer
+            }
+        } catch { throw Self.refreshFailure(from: error) }
     }
 
     func refreshBearerToken() async throws -> String {
-        guard let refreshAuthentication else {
+        guard canRefresh else {
             throw SharedReadingError.from(code: .authRequired)
         }
         do {
             Log.sharedReading(.authenticationRefresh, context: .init(outcome: .started))
-            try await refreshAuthentication()
+            try await refreshAuthentication(failed: socketRejectionContext)
             let token = try await bearerToken()
             Log.sharedReading(.authenticationRefresh, context: .init(outcome: .completed))
             return token
@@ -233,13 +308,18 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         method: String,
         body: Body?,
         didRefreshAuthentication: Bool,
-        requestID: UUID = UUID()
+        requestID: UUID = UUID(),
+        admitsLateCreation: Bool = false
     ) async throws -> (Response, String) {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw SharedReadingError.from(code: .serviceUnavailable) }
         let operation = Self.operation(for: path)
         let started = Date()
         Log.sharedReading(.apiRequest, context: .init(operation: operation, outcome: .started, operationID: requestID))
         var request = URLRequest(url: url)
+        switch authentication {
+        case .legacy: break
+        case .scoped, .admittedCleanup: request.httpShouldHandleCookies = false
+        }
         request.timeoutInterval = requestTimeout
         request.httpMethod = method
         request.setValue("v1", forHTTPHeaderField: "X-Rishi-API-Version")
@@ -247,13 +327,22 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         request.setValue(requestID.uuidString, forHTTPHeaderField: "X-Rishi-Correlation-ID")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let bearer: String
-        if let token = await tokenProvider.token() {
+        let attemptedSnapshot: CredentialSnapshot?
+        do { attemptedSnapshot = try currentSnapshot() }
+        catch { throw Self.refreshFailure(from: error) }
+        let token: String?
+        switch authentication {
+        case .legacy(let provider, _): token = await provider.token()
+        case .scoped: token = attemptedSnapshot?.session.token
+        case .admittedCleanup(let bearer): token = bearer
+        }
+        if let token {
             bearer = token
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         } else {
-            if !didRefreshAuthentication, let refreshAuthentication {
+            if !didRefreshAuthentication, canRefresh {
                 do {
-                    try await refreshAuthentication()
+                    try await refreshAuthentication(failed: attemptedSnapshot?.rejectionContext)
                 } catch {
                     Log.sharedReading(.authenticationRefresh, level: .error, context: .init(operation: operation, outcome: .failed, operationID: requestID, errorCode: Self.diagnosticErrorCode(error)))
                     throw Self.refreshFailure(from: error)
@@ -263,15 +352,22 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                     method: method,
                     body: body,
                     didRefreshAuthentication: true,
-                    requestID: requestID
+                    requestID: requestID,
+                    admitsLateCreation: admitsLateCreation
                 )
             }
             throw SharedReadingError.from(code: .authRequired)
         }
         if let body { request.httpBody = try encoder.encode(body) }
         do {
+            if attemptedSnapshot != nil { try Task.checkCancellation(); _ = try currentSnapshot() }
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw SharedReadingError.from(code: .serviceUnavailable) }
+            // Late admitted membership must reach its fixed-bearer cleanup owner.
+            if !admitsLateCreation || !(200..<300).contains(http.statusCode) {
+                _ = try currentSnapshot()
+                if attemptedSnapshot != nil { try Task.checkCancellation() }
+            }
             let correlationID = Self.safeCorrelationID(http.value(forHTTPHeaderField: "X-Rishi-Correlation-ID"))
             Log.sharedReading(.apiResponse, context: .init(
                 operation: operation,
@@ -281,10 +377,10 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                 statusCode: http.statusCode,
                 durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000)
             ))
-            if http.statusCode == 401, !didRefreshAuthentication, let refreshAuthentication {
+            if http.statusCode == 401, !didRefreshAuthentication, canRefresh {
                 let rejectedRequest = decodeError(data, status: http.statusCode, path: path, response: http)
                 do {
-                    try await refreshAuthentication()
+                    try await refreshAuthentication(failed: attemptedSnapshot?.rejectionContext)
                 } catch {
                     Log.sharedReading(.authenticationRefresh, level: .error, context: .init(operation: operation, outcome: .failed, operationID: requestID, errorCode: Self.diagnosticErrorCode(error)))
                     throw Self.refreshFailure(
@@ -298,7 +394,8 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                     method: method,
                     body: body,
                     didRefreshAuthentication: true,
-                    requestID: requestID
+                    requestID: requestID,
+                    admitsLateCreation: admitsLateCreation
                 )
             }
             guard (200..<300).contains(http.statusCode) else {
@@ -341,6 +438,10 @@ actor SharedReadingAPI: SharedReadingAPIClient {
             }
         } catch let error as SharedReadingError {
             throw error
+        } catch let error as CredentialAuthenticationFailure {
+            throw Self.refreshFailure(from: error)
+        } catch is CancellationError where attemptedSnapshot != nil {
+            throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {
             let timeoutError = SharedReadingError.from(
                 code: .serviceUnavailable,
@@ -474,6 +575,12 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         let failure: SharedReadingError
         if let error = error as? SharedReadingError {
             failure = error
+        } else if let error = error as? CredentialAuthenticationFailure {
+            switch error {
+            case .accountChanged: failure = .from(code: .accountChanged)
+            case .signedOut, .reauthenticationRequired, .definitiveRejection: failure = .from(code: .authRequired)
+            case .unavailable: failure = .from(code: .serviceUnavailable)
+            }
         } else {
             failure = .from(code: .serviceUnavailable)
         }

@@ -44,5 +44,5 @@ public final class TTSPickerCatalogStore {
 
     public var catalog: TTSPickerCatalog = .fallback
 
-    private init() {}
+    public init() {}
 }

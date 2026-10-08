@@ -55,35 +55,46 @@ struct CarPlaySessionCoordinatorTests {
     }
 
     @Test("CarPlay identity synchronization clears a stale account")
-    func identitySynchronizationClearsStaleAccount() async {
-        let dependencies = AppDependencies()
-        await dependencies.replaceUserId(UUID(uuidString: "00000000-0000-0000-0000-000000000023")!)
+    func identitySynchronizationClearsStaleAccount() async throws {
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
+        let session = try installStagingCredentials("00000000-0000-0000-0000-000000000023", authority: authority)
+        try await dependencies.restoreCredentialIdentity(session)
         let generation = dependencies.accountGeneration
 
-        await dependencies.synchronizeCarPlayIdentity(nil)
+        let transaction = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+        let cleanup = try #require(dependencies.retireCredentialAccount(transaction))
+        await cleanup.value
 
         #expect(dependencies.carPlayAccountSnapshot == nil)
         #expect(dependencies.accountGeneration == generation + 1)
     }
 
     @Test("account observers receive sign-in and sign-out transitions")
-    func accountObserversReceiveTransitions() async {
-        let dependencies = AppDependencies()
+    func accountObserversReceiveTransitions() async throws {
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
         var observed: [CarPlayAccountSnapshot?] = []
         let token = dependencies.addCarPlayAccountChangeObserver { snapshot in
             observed.append(snapshot)
         }
         let userID = UUID(uuidString: "00000000-0000-0000-0000-000000000024")!
 
-        await dependencies.replaceUserId(userID)
-        await dependencies.replaceUserId(nil)
+        let installation = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+        _ = try await dependencies.installCredentialSession(Session(token: "fixture", userId: userID.uuidString, email: nil), refreshToken: nil, in: installation)
+        let retirement = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+        let cleanup = try #require(dependencies.retireCredentialAccount(retirement))
+        await cleanup.value
 
         #expect(observed.count == 2)
         #expect(observed[0]?.userID == userID)
         #expect(observed[1] == nil)
 
         dependencies.removeCarPlayAccountChangeObserver(token)
-        await dependencies.replaceUserId(userID)
+        let replacement = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+        _ = try await dependencies.installCredentialSession(Session(token: "replacement", userId: userID.uuidString, email: nil), refreshToken: nil, in: replacement)
         #expect(observed.count == 2)
     }
 

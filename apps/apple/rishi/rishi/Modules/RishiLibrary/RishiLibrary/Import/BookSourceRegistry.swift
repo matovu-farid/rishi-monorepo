@@ -203,7 +203,7 @@ public actor BookSourceRegistry: BookSourceResolving {
         let bookID: BookID
     }
 
-    private let persistence: (any BookImportPersistence)?
+    private let persistence: (any BookReadingSourcePersistence)?
     private let managedURL: @Sendable (Book) -> URL?
     private let currentGeneration: @Sendable () async -> UInt64
     private let currentOwnerID: @Sendable () async -> UserID?
@@ -218,7 +218,7 @@ public actor BookSourceRegistry: BookSourceResolving {
     private nonisolated let synchronousFence = BookSourceRegistryFence()
 
     public init(
-        persistence: (any BookImportPersistence)? = nil,
+        persistence: (any BookReadingSourcePersistence)? = nil,
         currentGeneration: @escaping @Sendable () async -> UInt64,
         currentOwnerID: @escaping @Sendable () async -> UserID? = { nil },
         startSecurityScope: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },

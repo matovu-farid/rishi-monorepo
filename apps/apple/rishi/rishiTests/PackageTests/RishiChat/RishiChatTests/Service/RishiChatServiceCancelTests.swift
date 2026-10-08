@@ -138,7 +138,8 @@ struct RishiChatServiceCancelTests {
         return WorkerClient(
             baseURL: URL(string: "https://api.rishi.test")!,
             session: session,
-            tokenProvider: StaticTokenProvider(token)
+            tokenProvider: StaticTokenProvider(token),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 

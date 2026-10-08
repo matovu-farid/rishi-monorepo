@@ -10,6 +10,17 @@ struct TTSStreamerTests {
         func hasCurrentDataUseConsent() async -> Bool { false }
     }
 
+    @Test("source cancellation remains cancellation for an active consumer")
+    func sourceCancellationIsNotSuccessfulEOF() async {
+        let streamer = TTSStreamer(source: ExplicitlyCancelledSource())
+        var failure: Error?
+        do {
+            for try await _ in await streamer.stream(TTSStreamRequest(text: "cancelled source", voice: "alloy", speed: 1)) {}
+        } catch { failure = error }
+        #expect(!Task.isCancelled)
+        #expect(failure is CancellationError)
+    }
+
     @Test("Denied data-use consent prevents TTS from opening a worker stream")
     func deniedConsentStopsBeforeStreaming() async {
         let client = WorkerClient(
@@ -158,5 +169,11 @@ struct TTSStreamerTests {
 
         let missRequest = TTSStreamRequest(text: "miss", voice: "alloy", speed: 1.0)
         #expect(await hitStreamer.shouldShowLoading(for: missRequest) == true)
+    }
+}
+
+private struct ExplicitlyCancelledSource: TTSChunkSource {
+    func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
     }
 }

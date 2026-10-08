@@ -72,5 +72,33 @@ struct ReaderSettingsStoreTests {
         #expect(await store.theme(for: bookId) == .matchDevice)
     }
 
+    @Test("synchronous capability preserves UUID theme and typography keys")
+    func synchronousWritesPreserveKeys() async throws {
+        let suiteName = "ReaderSettingsSynchronousTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store: any SynchronousReaderSettingsStore = UserDefaultsReaderSettingsStore(
+            defaults: defaults, namespace: "sync.settings"
+        )
+        let bookID = UUID()
+        let typography = ReaderTypography(
+            fontFamily: .serif,
+            fontSize: ReaderFontSize(points: 22),
+            lineHeight: ReaderLineHeight(multiplier: 1.8)
+        )
+        store.writeThemeSynchronously(.sepia, for: bookID)
+        store.writeTypographySynchronously(typography, for: bookID)
+
+        let prefix = "sync.settings.\(bookID.uuidString)"
+        #expect(defaults.string(forKey: "\(prefix).theme") == ReaderTheme.sepia.rawValue)
+        #expect(defaults.string(forKey: "\(prefix).font.family") == ReaderFontFamily.serif.rawValue)
+        #expect(defaults.double(forKey: "\(prefix).font.size") == 22)
+        #expect(defaults.double(forKey: "\(prefix).font.lineHeight") == 1.8)
+        #expect(store.peekPersistedTheme(for: bookID) == .sepia)
+        #expect(await store.typography(for: bookID) == typography)
+        #expect(await store.theme(for: UUID()) == .default)
+        #expect(await store.typography(for: UUID()) == .default)
+    }
+
 
 }

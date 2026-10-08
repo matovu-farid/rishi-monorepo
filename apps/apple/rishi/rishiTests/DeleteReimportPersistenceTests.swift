@@ -130,7 +130,17 @@ private func deleteReimportSyncGraph(_ fixture: ReaderDeletionFixture, client: W
         bookUploader: booksUploader, positionUploader: positionsUploader, highlightUploader: highlightsUploader,
         conversationUploader: conversationsUploader, messageUploader: messagesUploader, bookmarkUploader: bookmarksUploader,
         chapterIndexUploader: chaptersUploader, fetcher: RemoteChangeFetcher(workerClient: client, metadataStore: fixture.metadata),
-        applier: ChangeApplier(bookStore: fixture.books, positionStore: fixture.positions, highlightStore: highlights, bookmarkStore: bookmarks, metadataStore: fixture.metadata),
+        applier: ChangeApplier(
+            bookStore: fixture.books,
+            positionStore: fixture.positions,
+            highlightStore: highlights,
+            bookmarkStore: bookmarks,
+            metadataStore: fixture.metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
+        ),
         conversationsFetcher: ConversationsFetcher(workerClient: client, metadataStore: fixture.metadata), messagesFetcher: MessagesFetcher(workerClient: client, metadataStore: fixture.metadata), conversationStore: conversations, messageStore: messages, currentUserId: { fixture.owner }, bookReadinessPolicy: policy))
     let drainer = OutboundDrainer(dependencies: .init(queue: queue, bookStore: fixture.books, metadataStore: fixture.metadata,
         bookUploader: booksUploader, positionUploader: positionsUploader, highlightUploader: highlightsUploader,
@@ -259,7 +269,7 @@ struct DeleteReimportPersistenceTests {
         freshEffect.release(); freshLease = nil
         let reopened = try RishiDB.makeStore(at: fixture.base.databaseURL)
         let reopenedBooks = SwiftDataBookStore(dbStore: reopened)
-        let reopenedMetadata = try ReaderDeletionFixture.makeMetadata(at: fixture.base.metadataURL)
+        let reopenedMetadata = try await ReaderDeletionFixture.makeMetadata(at: fixture.base.metadataURL)
         #expect(try await reopenedBooks.book(fixture.book.id) == nil)
         #expect(try await reopenedBooks.book(fresh.id) != nil)
         #expect(try await reopenedMetadata.isTombstone(entityId: fixture.book.id, kind: .book))
@@ -335,13 +345,22 @@ struct DeleteReimportPersistenceTests {
         let dirtyAt = try await fixture.base.metadata.dirtyAt(entityId: fixture.book.id, kind: .book)
         let accepted = Date()
         #expect(try await fixture.base.metadata.acknowledgeTombstoneIfUnchanged(entityId: fixture.book.id, kind: .book, expectedDirtyAt: dirtyAt, lastSyncedAt: accepted, remoteEtag: nil))
-        let metadata = try ReaderDeletionFixture.makeMetadata(at: fixture.base.metadataURL)
+        let metadata = try await ReaderDeletionFixture.makeMetadata(at: fixture.base.metadataURL)
         let db = try RishiDB.makeStore(at: fixture.base.databaseURL)
         let books = SwiftDataBookStore(dbStore: db)
         let positions = SwiftDataPositionStore(dbStore: db)
-        let applier = ChangeApplier(bookStore: books, positionStore: positions,
-            highlightStore: SwiftDataHighlightStore(dbStore: db), bookmarkStore: SwiftDataBookmarkStore(dbStore: db),
-            metadataStore: metadata, currentUserId: { fixture.base.owner })
+        let applier = ChangeApplier(
+            bookStore: books,
+            positionStore: positions,
+            highlightStore: SwiftDataHighlightStore(dbStore: db),
+            bookmarkStore: SwiftDataBookmarkStore(dbStore: db),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { fixture.base.owner }
+                return integration
+            }()
+        )
         let payload = try SyncPayloadCodec.encodeBook(fixture.book, position: Position(bookId: fixture.book.id, locator: "epub-v1:replayed", percentComplete: 0.5, updatedAt: accepted))
         let replay = SyncChange(kind: SyncEntityKind.book.rawValue, id: fixture.book.id, payload: payload, updatedAt: accepted.addingTimeInterval(offset), deleted: false)
         let result = await applier.apply([replay], expectedUserId: fixture.base.owner)
@@ -362,7 +381,7 @@ struct DeleteReimportPersistenceTests {
         let fixture = try await ReaderDeletionFixture.make()
         let requests = DeleteReimportRequestProbe()
         DeleteReimportDownloadProtocol.handler = { request in
-            requests.record(request.url?.path ?? "missing-path")
+            requests.record("\(request.httpMethod ?? "missing-method") \(request.url?.path ?? "missing-path")")
             return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
         }
         defer { DeleteReimportDownloadProtocol.reset() }
@@ -390,13 +409,24 @@ struct DeleteReimportPersistenceTests {
         let drained = try await deleteReimportRun { await drainer.drain(limit: 10, expectedUserId: fixture.owner) }
         #expect(drained.errors.isEmpty)
         #expect(drained.booksUploaded == (stage == "pending" ? 1 : 0))
-        #expect(requests.events == (stage == "pending" ? ["/api/sync/push"] : []))
+        // markBookDeleted also schedules an inbound wave. Join its finite
+        // fixture work before inspecting requests or resetting the transport.
+        if stage != "late" { await engine.requestSyncAndWait() }
+        let allowedRequests: Set<String> = [
+            "GET /api/sync/events", "GET /api/sync/changes",
+            "GET /api/sync/conversations", "GET /api/sync/messages",
+            "POST /api/sync/push"
+        ]
+        let expectedPushes = stage == "pending" ? ["POST /api/sync/push"] : []
+        #expect(requests.events.allSatisfy { allowedRequests.contains($0) })
+        #expect(requests.events.filter { $0 == "POST /api/sync/push" } == expectedPushes)
         #expect(await queue.pendingCount() == 0)
         #expect(try await fixture.metadata.isTombstone(entityId: id, kind: .book))
         #expect(try await fixture.metadata.dirtyAt(entityId: id, kind: .book) == nil)
         let repeated = try await deleteReimportRun { await drainer.drain(limit: 10, expectedUserId: fixture.owner) }
         #expect(repeated.errors.isEmpty)
         #expect(repeated.booksUploaded == 0)
+        #expect(requests.events.filter { $0 == "POST /api/sync/push" } == expectedPushes)
         #expect(await engine.markBookDirty(fixture.book.id))
         #expect(await queue.pendingCount() == 1)
         #expect(try await !fixture.metadata.isTombstone(entityId: fixture.book.id, kind: .book))
@@ -443,28 +473,83 @@ struct DeleteReimportPersistenceTests {
         }
         let downloader = BookDownloadCoordinator(workerClient: client, fileStorage: storage, userIdProvider: { fixture.owner.uuidString }, urlSession: session,
             metadataStore: fixture.metadata, isCurrentAccountPermit: current, admitAccountOperation: admission)
-        let applier = ChangeApplier(bookStore: fixture.books, positionStore: fixture.positions,
-            highlightStore: SwiftDataHighlightStore(dbStore: fixture.db), bookmarkStore: SwiftDataBookmarkStore(dbStore: fixture.db), metadataStore: fixture.metadata,
-            currentUserId: { fixture.owner },
-            bookMaterializerWithAuthority: { book, key, metadata, captured in
+        let applier = ChangeApplier(
+            bookStore: fixture.books,
+            positionStore: fixture.positions,
+            highlightStore: SwiftDataHighlightStore(dbStore: fixture.db),
+            bookmarkStore: SwiftDataBookmarkStore(dbStore: fixture.db),
+            metadataStore: fixture.metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { fixture.owner }
+                let fixture_bookMaterializerWithAuthority: (@Sendable (Book, String?, InboundBookFileMetadata?, AccountMutationPermit) async throws -> VerifiedDownloadedBook)? = { book, key, metadata, captured in
                 try await downloader.downloadAndMaterializeVerified(book, r2Key: key, expectedRemoteSHA256: metadata?.sha256, expectedRemoteByteCount: metadata?.byteCount, accountPermit: captured)
-            }, isCurrentAccountPermit: current, admitAccountOperation: admission,
-            prepareBookSourceReplacement: { id, captured in
+            }
+                let fixture_isCurrentAccountPermit: (@Sendable (AccountMutationPermit) async -> Bool)? = current
+                let fixture_admitAccountOperation: (@Sendable (AccountMutationPermit) async -> BookImportOperationLease?)? = admission
+                let fixture_prepareBookSourceReplacement: (@Sendable (BookID, AccountMutationPermit) async throws -> BookSourceReplacementToken)? = { id, captured in
                 try await lifecycle.prepareBookSourceReplacement(ownerID: captured.ownerID, generation: captured.accountGeneration, bookID: id)
-            }, completeBookSourceReplacement: { token in
+            }
+                let fixture_completeBookSourceReplacement: (@Sendable (BookSourceReplacementToken) async throws -> Void)? = { token in
                 guard await current(permit), lifecycle.completeBookSourceReplacement(token) else { throw BookImportPromotionError.retired }
-            }, abortBookSourceReplacement: { token in
+            }
+                let fixture_abortBookSourceReplacement: (@Sendable (BookSourceReplacementToken) async -> Void)? = { token in
                 do {
                     try await fixture.metadata.withLiveBookIdentity(token.bookID) {
                         guard await current(permit) else { throw CancellationError() }
                         lifecycle.abortBookSourceReplacement(token, restoreSource: true)
                     }
                 } catch { lifecycle.abortBookSourceReplacement(token, restoreSource: false) }
-            }, bookFingerprintPersister: { book, fingerprint, generation in
+            }
+                let fixture_bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint, UInt64?) async -> Bool)? = { book, fingerprint, generation in
                 guard let generation else { return false }
                 return await storage.persistVerifiedFingerprint(fingerprint, for: book, expectedGeneration: generation)
-            }, managedFingerprintLookup: { book in try? await fixture.registry.managedSource(for: book)?.fingerprint },
-            bookAccountPermitLookup: { permit })
+            }
+                let fixture_managedFingerprintLookup: (@Sendable (Book) async -> BookFileFingerprint?)? = { book in try? await fixture.registry.managedSource(for: book)?.fingerprint }
+                let fixture_bookAccountPermitLookup: (@Sendable () async -> AccountMutationPermit?)? = { permit }
+                integration.capturePermitOperation = { owner in
+                    guard let callback = fixture_bookAccountPermitLookup else { return nil }
+                    guard let permit = await callback(), permit.ownerID == owner else { throw BookSyncAccountChanged() }
+                    return permit
+                }
+                integration.validatePermitOperation = { permit in
+                    if let callback = fixture_isCurrentAccountPermit {
+                        guard let permit, await callback(permit) else { throw BookSyncAccountChanged() }
+                    }
+                }
+                integration.prepareReplacementOperation = { id, permit in
+                    guard let callback = fixture_prepareBookSourceReplacement else { return nil }
+                    guard let permit else { throw BookSyncAccountChanged() }
+                    return try await callback(id, permit)
+                }
+                integration.completeReplacementOperation = { token in
+                    guard let callback = fixture_completeBookSourceReplacement else { throw BookImportPromotionError.retired }
+                    try await callback(token)
+                }
+                integration.abortReplacementOperation = { token in
+                    await fixture_abortBookSourceReplacement?(token)
+                }
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializerWithAuthority {
+                        guard let permit else { throw BookSyncAccountChanged() }
+                        return try await callback(book, key, remote, permit)
+                    }
+                    return nil
+                }
+                integration.admitCommitOperation = { permit in
+                    guard let callback = fixture_admitAccountOperation else { return nil }
+                    guard let permit, let lease = await callback(permit) else { throw BookSyncAccountChanged() }
+                    return lease
+                }
+                integration.fingerprintOperation = { fingerprint, book, generation in
+                    await fixture_bookFingerprintPersister?(book, fingerprint, generation) ?? false
+                }
+                integration.managedFingerprintOperation = { book in
+                    await fixture_managedFingerprintLookup?(book)
+                }
+                return integration
+            }()
+        )
         let payload = try SyncPayloadCodec.encodeBook(incoming, r2Key: "owned/remote", fileHash: digest, fileSize: bytes.count)
         let result = try await deleteReimportRun { await applier.apply([SyncChange(kind: SyncEntityKind.book.rawValue, id: incoming.id, payload: payload, updatedAt: Date(), deleted: false)], expectedUserId: fixture.owner) }
         #expect(result.errors.isEmpty)
@@ -539,20 +624,62 @@ struct DeleteReimportPersistenceTests {
             effect = try #require(borrower).effectAuthority.admit(try #require(borrower).sourceAccessPermit)
         }
         defer { materializerGate.open(); effect?.release(); borrower = nil }
-        let applier = ChangeApplier(bookStore: fixture.books, positionStore: fixture.positions,
-            highlightStore: SwiftDataHighlightStore(dbStore: fixture.db), bookmarkStore: SwiftDataBookmarkStore(dbStore: fixture.db), metadataStore: fixture.metadata,
-            currentUserId: { fixture.owner },
-            bookMaterializerWithAuthority: { _, _, _, captured in
+        let applier = ChangeApplier(
+            bookStore: fixture.books,
+            positionStore: fixture.positions,
+            highlightStore: SwiftDataHighlightStore(dbStore: fixture.db),
+            bookmarkStore: SwiftDataBookmarkStore(dbStore: fixture.db),
+            metadataStore: fixture.metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { fixture.owner }
+                let fixture_bookMaterializerWithAuthority: (@Sendable (Book, String?, InboundBookFileMetadata?, AccountMutationPermit) async throws -> VerifiedDownloadedBook)? = { _, _, _, captured in
                 #expect(captured == original)
                 await materializerGate.wait(cancellationAware: false)
                 try Task.checkCancellation()
                 throw DeleteReimportTestError.timeout
-            }, isCurrentAccountPermit: current,
-            prepareBookSourceReplacement: { id, captured in
+            }
+                let fixture_isCurrentAccountPermit: (@Sendable (AccountMutationPermit) async -> Bool)? = current
+                let fixture_prepareBookSourceReplacement: (@Sendable (BookID, AccountMutationPermit) async throws -> BookSourceReplacementToken)? = { id, captured in
                 try await lifecycle.prepareBookSourceReplacement(ownerID: captured.ownerID, generation: captured.accountGeneration, bookID: id, onFailure: cleanup)
-            }, completeBookSourceReplacement: { token in
+            }
+                let fixture_completeBookSourceReplacement: (@Sendable (BookSourceReplacementToken) async throws -> Void)? = { token in
                 guard lifecycle.completeBookSourceReplacement(token) else { throw BookImportPromotionError.retired }
-            }, abortBookSourceReplacement: cleanup, bookAccountPermitLookup: { original })
+            }
+                let fixture_abortBookSourceReplacement: (@Sendable (BookSourceReplacementToken) async -> Void)? = cleanup
+                let fixture_bookAccountPermitLookup: (@Sendable () async -> AccountMutationPermit?)? = { original }
+                integration.capturePermitOperation = { owner in
+                    guard let callback = fixture_bookAccountPermitLookup else { return nil }
+                    guard let permit = await callback(), permit.ownerID == owner else { throw BookSyncAccountChanged() }
+                    return permit
+                }
+                integration.validatePermitOperation = { permit in
+                    if let callback = fixture_isCurrentAccountPermit {
+                        guard let permit, await callback(permit) else { throw BookSyncAccountChanged() }
+                    }
+                }
+                integration.prepareReplacementOperation = { id, permit in
+                    guard let callback = fixture_prepareBookSourceReplacement else { return nil }
+                    guard let permit else { throw BookSyncAccountChanged() }
+                    return try await callback(id, permit)
+                }
+                integration.completeReplacementOperation = { token in
+                    guard let callback = fixture_completeBookSourceReplacement else { throw BookImportPromotionError.retired }
+                    try await callback(token)
+                }
+                integration.abortReplacementOperation = { token in
+                    await fixture_abortBookSourceReplacement?(token)
+                }
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializerWithAuthority {
+                        guard let permit else { throw BookSyncAccountChanged() }
+                        return try await callback(book, key, remote, permit)
+                    }
+                    return nil
+                }
+                return integration
+            }()
+        )
         let payload = try SyncPayloadCodec.encodeBook(fixture.book, r2Key: "owned/canceled")
         var outcome: ChangeApplier.ApplyResult?
         let request = Task {

@@ -1,9 +1,8 @@
 @testable import rishi
 import Testing
 import Foundation
-
-
-
+import CryptoKit
+import SwiftData
 
 
 /// SYNC-01 — BookUploader: presigned URL → PUT to R2 → markClean.
@@ -63,6 +62,49 @@ struct BookUploaderTests {
         }
     }
 
+    private actor AcceptanceProbe {
+        private(set) var permit: BookReadingPermit?
+        private(set) var fingerprint: BookFileFingerprint?
+        private(set) var persistenceError: String?
+        func capture(permit: BookReadingPermit, fingerprint: BookFileFingerprint) {
+            self.permit = permit
+            self.fingerprint = fingerprint
+        }
+        func capturePersistenceError(_ error: String) { persistenceError = error }
+    }
+
+    /// URLProtocol callbacks are synchronous, so use bounded semaphores at the
+    /// network boundary and always release the response from test cleanup.
+    private final class DelayedPushGate: @unchecked Sendable {
+        private let entered = DispatchSemaphore(value: 0)
+        private let releaseResponse = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var wasReleased = false
+
+        func holdResponse() {
+            entered.signal()
+            _ = releaseResponse.wait(timeout: .now() + 5)
+        }
+
+        func waitForPushOrCompletion(completion: DispatchSemaphore) -> (reachedPush: Bool, completedEarly: Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                if entered.wait(timeout: .now()) == .success { return (true, false) }
+                if completion.wait(timeout: .now()) == .success { return (false, true) }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            return (false, false)
+        }
+
+        func release() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !wasReleased else { return }
+            wasReleased = true
+            releaseResponse.signal()
+        }
+    }
+
     // MARK: - Fixtures
 
     private func makeFileStorage() async throws -> (BookFileStorage, URL) {
@@ -100,15 +142,46 @@ struct BookUploaderTests {
                     ownerID: book.userId,
                     sha256: "42e3cfce7d573fcbf45639d69ab08edd30db630fadac24c85813f3230ec4978c",
                     version: ManagedFileVersion(byteCount: size, modificationDate: modified, fileIdentifier: nil, materializationRevision: UUID())
-                )
+                ),
+                readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 1, bookID: book.id, contentRevision: UUID())
             )
         }
     }
 
-    private func makeSession() -> URLSession {
+    private func makeSession(requestTimeout: TimeInterval = 60) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = requestTimeout
         config.protocolClasses = [BookUploaderMockURLProtocol.self]
         return URLSession(configuration: config)
+    }
+
+    private func makeAuthorizedUploadFixture() async throws -> (
+        BookFileStorage, URL, Book, SwiftDataBookImportPersistence, BookFileFingerprint, BookReadingPermit
+    ) {
+        let (storage, root) = try await makeFileStorage()
+        let book = try makeBookOnDisk(in: root)
+        let managedURL = storage.absoluteFileURL(for: book)
+        let bytes = try Data(contentsOf: managedURL)
+        let revision = UUID()
+        let version = try #require(try FileManagedFileVersionInspector().managedFileVersion(at: managedURL, materializationRevision: revision))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: book.userId, sha256: digest, version: version)
+        let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let books = SwiftDataBookStore(dbStore: db)
+        let persistence = SwiftDataBookImportPersistence(dbStore: db, managedFileRootURL: root)
+        try await books.upsert(book)
+        try await persistence.setAccountAuthorization(ownerID: book.userId, generation: 1)
+        try await persistence.setBookReadingAuthorization(
+            bookID: book.id, ownerID: book.userId, generation: 1,
+            contentRevision: revision, tombstoned: false
+        )
+        #expect(try await persistence.cacheManagedFingerprint(
+            fingerprint, expectedGeneration: 1, expectedRelativePath: book.fileURL, expectedVersion: version
+        ))
+        let permit = try #require(try await persistence.readingPermit(
+            forManagedFingerprint: fingerprint, expectedRelativePath: book.fileURL, generation: 1
+        ))
+        return (storage, root, book, persistence, fingerprint, permit)
     }
 
     private func makeWorkerClient(session: URLSession) -> WorkerClient {
@@ -174,8 +247,7 @@ struct BookUploaderTests {
             urlSession: session,
             userIdProvider: { "001234.abcdef0123456789.1234" },
             managedSourceProvider: readySourceProvider(storage: storage),
-            currentGeneration: { 1 },
-            persistServerAcceptance: { _, _, _, _ in true }
+            persistServerAcceptance: { _, _, _ in true }
         )
 
         let presignedURL = "https://r2.example.invalid/books/\(book.userId.uuidString)/\(book.id.uuidString).epub?sig=abc"
@@ -244,14 +316,13 @@ struct BookUploaderTests {
             urlSession: session,
             userIdProvider: { "001234.abcdef0123456789.1234" },
             managedSourceProvider: readySourceProvider(storage: storage),
-            currentGeneration: { 1 },
-            persistServerAcceptance: { _, _, _, _ in await persistence.persist() }
+            persistServerAcceptance: { _, _, _ in await persistence.persist() }
         )
 
         let presignedURL = "https://r2.example.invalid/books/acceptance-failure.epub?sig=abc"
         BookUploaderMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/upload-url" {
-                return (200, Data("{\"url\":\"\\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
+                return (200, Data("{\"url\":\"\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
             }
             if request.url?.absoluteString == presignedURL {
                 return (200, Data(), ["ETag": "\"abc123\""])
@@ -267,6 +338,162 @@ struct BookUploaderTests {
         }
         #expect(await persistence.calls == 1)
         #expect(await metadata.calls().isEmpty)
+    }
+
+    @Test("same-owner relogin cannot accept a delayed upload from the prior generation")
+    func delayedAcceptanceAfterSameOwnerReloginIsRejected() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession(requestTimeout: 8)
+        let (storage, _, book, persistence, fingerprint, originalPermit) = try await makeAuthorizedUploadFixture()
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await metadata.markDirty(entityId: book.id, kind: .book)
+        let gate = DelayedPushGate()
+        let acceptance = AcceptanceProbe()
+        let uploader = BookUploader(
+            workerClient: makeWorkerClient(session: session),
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: { requestedBook in
+                let currentFingerprint = try #require(try await persistence.fingerprint(bookID: requestedBook.id, ownerID: requestedBook.userId))
+                let currentPermit = try #require(try await persistence.readingPermit(
+                    forManagedFingerprint: currentFingerprint, expectedRelativePath: requestedBook.fileURL, generation: 1
+                ))
+                return BookUploadSource(url: storage.absoluteFileURL(for: requestedBook), fingerprint: currentFingerprint, readingPermit: currentPermit)
+            },
+            persistServerAcceptance: { permit, expectedFingerprint, accepted in
+                await acceptance.capture(permit: permit, fingerprint: expectedFingerprint)
+                do {
+                    return try await persistence.recordServerAcceptance(permit: permit, expectedFingerprint: expectedFingerprint, acceptance: accepted)
+                } catch {
+                    await acceptance.capturePersistenceError(String(describing: error))
+                    return false
+                }
+            }
+        )
+        let presignedURL = "https://r2.example.invalid/books/delayed.epub?sig=held"
+        BookUploaderMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/upload-url" {
+                return (200, Data("{\"url\":\"\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
+            }
+            if request.url?.absoluteString == presignedURL { return (200, Data(), nil) }
+            if request.url?.path == "/api/sync/push" {
+                gate.holdResponse()
+                return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let completed = DispatchSemaphore(value: 0)
+        let upload = Task {
+            defer { completed.signal() }
+            try await uploader.upload(book)
+        }
+        defer { gate.release() }
+        let gateResult = gate.waitForPushOrCompletion(completion: completed)
+        let reachedPush = gateResult.reachedPush
+        #expect(reachedPush, gateResult.completedEarly
+            ? "upload completed before reaching the held server-acceptance response"
+            : "upload should reach the held server-acceptance response before the bounded wait expires")
+        if reachedPush {
+            // Reauthorize the same owner under a fresh session generation while
+            // the server's accepted response is still in flight.
+            try await persistence.setAccountAuthorization(ownerID: book.userId, generation: 2)
+            try await persistence.setBookReadingAuthorization(
+                bookID: book.id, ownerID: book.userId, generation: 2,
+                contentRevision: originalPermit.contentRevision, tombstoned: false
+            )
+        }
+        gate.release()
+        await #expect(throws: BookUploader.UploadError.self) { try await upload.value }
+        #expect(await acceptance.permit == originalPermit)
+        #expect(await acceptance.fingerprint == fingerprint)
+        #expect(await acceptance.persistenceError == nil)
+        #expect(try await metadata.pending(kind: .book, limit: 10) == [SyncPendingItem(entityId: book.id, kind: .book)])
+    }
+
+    @Test("content replacement cannot accept a delayed upload of the previous bytes")
+    func delayedAcceptanceAfterContentReplacementIsRejected() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession(requestTimeout: 8)
+        let (storage, _, book, persistence, fingerprint, originalPermit) = try await makeAuthorizedUploadFixture()
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await metadata.markDirty(entityId: book.id, kind: .book)
+        let gate = DelayedPushGate()
+        let acceptance = AcceptanceProbe()
+        let uploader = BookUploader(
+            workerClient: makeWorkerClient(session: session),
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: { requestedBook in
+                let currentFingerprint = try #require(try await persistence.fingerprint(bookID: requestedBook.id, ownerID: requestedBook.userId))
+                let currentPermit = try #require(try await persistence.readingPermit(
+                    forManagedFingerprint: currentFingerprint, expectedRelativePath: requestedBook.fileURL, generation: 1
+                ))
+                return BookUploadSource(url: storage.absoluteFileURL(for: requestedBook), fingerprint: currentFingerprint, readingPermit: currentPermit)
+            },
+            persistServerAcceptance: { permit, expectedFingerprint, accepted in
+                await acceptance.capture(permit: permit, fingerprint: expectedFingerprint)
+                do {
+                    return try await persistence.recordServerAcceptance(permit: permit, expectedFingerprint: expectedFingerprint, acceptance: accepted)
+                } catch {
+                    await acceptance.capturePersistenceError(String(describing: error))
+                    return false
+                }
+            }
+        )
+        let presignedURL = "https://r2.example.invalid/books/replaced.epub?sig=held"
+        BookUploaderMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/upload-url" {
+                return (200, Data("{\"url\":\"\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
+            }
+            if request.url?.absoluteString == presignedURL { return (200, Data(), nil) }
+            if request.url?.path == "/api/sync/push" {
+                gate.holdResponse()
+                return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let completed = DispatchSemaphore(value: 0)
+        let upload = Task {
+            defer { completed.signal() }
+            try await uploader.upload(book)
+        }
+        defer { gate.release() }
+        let gateResult = gate.waitForPushOrCompletion(completion: completed)
+        let reachedPush = gateResult.reachedPush
+        #expect(reachedPush, gateResult.completedEarly
+            ? "upload completed before reaching the held server-acceptance response"
+            : "upload should reach the held server-acceptance response before the bounded wait expires")
+        if reachedPush {
+            // Replace the exact managed file and atomically publish its new
+            // fingerprint and canonical reading revision before releasing ack.
+            let managedURL = storage.absoluteFileURL(for: book)
+            let replacementBytes = Data("replacement EPUB bytes".utf8)
+            try replacementBytes.write(to: managedURL, options: .atomic)
+            let revision = UUID()
+            try await persistence.setBookReadingAuthorization(
+                bookID: book.id, ownerID: book.userId, generation: 1,
+                contentRevision: revision, tombstoned: false
+            )
+            let version = try #require(try FileManagedFileVersionInspector().managedFileVersion(at: managedURL, materializationRevision: revision))
+            let digest = SHA256.hash(data: replacementBytes).map { String(format: "%02x", $0) }.joined()
+            let replacementFingerprint = BookFileFingerprint(bookID: book.id, ownerID: book.userId, sha256: digest, version: version)
+            #expect(try await persistence.cacheManagedFingerprint(
+                replacementFingerprint, expectedGeneration: 1, expectedRelativePath: book.fileURL, expectedVersion: version
+            ))
+        }
+        gate.release()
+        await #expect(throws: BookUploader.UploadError.self) { try await upload.value }
+        #expect(await acceptance.permit == originalPermit)
+        #expect(await acceptance.fingerprint == fingerprint)
+        #expect(await acceptance.persistenceError == nil)
+        #expect(try await persistence.fingerprint(bookID: book.id, ownerID: book.userId)?.sha256 != fingerprint.sha256)
+        #expect(try await metadata.pending(kind: .book, limit: 10) == [SyncPendingItem(entityId: book.id, kind: .book)])
     }
 
     @Test("Stale server acknowledgement does NOT markClean")

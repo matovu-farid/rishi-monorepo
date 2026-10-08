@@ -13,6 +13,12 @@ final class AppRouter {
     nonisolated static let sessionTokenQueued = Notification.Name("Rishi.sessionTokenQueued")
     nonisolated static let creatorInvitationQueued = Notification.Name("Rishi.creatorInvitationQueued")
 
+    private let sharedReaderAccountIDProvider: @MainActor () -> UUID?
+
+    init(sharedReaderAccountIDProvider: @escaping @MainActor () -> UUID?) {
+        self.sharedReaderAccountIDProvider = sharedReaderAccountIDProvider
+    }
+
     var path: NavigationPath = NavigationPath()
     /// The direct shared reader is intentionally separate from `path`: a
     /// NavigationPath is restoration-oriented and cannot safely carry a live
@@ -55,7 +61,7 @@ final class AppRouter {
     /// a separate router leave would race its account-bound compensation.
     @discardableResult
     func presentSharedReader(_ context: SharedReadingReaderContext, for accountID: UUID) -> Bool {
-        guard AppDependencies.shared.cachedUserId == accountID,
+        guard sharedReaderAccountIDProvider() == accountID,
               context.runtime.accountID == accountID,
               context.runtime.readerContext != nil
         else {
@@ -98,7 +104,7 @@ final class AppRouter {
 
     func sharedReaderPresentation(for route: SharedReadingReaderRoute, accountID: UUID) -> SharedReadingReaderPresentation? {
         guard !detachedSharedReaderAccounts.contains(accountID),
-              route.accountID == accountID, AppDependencies.shared.cachedUserId == accountID,
+              route.accountID == accountID, sharedReaderAccountIDProvider() == accountID,
               activeSharedReaderRoute?.id == route.id, let context = sharedReaderContexts[route.id] else { return nil }
         return SharedReadingReaderPresentation(route: route, context: context)
     }

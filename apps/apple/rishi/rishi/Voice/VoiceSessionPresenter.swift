@@ -93,6 +93,47 @@ final class VoiceSessionPresenter {
     private let cleanupQueue = VoiceSessionCleanupQueue()
     private var readerCleanupTask: Task<Bool, Never>?
 
+    private enum Authentication {
+        case legacy
+        case scoped(SessionCredentialAuthority, @MainActor (CredentialRequestContext) throws -> VoiceSessionAPIClient, RealtimeVoiceSession.ScopedControlSocketFactory)
+    }
+    private let authentication: Authentication
+
+    private func captureCredentialContext() throws -> CredentialRequestContext? {
+        switch authentication {
+        case .legacy: return nil
+        case .scoped(let authority, _, _): return .normal(try authority.snapshot().lease)
+        }
+    }
+
+    private func credentialsAreCurrent(_ context: CredentialRequestContext?) -> Bool {
+        switch authentication {
+        case .legacy: return true
+        case .scoped(let authority, _, _):
+            guard let context, let snapshot = try? authority.snapshot(for: context) else { return false }
+            return userIdProvider() == DerivedUserID.from(snapshot.lease.rawUserID)
+        }
+    }
+
+    private func makeSessionCoordinator(context: CredentialRequestContext?) throws -> (any VoiceSessionCoordinating)? {
+        switch authentication {
+        case .legacy: return sessionCoordinatorFactory()
+        case .scoped(let authority, let factory, _):
+            guard let context, credentialsAreCurrent(context) else { throw CredentialAuthenticationFailure.accountChanged }
+            let api = try factory(context)
+            guard api.isBound(to: authority, context: context) else { throw CredentialAuthenticationFailure.accountChanged }
+            return api
+        }
+    }
+
+    private func noteCreationReceipt(_ receipt: VoiceSessionCreationReceipt) {
+        sessionRegistry.retainCreationReceipt(receipt)
+        let owner = DerivedUserID.from(receipt.lease.rawUserID)
+        guard userIdProvider() == owner else { return }
+        staleRishiSessionId = receipt.started.rishiSessionId
+        staleRishiSessionUserID = owner
+    }
+
     private let coordinator: AudioSessionCoordinator
     private let workerClient: WorkerClient
     private let messageStore: any MessageStore
@@ -121,7 +162,11 @@ final class VoiceSessionPresenter {
     /// when local teardown finishes with no session id to deliver, or when
     /// background end delivery completes (success or informational failure).
     private var isRequestingEnd = false
-    private var endFlightTask: Task<Void, Never>?
+    private struct EndFlight {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+    private var endFlight: EndFlight?
 
     /// Session id whose background end delivery completed successfully. Keep
     /// the persisted id until the next create succeeds, but do not send a
@@ -198,6 +243,7 @@ final class VoiceSessionPresenter {
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
         sessionRegistry: VoiceSessionRegistry? = nil
     ) {
+        self.authentication = .legacy
         self.state = VoiceSessionState()
         self.coordinator = coordinator
         self.workerClient = workerClient
@@ -240,6 +286,55 @@ final class VoiceSessionPresenter {
             }
         )
     }
+    init(
+        coordinator: AudioSessionCoordinator,
+        workerClient: WorkerClient,
+        baseURL: URL,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+        messageStore: any MessageStore,
+        conversationLookup: ConversationLookup,
+        userIdProvider: @escaping @MainActor () -> UserID?,
+        dirtyHook: any VoiceTranscriptDirtyHook,
+        micGate: any MicPermissionGate = SystemMicPermissionGate(),
+        bookSearch: (any BookSearch)? = nil,
+        embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        chapterIndexResponderFactory: RealtimeVoiceSession.ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (BookID) async -> String?)? = nil,
+        clientFactory: (@MainActor () -> any RealtimeClientAPI)? = nil,
+        keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil,
+        credentialAuthority: SessionCredentialAuthority,
+        sessionAPIFactory: @escaping @MainActor (CredentialRequestContext) throws -> VoiceSessionAPIClient,
+        scopedControlSocketFactory: @escaping RealtimeVoiceSession.ScopedControlSocketFactory,
+        sessionRegistry: VoiceSessionRegistry
+    ) throws {
+        guard workerClient.usesCredentialAuthority(credentialAuthority),
+              sessionRegistry.usesCredentialAuthority(credentialAuthority) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        self.authentication = .scoped(credentialAuthority, sessionAPIFactory, scopedControlSocketFactory)
+        self.state = VoiceSessionState()
+        self.coordinator = coordinator
+        self.workerClient = workerClient
+        self.messageStore = messageStore
+        self.conversationLookup = conversationLookup
+        self.userIdProvider = userIdProvider
+        self.dirtyHook = dirtyHook
+        self.dataUseConsentProvider = dataUseConsentProvider
+        self.micGate = micGate
+        self.bookSearch = bookSearch
+        self.embedderPrewarm = embedderPrewarm
+        self.chapterIndexResponderFactory = chapterIndexResponderFactory
+        self.chapterIndexCoordinatorFactory = chapterIndexCoordinatorFactory
+        self.chapterIndexContentVersionProvider = chapterIndexContentVersionProvider
+        self.sessionRegistry = sessionRegistry
+        self.clientFactory = clientFactory ?? { RealtimeAPIAdapter() }
+        self.keyFetcherFactory = keyFetcherFactory ?? { DisabledLegacyEphemeralKeyFetcher() }
+        // These legacy closures are unreachable in the immutable scoped mode.
+        self.sessionCoordinatorFactory = { nil }
+        self.controlSocketFactory = { _, _ in nil }
+    }
+
     func getSession()->RealtimeVoiceSession? { self.session}
 
     func prewarmVoiceChat(for bookID: BookID, userID: UserID) {
@@ -296,6 +391,9 @@ final class VoiceSessionPresenter {
         // voice-related to tear down.
         guard !identities.isEmpty else { return true }
 
+        let credentialContext: CredentialRequestContext?
+        do { credentialContext = try captureCredentialContext() }
+        catch { return false }
         readerCleanupTask = Task { @MainActor [weak self] in
             guard let self else { return true }
             for identity in identities {
@@ -309,11 +407,13 @@ final class VoiceSessionPresenter {
             // account-scoped recovery RPC as a final sweep before another book can
             // be presented. Terminal rows are safe here: the Worker no longer
             // treats provider cleanup as admission state.
-            guard let coordinator = self.sessionCoordinatorFactory() else { return true }
+            guard let coordinator = try? self.makeSessionCoordinator(context: credentialContext) else { return false }
             for attempt in 1...Self.libraryCleanupMaxAttempts {
                 do {
                     if let endedID = try await coordinator.endActiveSessionIfAny() {
-                        self.noteRishiSessionId(endedID)
+                        if case .normal(let lease) = credentialContext {
+                            self.sessionRegistry.recordServerSessionID(endedID, owner: DerivedUserID.from(lease.rawUserID))
+                        } else { self.noteRishiSessionId(endedID) }
                     }
                     return true
                 } catch {
@@ -390,9 +490,17 @@ final class VoiceSessionPresenter {
 
         guard !isStarting else { return .alreadyStarting }
         guard !isPresenting else { return .alreadyLive }
+        let credentialContext: CredentialRequestContext?
+        do { credentialContext = try captureCredentialContext() }
+        catch { return .rejected }
+        guard credentialsAreCurrent(credentialContext) else { return .rejected }
         isStarting = true
         let startCancellationToken = UUID()
         self.startCancellationToken = startCancellationToken
+        defer {
+            isStarting = false
+            if self.startCancellationToken == startCancellationToken { self.startCancellationToken = nil }
+        }
 
         // Keep the caller's complete reader context as retry state even when
         // startup is rejected before a realtime session is created. The
@@ -415,6 +523,7 @@ final class VoiceSessionPresenter {
         if (!canResumeParkedSameReader && cleanupQueue.hasPending(asideFrom: nil))
             || readerCleanupTask != nil {
             guard await cleanupRegisteredReaderSessions() else {
+                guard credentialsAreCurrent(credentialContext) else { return .rejected }
                 state.recordError("Reader voice cleanup failed")
                 enterFailure(reason: .sessionEndFailed)
                 return .rejected
@@ -425,12 +534,6 @@ final class VoiceSessionPresenter {
             registerReaderCleanup(for: readerSessionIdentity)
         }
         self.currentReaderSessionIdentity = readerSessionIdentity
-        defer {
-            isStarting = false
-            if self.startCancellationToken == startCancellationToken {
-                self.startCancellationToken = nil
-            }
-        }
         let pendingPrewarm = takePrewarm(for: bookId, userID: userIdProvider())
         var handedPrewarmToSession = false
         defer {
@@ -446,13 +549,14 @@ final class VoiceSessionPresenter {
         ])
 
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            guard credentialsAreCurrent(credentialContext) else { return .rejected }
             state.recordError("Data use consent required")
             enterFailure(reason: .dataUseConsentRequired)
             return .rejected
         }
 
         guard self.startCancellationToken == startCancellationToken,
-              !Task.isCancelled else { return .rejected }
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else { return .rejected }
 
         if await resumeParkedSessionIfEligible(
             bookId: bookId,
@@ -460,9 +564,10 @@ final class VoiceSessionPresenter {
             initialQuote: initialQuote,
             bookContext: bookContext,
             currentPageProvider: currentPageProvider,
-            readerSessionIdentity: readerSessionIdentity
+            readerSessionIdentity: readerSessionIdentity,
+            credentialContext: credentialContext
         ) {
-            return .live
+            return credentialsAreCurrent(credentialContext) ? .live : .rejected
         }
 
         restoreStaleSessionIdFromPersistenceOrSession()
@@ -483,7 +588,7 @@ final class VoiceSessionPresenter {
         guard !isPresenting else { return .alreadyLive }
 
         guard self.startCancellationToken == startCancellationToken,
-              !Task.isCancelled else { return .rejected }
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else { return .rejected }
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
             enterFailure(reason: .unknown("Sign in required"))
@@ -493,26 +598,27 @@ final class VoiceSessionPresenter {
         // Consent can be revoked during asynchronous startup work. Re-check
         // it before even touching the microphone.
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            guard credentialsAreCurrent(credentialContext) else { return .rejected }
             state.recordError("Data use consent required")
             enterFailure(reason: .dataUseConsentRequired)
             return .rejected
         }
 
         guard self.startCancellationToken == startCancellationToken,
-              !Task.isCancelled else { return .rejected }
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else { return .rejected }
 
         // Resolve permission before claiming audio or constructing anything
         // that can mint a server session. The realtime SDK also checks this
         // during WebRTC connect, but doing it here keeps denial off the
         // network critical path and makes the presenter decision testable.
         guard await micGate.request() == .granted else {
-            guard !Task.isCancelled else { return .rejected }
+            guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else { return .rejected }
             state.recordError("Microphone permission denied")
             enterFailure(reason: .micDenied)
             return .rejected
         }
         guard self.startCancellationToken == startCancellationToken,
-              !Task.isCancelled else { return .rejected }
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else { return .rejected }
 
         isPresenting = true
 
@@ -529,7 +635,7 @@ final class VoiceSessionPresenter {
 
         guard activeSessionToken == sessionToken,
               isPresenting,
-              !Task.isCancelled else {
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
             activeSessionToken = nil
             isPresenting = false
             return .rejected
@@ -548,7 +654,7 @@ final class VoiceSessionPresenter {
 
         guard activeSessionToken == sessionToken,
               isPresenting,
-              !Task.isCancelled else {
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
             await coordinator.releaseActiveMode(.voice)
             activeSessionToken = nil
             isPresenting = false
@@ -561,7 +667,7 @@ final class VoiceSessionPresenter {
         defer { conversationTask.cancel() }
         startupTrace.mark("conversation_lookup_started")
 
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
             conversationTask.cancel()
             await coordinator.releaseActiveMode(.voice)
             activeSessionToken = nil
@@ -580,7 +686,7 @@ final class VoiceSessionPresenter {
         }
         let fetcher = keyFetcherFactory()
 
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
             await coordinator.releaseActiveMode(.voice)
             activeSessionToken = nil
             isPresenting = false
@@ -656,7 +762,11 @@ final class VoiceSessionPresenter {
             effectiveChapterIndexResponderFactory = nil
         }
 
-        let session = RealtimeVoiceSession(
+        let session: RealtimeVoiceSession
+        do {
+            switch authentication {
+            case .legacy:
+                session = RealtimeVoiceSession(
             coordinator: coordinator,
             keyFetcher: fetcher,
             client: adapter,
@@ -665,7 +775,7 @@ final class VoiceSessionPresenter {
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
             onTerminalFailure: { [weak self] reason in
-                await self?.handleTerminalFailure(reason, sessionToken: sessionToken)
+                await self?.handleTerminalFailure(reason, sessionToken: sessionToken, credentialContext: credentialContext)
             },
             responderFactory: responderFactory,
             chapterIndexResponderFactory: responderFactory == nil ? effectiveChapterIndexResponderFactory : nil,
@@ -674,9 +784,43 @@ final class VoiceSessionPresenter {
             currentPageProvider: currentPageProvider,
             readerSessionIdentity: readerSessionIdentity,
             embedderPrewarm: embedderPrewarm
-        )
+                )
+            case .scoped(let authority, let factory, let socketFactory):
+                guard let credentialContext, credentialsAreCurrent(credentialContext) else {
+                    throw CredentialAuthenticationFailure.accountChanged
+                }
+                let api = try factory(credentialContext)
+                session = try RealtimeVoiceSession(
+            coordinator: coordinator,
+            keyFetcher: fetcher,
+            client: adapter,
+            state: state,
+            dataUseConsentProvider: dataUseConsentProvider,
+            credentialAuthority: authority,
+            credentialContext: credentialContext,
+            sessionAPI: api,
+            audioModePreflighted: true,
+            scopedControlSocketFactory: socketFactory,
+            onTerminalFailure: { [weak self] reason in
+                await self?.handleTerminalFailure(reason, sessionToken: sessionToken, credentialContext: credentialContext)
+            },
+            responderFactory: responderFactory,
+            chapterIndexResponderFactory: responderFactory == nil ? effectiveChapterIndexResponderFactory : nil,
+            chapterIndexCoordinatorFactory: effectiveChapterCoordinatorFactory,
+            chapterIndexContentVersionProvider: effectiveChapterContentVersionProvider,
+            currentPageProvider: currentPageProvider,
+            readerSessionIdentity: readerSessionIdentity,
+            embedderPrewarm: embedderPrewarm
+                )
+            }
+        } catch {
+            conversationTask.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            if activeSessionToken == sessionToken { isPresenting = false; activeSessionToken = nil }
+            return .rejected
+        }
 
-        guard activeSessionToken == sessionToken, isPresenting else {
+        guard activeSessionToken == sessionToken, isPresenting, credentialsAreCurrent(credentialContext) else {
             conversationTask.cancel()
             await session.end()
             return .rejected
@@ -685,7 +829,7 @@ final class VoiceSessionPresenter {
         await sessionRegistry.register(session)
         startupTrace.mark("transport_object_registered")
 
-        guard activeSessionToken == sessionToken, isPresenting else {
+        guard activeSessionToken == sessionToken, isPresenting, credentialsAreCurrent(credentialContext) else {
             conversationTask.cancel()
             await closeAbandonedSession(session)
             return .rejected
@@ -709,7 +853,7 @@ final class VoiceSessionPresenter {
 
         guard activeSessionToken == sessionToken,
               isPresenting,
-              !Task.isCancelled else {
+              !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
             await closeAbandonedSession(session)
             return .rejected
         }
@@ -726,7 +870,7 @@ final class VoiceSessionPresenter {
             return .rejected
         }
 
-        guard activeSessionToken == sessionToken, isPresenting else {
+        guard activeSessionToken == sessionToken, isPresenting, credentialsAreCurrent(credentialContext) else {
             await closeAbandonedSession(session)
             return .rejected
         }
@@ -745,7 +889,7 @@ final class VoiceSessionPresenter {
                 conversationTask.cancel()
             }
             startupTrace.mark("conversation_ready")
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
                 await closeAbandonedSession(session)
                 return .rejected
             }
@@ -768,6 +912,7 @@ final class VoiceSessionPresenter {
                     "error": String(describing: error)
                 ]
             )
+            guard credentialsAreCurrent(credentialContext) else { return .rejected }
             state.recordError(String(describing: error))
             enterFailure(reason: .unknown(String(describing: error)))
             return .rejected
@@ -778,7 +923,7 @@ final class VoiceSessionPresenter {
         // session.
         guard let currentSession = self.session,
               currentSession === session,
-              isPresenting else { return .rejected }
+              isPresenting, credentialsAreCurrent(credentialContext) else { return .rejected }
 
         if case .failed = state.status {
             // Keep the existing failure/retry handling below. A failed
@@ -813,7 +958,7 @@ final class VoiceSessionPresenter {
         var createAttempt = 1
         while case .failed(.sessionStart(.alreadyActive)) = state.status,
               createAttempt < Self.alreadyActiveCreateMaxAttempts {
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
                 await closeAbandonedSession(session)
                 return .rejected
             }
@@ -821,8 +966,8 @@ final class VoiceSessionPresenter {
             Log.event("voice.presenter.create.retry", level: .info, data: [
                 "attempt": String(createAttempt),
             ])
-            await resolveServerAlreadyActiveConflict()
-            guard !Task.isCancelled else {
+            await resolveServerAlreadyActiveConflict(credentialContext: credentialContext)
+            guard !Task.isCancelled, credentialsAreCurrent(credentialContext) else {
                 await closeAbandonedSession(session)
                 return .rejected
             }
@@ -855,9 +1000,11 @@ final class VoiceSessionPresenter {
             clearPersistedServerSessionId()
         }
 
-        if let id = await session.rishiSessionId {
+        if let receipt = await session.serverCreationReceipt {
+            noteCreationReceipt(receipt)
+        } else if let id = await session.rishiSessionId {
             noteRishiSessionId(id)
-            sessionRegistry.recordServerSessionID(id)
+            if case .legacy = authentication { sessionRegistry.recordServerSessionID(id) }
         }
 
         if case .failed(let reason) = state.status {
@@ -899,11 +1046,16 @@ final class VoiceSessionPresenter {
         initialQuote: String?,
         bookContext: BookContextSnapshot?,
         currentPageProvider: CurrentPageContextProvider?,
-        readerSessionIdentity: ReaderSessionIdentity?
+        readerSessionIdentity: ReaderSessionIdentity?,
+        credentialContext: CredentialRequestContext?
     ) async -> Bool {
         guard let session, !isPresenting else { return false }
         guard sessionRegistry.state == .parked else { return false }
         guard session.readerSessionIdentity == readerSessionIdentity else { return false }
+        if case .scoped = authentication {
+            guard case .normal(let lease) = credentialContext,
+                  session.credentialLease == lease, credentialsAreCurrent(credentialContext) else { return false }
+        }
         if case .failed = state.status { return false }
         if case .ended = state.status { return false }
 
@@ -951,28 +1103,47 @@ final class VoiceSessionPresenter {
         if let readerSessionIdentity {
             guard currentReaderSessionIdentity == readerSessionIdentity else { return }
         }
-        cancelPrewarm()
-        // Nothing left to tear down (and not mid-present) — ignore double tap.
-        guard session != nil || isPresenting || startCancellationToken != nil else { return }
-        if let endFlightTask {
-            // Reader disappearance and the library boundary can arrive at the
-            // same time. Join the existing flight instead of returning before
-            // it has reached the registry/server cleanup.
-            await endFlightTask.value
-            return
+        await joinEndFlight(beginEndFlight())
+    }
+
+    /// The captured owner is checked at actual synchronous end admission.
+    /// No caller-created Task or actor hop separates this check from its flight.
+    func requestEnd(credentialContext: CredentialRequestContext) async throws {
+        guard case .scoped(let authority, _, _) = authentication,
+              case .normal(let lease) = credentialContext,
+              userIdProvider() == DerivedUserID.from(lease.rawUserID) else {
+            throw CredentialAuthenticationFailure.accountChanged
         }
+        try Task.checkCancellation()
+        var admitted: EndFlight?
+        guard authority.performIfCurrent(lease, mutation: {
+            admitted = beginEndFlight()
+        }) else { throw CredentialAuthenticationFailure.accountChanged }
+        await joinEndFlight(admitted)
+    }
+
+    private func joinEndFlight(_ admitted: EndFlight?) async {
+        guard let admitted else { return }
+        await admitted.task.value
+        if endFlight?.id == admitted.id { endFlight = nil }
+    }
+
+    /// One end owner is shared by cleanup, End UI and captured consent revoke.
+    /// Called synchronously on MainActor; local teardown retains the registry's
+    /// existing remote-delivery ownership.
+    private func beginEndFlight() -> EndFlight? {
+        cancelPrewarm()
+        guard session != nil || isPresenting || startCancellationToken != nil else { return nil }
+        if let endFlight { return endFlight }
         isRequestingEnd = true
-
-        endFlightTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            // Dismiss first — before local teardown / delivery.
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self, self.endFlight?.id == id else { return }
             self.isPresenting = false
             self.activeSessionToken = nil
             self.startCancellationToken = nil
-
             await self.sessionRegistry.close()
-
+            guard self.endFlight?.id == id else { return }
             self.bridgeTask?.cancel()
             self.bridgeTask = nil
             self.session = nil
@@ -982,14 +1153,14 @@ final class VoiceSessionPresenter {
             self.currentLanguage = "en"
             self.currentPageProvider = nil
             self.currentReaderSessionIdentity = nil
-
-            // Release the End flight before background delivery. The registry
-            // owns serialization of that delivery when the replacement
-            // transport registers.
             self.isRequestingEnd = false
+            // Release the completed owner before another session can start;
+            // a delayed waiter still clears only its matching flight ID.
+            self.endFlight = nil
         }
-        await endFlightTask?.value
-        endFlightTask = nil
+        let admitted = EndFlight(id: id, task: task)
+        endFlight = admitted
+        return admitted
     }
 
     /// Compatibility alias — all End entry points use ``requestEnd``.
@@ -1031,6 +1202,10 @@ final class VoiceSessionPresenter {
     /// Blocks until hangup succeeds or retries are exhausted — preventing an
     /// immediate `VOICE_SESSION_ALREADY_ACTIVE` on Try again.
     private func endStaleServerSessionIfNeeded() async {
+        if case .scoped = authentication {
+            await sessionRegistry.recoverPersistedSession()
+            return
+        }
         restoreStaleSessionIdFromPersistenceOrSession()
         // A clean start has no reason to make a network request just to ask
         // the server whether an active session exists. Besides adding a
@@ -1060,11 +1235,17 @@ final class VoiceSessionPresenter {
     }
 
     /// Re-POST end for the persisted ledger id, then wait for server settle.
-    private func resolveServerAlreadyActiveConflict() async {
-        if let coordinator = sessionCoordinatorFactory() {
+    private func resolveServerAlreadyActiveConflict(credentialContext: CredentialRequestContext?) async {
+        if let coordinator = try? makeSessionCoordinator(context: credentialContext) {
             do {
                 if let endedId = try await coordinator.endActiveSessionIfAny() {
-                    noteRishiSessionId(endedId)
+                    if case .normal(let lease) = credentialContext {
+                        sessionRegistry.recordServerSessionID(endedId, owner: DerivedUserID.from(lease.rawUserID))
+                        if credentialsAreCurrent(credentialContext) {
+                            staleRishiSessionId = endedId
+                            staleRishiSessionUserID = DerivedUserID.from(lease.rawUserID)
+                        }
+                    } else { noteRishiSessionId(endedId) }
                 }
             } catch {
                 Log.event("voice.presenter.end_active.failed", level: .warning, data: [
@@ -1076,7 +1257,7 @@ final class VoiceSessionPresenter {
 
         restoreStaleSessionIdFromPersistenceOrSession()
         guard let rishiSessionId = staleRishiSessionId,
-              let coordinator = sessionCoordinatorFactory() else {
+              let coordinator = try? makeSessionCoordinator(context: credentialContext) else {
             try? await Task.sleep(for: .milliseconds(Self.alreadyActiveRetryBackoffMs))
             return
         }
@@ -1105,6 +1286,7 @@ final class VoiceSessionPresenter {
     }
 
     private func noteRishiSessionId(_ id: String) {
+        guard case .legacy = authentication else { return }
         guard let currentUserID = userIdProvider() else { return }
         staleRishiSessionId = id
         staleRishiSessionUserID = currentUserID
@@ -1112,6 +1294,7 @@ final class VoiceSessionPresenter {
     }
 
     private func clearPersistedServerSessionId() {
+        guard case .legacy = authentication else { return }
         staleRishiSessionId = nil
         staleRishiSessionUserID = nil
         recentlyDeliveredEndSessionId = nil
@@ -1152,6 +1335,18 @@ final class VoiceSessionPresenter {
     }
 
     private func closeAbandonedSession(_ session: RealtimeVoiceSession) async {
+        if case .scoped = authentication {
+            let captured = await session.serverCreationReceipt
+            _ = await session.end()
+            guard let receipt = await session.serverCreationReceipt ?? captured else { return }
+            noteCreationReceipt(receipt)
+            // The registry may already have detached this exact actor while create awaited.
+            // The passed actor's receipt is still valid even when no active session remains.
+            if await sessionRegistry.deliverCreationReceipt(receipt) {
+                await session.acknowledgeServerEnd()
+            }
+            return
+        }
         guard let id = await session.end() else { return }
         noteRishiSessionId(id)
         if sessionRegistry.state != .closing {
@@ -1162,6 +1357,9 @@ final class VoiceSessionPresenter {
     }
 
     func retry() async {
+        let credentialContext: CredentialRequestContext?
+        do { credentialContext = try captureCredentialContext() }
+        catch { return }
         if let id = await session?.rishiSessionId {
             noteRishiSessionId(id)
         }
@@ -1173,6 +1371,7 @@ final class VoiceSessionPresenter {
         let readerIdentity = currentReaderSessionIdentity
         clearFailure(preservingContext: true)
         await endStaleServerSessionIfNeeded()
+        guard credentialsAreCurrent(credentialContext) else { return }
         await start(
             bookId: bookId,
             language: language,
@@ -1198,7 +1397,9 @@ final class VoiceSessionPresenter {
         restoreStaleSessionIdFromPersistenceOrSession()
         if let sessionToCapture {
             Task { @MainActor in
-                if let id = await sessionToCapture.rishiSessionId {
+                if let receipt = await sessionToCapture.serverCreationReceipt {
+                    noteCreationReceipt(receipt)
+                } else if let id = await sessionToCapture.rishiSessionId {
                     noteRishiSessionId(id)
                 }
             }
@@ -1225,7 +1426,9 @@ final class VoiceSessionPresenter {
         restoreStaleSessionIdFromPersistenceOrSession()
         if let sessionToCapture {
             Task { @MainActor in
-                if let id = await sessionToCapture.rishiSessionId {
+                if let receipt = await sessionToCapture.serverCreationReceipt {
+                    noteCreationReceipt(receipt)
+                } else if let id = await sessionToCapture.rishiSessionId {
                     noteRishiSessionId(id)
                 }
             }
@@ -1250,9 +1453,10 @@ final class VoiceSessionPresenter {
 
     private func handleTerminalFailure(
         _ reason: VoiceSessionFailureReason,
-        sessionToken: UUID
+        sessionToken: UUID,
+        credentialContext: CredentialRequestContext?
     ) async {
-        guard activeSessionToken == sessionToken else { return }
+        guard activeSessionToken == sessionToken, credentialsAreCurrent(credentialContext) else { return }
         enterFailure(reason: reason)
         await sessionRegistry.close()
     }

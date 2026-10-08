@@ -34,7 +34,7 @@ struct StoreTests {
     func failedRetryClearsStaleCatalog() async {
         let store = Store(productLoader: { _ in
             throw StoreError.productRequestFailed
-        })
+        }, purchaseProcessing: .unavailable)
 
         await store.loadProducts()
 

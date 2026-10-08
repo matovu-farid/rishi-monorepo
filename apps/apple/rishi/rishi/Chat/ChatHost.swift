@@ -14,6 +14,7 @@ struct ConversationsListHost: View {
     @Environment(\.services) private var servicesEnv
 
     @State private var vm: ConversationsListViewModel
+    @State private var activationID: UUID?
 
     init(
         vm: ConversationsListViewModel,
@@ -37,11 +38,14 @@ struct ConversationsListHost: View {
         
         
         
-        .task {
-            servicesEnv?.sync.chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
+        .onAppear {
+            activationID = servicesEnv?.sync.chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
         }
         .onDisappear {
-            servicesEnv?.sync.chatRefreshAdapter.clearActive()
+            if let activationID {
+                servicesEnv?.sync.chatRefreshAdapter.clearActive(ifActivation: activationID)
+            }
+            activationID = nil
         }
     }
 }
@@ -63,6 +67,7 @@ struct ConversationChatHost: View {
     var body: some View {
         NavigationStack {
             ChatPanelView(viewModel: vm, initialQuote: nil)
+                .id(ObjectIdentifier(vm))
         }
     }
 }

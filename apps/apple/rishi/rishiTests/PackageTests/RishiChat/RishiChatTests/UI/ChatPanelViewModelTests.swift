@@ -1,6 +1,7 @@
 @testable import rishi
 import Testing
 import Foundation
+import Synchronization
 
 
 
@@ -12,7 +13,7 @@ import Foundation
 /// rendering, no network. Suite is `@MainActor` because the viewmodel itself
 /// is `@MainActor`-isolated.
 @MainActor
-@Suite("ChatPanelViewModel", .serialized)
+@Suite("ChatPanelViewModel", .serialized, .timeLimit(.minutes(1)))
 struct ChatPanelViewModelTests {
 
     // MARK: - Fixtures
@@ -119,17 +120,40 @@ struct ChatPanelViewModelTests {
         let f = makeFixture(script: .slow(token: "partial"))
         f.vm.send(query: "what is this book about")
 
-        // Give the stream a moment to persist the user message + start streaming.
-        for _ in 0..<50 {
-            if f.vm.streamingState.isStreaming { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
+        // The presentation flag precedes the service. Wait for its actual
+        // user write and token yield before exercising mid-turn cancellation.
+        await f.service.waitForSlowTurnStarted()
         f.vm.cancel()
         await f.vm.waitForActiveTask()
         #expect(f.vm.streamingState.isStreaming == false)
         #expect(f.vm.streamingState.streamingMessage == nil)
         // User message persisted before cancel; visible on reload.
         #expect(f.vm.messages.contains(where: { $0.role == .user }))
+    }
+
+    @Test("current canceled turn reloads history when a token already resumed its iterator")
+    func bufferedTokenCancellationReloadsHistory() async throws {
+        let conversation = Conversation(userId: UUID(), title: "buffered cancel")
+        let user = Message(conversationId: conversation.id, role: .user, content: "persisted")
+        let store = PanelHistoryStore(rows: [user])
+        let service = PanelControlledService()
+        let vm = ChatPanelViewModel(conversation: conversation, bookId: nil, chatService: service, messageStore: store)
+        vm.send(query: "ask")
+        await service.waitForTurns(1)
+        let turn = try #require(vm.activeTaskHandle)
+        defer { vm.cancel(); service.finishAll() }
+        // These synchronous MainActor calls resume the iterator with a token,
+        // then cancel before its next MainActor segment processes that event.
+        service.yield(.token("buffered"), turn: 0)
+        vm.cancel()
+        await turn.value
+        #expect(vm.messages == [user])
+        #expect(vm.streamingState.isStreaming == false)
+        #expect(vm.streamingState.streamingMessage == nil)
+        #expect(vm.streamingState.error == nil)
+        #expect(vm.successfulTurnRevision == 0)
+        #expect(vm.committedRawDraft == nil)
+        #expect(service.queries == ["ask"])
     }
 
     // MARK: - 5. error path
@@ -142,6 +166,125 @@ struct ChatPanelViewModelTests {
         #expect((f.vm.streamingState.error as? SampleError) == .boom)
         #expect(f.vm.streamingState.isStreaming == false)
     }
+    @Test("history failure retains rows and reload does not send again")
+    func historyFailureRetainsTranscript() async throws {
+        let conversation = Conversation(userId: UUID(), title: "fixture")
+        let message = Message(conversationId: conversation.id, role: .user, content: "kept")
+        let store = PanelHistoryStore(rows: [message])
+        let service = PanelControlledService()
+        let vm = ChatPanelViewModel(conversation: conversation, bookId: nil, chatService: service, messageStore: store)
+        await vm.loadHistory()
+        await store.setFailure(true)
+        await vm.loadHistory()
+        #expect(vm.messages == [message])
+        #expect(vm.historyError is SampleError)
+        #expect(!vm.isLoadingHistory)
+        await store.setFailure(false)
+        await vm.loadHistory()
+        #expect(vm.historyError == nil)
+        #expect(service.queries.isEmpty)
+    }
+
+    @Test("late history request cannot replace a newer transcript or error", arguments: [false, true])
+    func historyRequestOwnership(oldFailure: Bool) async {
+        let conversation = Conversation(userId: UUID(), title: "fixture")
+        let old = Message(conversationId: conversation.id, role: .user, content: "old")
+        let newer = Message(conversationId: conversation.id, role: .assistant, content: "new")
+        let store = PanelHistoryStore(rows: [old])
+        await store.setFailure(oldFailure)
+        let gate = PanelReadGate()
+        await store.holdNextRead(gate)
+        let vm = ChatPanelViewModel(conversation: conversation, bookId: nil, chatService: PanelControlledService(), messageStore: store)
+        let first = Task { await vm.loadHistory() }
+        defer { first.cancel(); Task { await gate.open() } }
+        await store.waitForReads(1)
+        #expect(vm.isLoadingHistory)
+        await store.setFailure(false)
+        await store.setRows([newer])
+        await vm.loadHistory()
+        await gate.open()
+        await first.value
+        #expect(vm.messages == [newer])
+        #expect(vm.historyError == nil)
+        #expect(!vm.isLoadingHistory)
+    }
+
+    @Test("old canceled turn history and defer cannot control a replacement turn")
+    func replacedTurnOwnership() async throws {
+        let conversation = Conversation(userId: UUID(), title: "fixture")
+        let store = PanelHistoryStore()
+        let service = PanelControlledService()
+        let vm = ChatPanelViewModel(conversation: conversation, bookId: nil, chatService: service, messageStore: store)
+        vm.send(query: "old")
+        await service.waitForTurns(1)
+        let oldTask = try #require(vm.activeTaskHandle)
+        let gate = PanelReadGate()
+        await store.holdNextRead(gate)
+        vm.cancel()
+        await store.waitForReads(1)
+        vm.send(query: "new")
+        await service.waitForTurns(2)
+        let newTask = try #require(vm.activeTaskHandle)
+        defer { vm.cancel(); service.finishAll(); Task { await gate.open() } }
+        await gate.open()
+        await oldTask.value
+        #expect(vm.streamingState.isStreaming)
+        #expect(vm.streamingState.error == nil)
+        #expect(vm.successfulTurnRevision == 0)
+        service.yield(.token("new token"), turn: 1)
+        service.yield(.completed, turn: 1)
+        service.finish(turn: 1)
+        await newTask.value
+        #expect(!vm.streamingState.isStreaming)
+        #expect(vm.committedRawDraft == "new")
+        #expect(vm.successfulTurnRevision == 1)
+        #expect(service.queries == ["old", "new"])
+    }
+
+    @Test("a replaced queued send never starts an obsolete request")
+    func queuedSendReplacement() async throws {
+        let conversation = Conversation(userId: UUID(), title: "queued")
+        let service = PanelControlledService()
+        let vm = ChatPanelViewModel(conversation: conversation, bookId: nil, chatService: service, messageStore: PanelHistoryStore())
+        vm.send(query: "obsolete")
+        let oldTask = try #require(vm.activeTaskHandle)
+        // Neither MainActor task can start before this synchronous replacement.
+        vm.send(query: "current")
+        let currentTask = try #require(vm.activeTaskHandle)
+        defer { vm.cancel(); service.finishAll() }
+        await service.waitForTurns(1)
+        await oldTask.value
+        #expect(service.queries == ["current"])
+        #expect(vm.streamingState.isStreaming)
+        service.yield(.completed, turn: 0)
+        service.finish(turn: 0)
+        await currentTask.value
+        #expect(vm.committedRawDraft == "current")
+        #expect(vm.successfulTurnRevision == 1)
+    }
+
+    @Test("only matching committed raw draft clears; failure and cancel retain input")
+    func committedDraftOwnership() async {
+        let f = makeFixture(script: .happy(tokens: ["answer"]))
+        f.vm.send(query: "  submitted ")
+        await f.vm.waitForActiveTask()
+        #expect(f.vm.committedRawDraft == "  submitted ")
+        #expect(f.vm.draftAfterCommittedTurn("  submitted ") == "")
+        #expect(f.vm.draftAfterCommittedTurn("edited later") == "edited later")
+        #expect(f.vm.draftAfterCommittedTurn("submitted") == "submitted")
+        let failing = makeFixture(script: .error(SampleError.boom))
+        failing.vm.send(query: "failed draft")
+        await failing.vm.waitForActiveTask()
+        #expect(failing.vm.successfulTurnRevision == 0)
+        #expect(failing.vm.draftAfterCommittedTurn("failed draft") == "failed draft")
+        let canceled = makeFixture(script: .slow(token: "partial"))
+        canceled.vm.send(query: "canceled draft")
+        canceled.vm.cancel()
+        await canceled.vm.waitForActiveTask()
+        #expect(canceled.vm.successfulTurnRevision == 0)
+        #expect(canceled.vm.draftAfterCommittedTurn("canceled draft") == "canceled draft")
+    }
+
 }
 
 // MARK: - Fakes
@@ -165,6 +308,9 @@ final class RishiChatFakeChatService: ChatService, @unchecked Sendable {
     private let messageStore: any MessageStore
     private let lock = NSLock()
     private var _streamCallCount = 0
+    private let slowTurnStarted = PanelCountSignal()
+
+    func waitForSlowTurnStarted() async { await slowTurnStarted.wait(1) }
 
     var streamCallCount: Int {
         lock.lock(); defer { lock.unlock() }
@@ -182,6 +328,7 @@ final class RishiChatFakeChatService: ChatService, @unchecked Sendable {
         let script = self.script
         let convoId = conversationId
         let store = messageStore
+        let slowTurnStarted = self.slowTurnStarted
         return AsyncThrowingStream { continuation in
             let task = Task {
                 // Always persist the user message first (mirrors RishiChatService).
@@ -204,6 +351,7 @@ final class RishiChatFakeChatService: ChatService, @unchecked Sendable {
                     continuation.finish()
                 case .slow(let token):
                     continuation.yield(.token(token))
+                    await slowTurnStarted.record(1)
                     // Sleep until cancelled.
                     do {
                         try await Task.sleep(nanoseconds: 5_000_000_000)
@@ -230,4 +378,76 @@ extension ChatPanelViewModel {
     func waitForActiveTask() async {
         await activeTaskHandle?.value
     }
+}
+
+
+private actor PanelReadGate {
+    private var opened = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func wait() async { if !opened { await withCheckedContinuation { waiting.append($0) } } }
+    func open() { opened = true; let pending = waiting; waiting = []; for continuation in pending { continuation.resume() } }
+}
+
+private actor PanelCountSignal {
+    private var count = 0
+    private var waiting: [(Int, CheckedContinuation<Void, Never>)] = []
+    func record(_ count: Int) {
+        self.count = count
+        let ready = waiting.filter { $0.0 <= count }
+        waiting.removeAll { $0.0 <= count }
+        for (_, continuation) in ready { continuation.resume() }
+    }
+    func wait(_ target: Int) async {
+        if count < target { await withCheckedContinuation { waiting.append((target, $0)) } }
+    }
+}
+
+private actor PanelHistoryStore: MessageStore {
+    private var rows: [Message]
+    private var fails = false
+    private var nextGate: PanelReadGate?
+    private var reads = 0
+    private let signal = PanelCountSignal()
+    init(rows: [Message] = []) { self.rows = rows }
+    func setFailure(_ value: Bool) { fails = value }
+    func setRows(_ value: [Message]) { rows = value }
+    func holdNextRead(_ gate: PanelReadGate) { nextGate = gate }
+    func waitForReads(_ count: Int) async { await signal.wait(count) }
+    func messages(for conversationId: ConversationID) async throws -> [Message] {
+        let captured = rows.filter { $0.conversationId == conversationId }
+        let failure = fails
+        let gate = nextGate
+        nextGate = nil
+        reads += 1
+        await signal.record(reads)
+        await gate?.wait()
+        if failure { throw SampleError.boom }
+        return captured
+    }
+    func message(_ id: MessageID) async throws -> Message? { rows.first { $0.id == id } }
+    func upsert(_ message: Message) async throws { rows.removeAll { $0.id == message.id }; rows.append(message) }
+    func delete(_ id: MessageID) async throws { rows.removeAll { $0.id == id } }
+}
+
+private final class PanelControlledService: ChatService, Sendable {
+    private struct State {
+        var queries: [String] = []
+        var streams: [AsyncThrowingStream<ChatEvent, Error>.Continuation] = []
+    }
+    private let state = Mutex(State())
+    private let signal = PanelCountSignal()
+    var queries: [String] { state.withLock { $0.queries } }
+    func stream(query: String, bookId: BookID?) -> AsyncThrowingStream<ChatEvent, Error> {
+        let pair = AsyncThrowingStream<ChatEvent, Error>.makeStream()
+        let count = state.withLock { value in
+            value.queries.append(query); value.streams.append(pair.continuation)
+            return value.queries.count
+        }
+        Task { await signal.record(count) }
+        return pair.stream
+    }
+    func waitForTurns(_ count: Int) async { await signal.wait(count) }
+    func yield(_ event: ChatEvent, turn: Int) { state.withLock { $0.streams[turn] }.yield(event) }
+    func finish(turn: Int) { state.withLock { $0.streams[turn] }.finish() }
+    func finishAll() { for stream in state.withLock({ $0.streams }) { stream.finish() } }
 }

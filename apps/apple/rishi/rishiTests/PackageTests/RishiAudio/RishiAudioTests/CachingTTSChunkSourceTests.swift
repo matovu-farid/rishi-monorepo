@@ -31,6 +31,78 @@ struct CachingTTSChunkSourceTests {
         TTSStreamRequest(text: text, voice: voice, speed: speed, passageId: nil)
     }
 
+    @Test("missing partial at promotion does not interrupt healthy audio")
+    func promotionFailureKeepsHealthyAudio() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 1024 * 1024)
+        let chunks = [Data([1, 2]), Data([3, 4]), Data([5])]
+        let upstream = BlockingAfterFirstChunkSource(chunks: chunks)
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+        var iterator = cache.stream(request: makeRequest()).makeAsyncIterator()
+        let first = try #require(try await iterator.next())
+        await upstream.waitForFirstChunk()
+        let partial = try #require(try FileManager.default.contentsOfDirectory(
+            at: tmp, includingPropertiesForKeys: nil
+        ).first { $0.pathExtension == "partial" })
+        try FileManager.default.removeItem(at: partial)
+        await upstream.release()
+        var received = [first.data]
+        do {
+            while let chunk = try await iterator.next() { received.append(chunk.data) }
+        } catch {
+            Issue.record("Optional cache promotion must not fail playback: \(error)")
+        }
+        #expect(received == chunks)
+        #expect(await upstream.requestCount() == 1)
+        #expect(try FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @Test("cache write failure streams every byte once and leaves no cache entry")
+    func writeFailureKeepsHealthyAudio() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 1024 * 1024)
+        let chunks = [Data([1, 2]), Data([3]), Data([4, 5])]
+        let upstream = FakeTTSChunkSource(chunks: chunks)
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store, writeChunk: { _, _ in
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        var received: [Data] = []
+        do {
+            for try await chunk in cache.stream(request: makeRequest()) { received.append(chunk.data) }
+        } catch {
+            Issue.record("Optional cache write must not fail playback: \(error)")
+        }
+        #expect(received == chunks)
+        #expect(await upstream.requests().count == 1)
+        #expect(try FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @Test("a cache write fault cannot mask the later upstream error or cancellation", arguments: [false, true])
+    func writeFailurePreservesUpstreamTerminal(cancelled: Bool) async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 1024 * 1024)
+        let upstream = CacheTerminalFaultSource(cancelled: cancelled)
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store, writeChunk: { _, _ in
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        var received: [Data] = []
+        var failure: Error?
+        do {
+            for try await chunk in cache.stream(request: makeRequest()) { received.append(chunk.data) }
+        } catch { failure = error }
+        #expect(received == [Data([1]), Data([2])])
+        if cancelled {
+            #expect(failure is CancellationError)
+        } else {
+            #expect((failure as? URLError)?.code == .networkConnectionLost)
+        }
+        #expect(await upstream.requestCount() == 1)
+        #expect(try FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil).isEmpty)
+    }
+
     // MARK: - 1. Hit serves from disk without invoking upstream
 
     @Test("hit serves from disk without invoking upstream")
@@ -671,4 +743,21 @@ private actor CancellationWindowSource: TTSChunkSource {
             cancellationReleaseWaiters.append(continuation)
         }
     }
+}
+
+private actor CacheTerminalFaultSource: TTSChunkSource {
+    private let cancelled: Bool
+    private var count = 0
+    init(cancelled: Bool) { self.cancelled = cancelled }
+    func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        count += 1
+        return AsyncThrowingStream { continuation in
+            for index in 0..<2 {
+                continuation.yield(TTSChunk.make(request: request, sequenceIndex: index, data: Data([UInt8(index + 1)])))
+            }
+            if cancelled { continuation.finish(throwing: CancellationError()) }
+            else { continuation.finish(throwing: URLError(.networkConnectionLost)) }
+        }
+    }
+    func requestCount() -> Int { count }
 }

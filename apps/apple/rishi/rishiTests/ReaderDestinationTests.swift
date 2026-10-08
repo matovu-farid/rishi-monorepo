@@ -57,26 +57,21 @@ struct ReaderDestinationTests {
         #expect(plan.restartAt != supersededCursor)
     }
 
-    @Test("voice handoff cannot start narration independently while following a shared controller")
+    @Test("voice handoff uses tracked startup and follower authorization")
     func voiceHandoffStartIsFollowerGatedAndAvailableOutsideSharedReading() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("rishi/Reader/ReaderDestination.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let handoffStart = try #require(source.range(of: "onOpenReadAloud: {"))
-        let handoffEnd = try #require(source.range(of: "onEndVoice:", range: handoffStart.lowerBound..<source.endIndex))
-        let handoff = source[handoffStart.lowerBound..<handoffEnd.lowerBound]
-        let followerGate = try #require(
-            handoff.range(of: "guard !sharedIsFollowingController && !sharedControlsLocked else { return }")
-        )
-        let localStart = try #require(handoff.range(of: "playbackOwner.start("))
-        let localResume = try #require(handoff.range(of: "openReadAloudFromVoice(vm: vm)"))
-        let requestEnd = try #require(handoff.range(of: "await dependencies.voicePresenter.requestEnd()"))
-
-        #expect(requestEnd.lowerBound < followerGate.lowerBound)
-        #expect(followerGate.lowerBound < localStart.lowerBound)
-        #expect(followerGate.lowerBound < localResume.lowerBound)
+        let start = try #require(source.range(of: "private func endVoiceForReadAloud"))
+        let end = try #require(source.range(of: "private func startReadAloud", range: start.lowerBound..<source.endIndex))
+        let handoff = source[start.lowerBound..<end.lowerBound]
+        #expect(handoff.contains("readAloudStartTask = Task"))
+        #expect(handoff.contains("readAloudStartRequest == request"))
+        #expect(handoff.contains("!sharedIsFollowingController && !sharedControlsLocked"))
+        #expect(handoff.contains("ReaderVoiceReadAloudHandoff.perform"))
+        #expect(handoff.contains("resumeAfterVoiceIfNeeded()"))
+        #expect(handoff.contains("startReadAloud()"))
     }
 
     @Test("voice transport prewarm stays gated until the reader tour requests it")
@@ -269,12 +264,7 @@ struct ReaderDestinationTests {
         managedEffects.register(managedPermit)
         let managedOwner = try BookSourceOwner(
             url: URL(fileURLWithPath: "/tmp/backfill-managed.epub"),
-            access: .account(BookReadingPermit(
-                ownerID: ownerID,
-                accountGeneration: generation,
-                bookID: bookID,
-                contentRevision: promotedRevision
-            )),
+            access: .account(selectedReadingPermit),
             sourceAccessPermit: managedPermit,
             effectAuthority: managedEffects
         )
@@ -384,32 +374,27 @@ struct ReaderDestinationTests {
         #expect(await !indexing.scheduled.didSchedule)
     }
 
-    @Test("reader exit tears down shared playback and preserves platform-specific local host behavior")
+    @Test("reader exit saves promptly and retains its attachment through terminal audio persistence")
     func readerExitStopsReadAloud() throws {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("rishi/Reader/ReaderDestination.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let cleanupStart = try #require(source.range(of: ".onDisappear {\n            didScheduleReaderIndexBackfill = false"))
-        let cleanupEnd = try #require(source.range(of: ".overlay(alignment: .bottomTrailing)", range: cleanupStart.lowerBound..<source.endIndex))
-        let cleanup = source[cleanupStart.lowerBound..<cleanupEnd.lowerBound]
-        let sharedTeardownStart = try #require(cleanup.range(of: "if sharedReadingCoordinator != nil {"))
-        let sharedTeardownEnd = try #require(cleanup.range(
-            of: "}\n#if !targetEnvironment(macCatalyst)",
-            range: sharedTeardownStart.lowerBound..<cleanup.endIndex
-        ))
-        let sharedTeardown = cleanup[sharedTeardownStart.lowerBound..<sharedTeardownEnd.lowerBound]
-        let stop = try #require(sharedTeardown.range(of: "await dependencies.playbackOwner.stop(host: readAloudHost)"))
-        let clearRate = try #require(sharedTeardown.range(of: "await readAloud?.clearSharedSessionRate(fence: sharedRateExitFence)"))
-
-        #expect(stop.lowerBound < clearRate.lowerBound)
-
-        let localRelease = try #require(cleanup.range(
-            of: "#if !targetEnvironment(macCatalyst)\n                    await dependencies.playbackOwner.release(host: readAloudHost)\n#endif"
-        ))
-        let localElse = try #require(cleanup.range(of: "else {", range: sharedTeardownEnd.lowerBound..<cleanup.endIndex))
-        #expect(localElse.lowerBound < localRelease.lowerBound)
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: project.appendingPathComponent("rishi/Reader/ReaderDestination.swift"), encoding: .utf8)
+        let attachment = try String(contentsOf: project.appendingPathComponent("rishi/Reader/ReaderSourceAttachment.swift"), encoding: .utf8)
+        let closeStart = try #require(attachment.range(of: "    func close("))
+        let close = attachment[closeStart.lowerBound...]
+        let initial = try #require(close.range(of: "let initial = await drain.flush"))
+        let stop = try #require(close.range(of: "await stop()"))
+        let final = try #require(close.range(of: "let final = await drain.flush"))
+        let dispose = try #require(close.range(of: "dispose()"))
+        #expect(initial.lowerBound < stop.lowerBound)
+        #expect(stop.lowerBound < final.lowerBound)
+        #expect(final.lowerBound < dispose.lowerBound)
+        #expect(source.contains("await attachment.close(using: drain, stop:"))
+        #expect(source.contains("await exitingAttachment.close(using: drain, stop: stop"))
+        #expect(!source.contains("exitingAttachment?.dispose()"))
+        #expect(source.contains("await playbackOwner.stop(host: exitingHost, ifGeneration: exitingGeneration)"))
+        #expect(source.contains("readAloud === exitingController"))
+        #expect(source.contains("readAloudStartRequest == exitingStartRequest"))
+        #expect(source.contains("resetSharedSessionAfterStop"))
     }
 
     @Test("library boundaries drain registered voice cleanup on iOS and macOS")
@@ -425,33 +410,102 @@ struct ReaderDestinationTests {
         #expect(source.contains("cleanupRegisteredReaderSessions()"))
     }
 
-    @Test("opening another book waits for registered voice cleanup")
-    func openingBookWaitsForVoiceCleanup() throws {
+    @Test("opening another book schedules reader voice cleanup before presentation, and voice start joins it")
+    func openingBookSchedulesCleanupBeforePresentationAndVoiceStartJoinsIt() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("rishi/Library/LibraryTabView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let openBookStart = try #require(source.range(of: "private func openBook(_ book: Book) -> Bool"))
+        let openBookEnd = try #require(source.range(
+            of: "private func handleImported(",
+            range: openBookStart.lowerBound..<source.endIndex
+        ))
+        let openBook = source[openBookStart.lowerBound..<openBookEnd.lowerBound]
 
-        let cleanup = try #require(source.range(of: "await dependencies.voicePresenter.cleanupRegisteredReaderSessions()"))
-        let route = source.range(of: "router.path.append(ReaderRoute.route(for: book))")
-        #expect(route != nil)
-        #expect(cleanup.lowerBound < route!.lowerBound)
+        let scheduledCleanup = try #require(openBook.range(of: "dependencies.voicePresenter.scheduleRegisteredReaderCleanup()"))
+        let route = try #require(openBook.range(of: "router.path.append(ReaderRoute.route(for: book))"))
+        let window = try #require(openBook.range(of: "readerWindows.open(book: book, user: user)"))
+        #expect(scheduledCleanup.lowerBound < route.lowerBound)
+        #expect(scheduledCleanup.lowerBound < window.lowerBound)
+        #expect(try voiceStartJoinsScheduledReaderCleanup())
     }
 
-    @Test("deep-link reader replacement waits for registered voice cleanup")
-    func deepLinkReaderReplacementWaitsForVoiceCleanup() throws {
+    @Test("deep-link replacement schedules cleanup before routing, and voice start joins it")
+    func deepLinkReaderReplacementSchedulesCleanupBeforeRoutingAndVoiceStartJoinsIt() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("rishi/DeepLink/DeepLinkHandlingModifier.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        let cleanup = try #require(
-            source.range(of: "await services.voice.presenter.cleanupRegisteredReaderSessions()")
-        )
-        let handle = try #require(source.range(of: "router.handle(") )
-        #expect(cleanup.lowerBound < handle.lowerBound)
+        let forwardingStart = try #require(source.range(of: "beforePresentingBook: {"))
+        let firstForwardingEnd = try #require(source.range(
+            of: "\n                    }",
+            range: forwardingStart.lowerBound..<source.endIndex
+        ))
+        let firstForwarding = source[forwardingStart.lowerBound..<firstForwardingEnd.lowerBound]
+        let scheduledCleanup = try #require(firstForwarding.range(of: "services.voice.presenter.scheduleRegisteredReaderCleanup()"))
+        let callbackResult = try #require(firstForwarding.range(of: "return true"))
+        #expect(scheduledCleanup.lowerBound < callbackResult.lowerBound)
+
+        let routerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/App/AppRouter.swift")
+        let router = try String(contentsOf: routerURL, encoding: .utf8)
+        let handleStart = try #require(router.range(of: "func handle("))
+        let handleEnd = try #require(router.range(
+            of: "private func enqueuePendingAccountURL(",
+            range: handleStart.lowerBound..<router.endIndex
+        ))
+        let handle = router[handleStart.lowerBound..<handleEnd.lowerBound]
+        let awaitCallback = try #require(handle.range(of: "guard await beforePresentingBook() else"))
+        let presentBook = try #require(handle.range(of: "present(book: book)"))
+        #expect(awaitCallback.lowerBound < presentBook.lowerBound)
+        #expect(try voiceStartJoinsScheduledReaderCleanup())
+    }
+
+    private func voiceStartJoinsScheduledReaderCleanup() throws -> Bool {
+        let entryURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/Voice/ReaderVoiceEntry.swift")
+        let entry = try String(contentsOf: entryURL, encoding: .utf8)
+        let presentVoiceStart = try #require(entry.range(of: "func presentVoice("))
+        let presenterStart = try #require(entry.range(
+            of: "await voicePresenter.start(",
+            range: presentVoiceStart.lowerBound..<entry.endIndex
+        ))
+        #expect(presentVoiceStart.lowerBound < presenterStart.lowerBound)
+
+        let presenterURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/Voice/VoiceSessionPresenter.swift")
+        let presenter = try String(contentsOf: presenterURL, encoding: .utf8)
+        let startStart = try #require(presenter.range(of: "    func start("))
+        let startEnd = try #require(presenter.range(
+            of: "\n    }\n",
+            range: startStart.lowerBound..<presenter.endIndex
+        ))
+        let start = presenter[startStart.lowerBound..<startEnd.lowerBound]
+        let cleanupCheck = try #require(start.range(of: "if (!canResumeParkedSameReader && cleanupQueue.hasPending(asideFrom: nil))"))
+        let cleanupAwait = try #require(start.range(of: "guard await cleanupRegisteredReaderSessions() else"))
+        let sessionStart = try #require(start.range(of: "await session.start("))
+        guard cleanupCheck.lowerBound < cleanupAwait.lowerBound,
+              cleanupAwait.lowerBound < sessionStart.lowerBound else { return false }
+
+        let cleanupStart = try #require(presenter.range(of: "func cleanupRegisteredReaderSessions() async -> Bool"))
+        let cleanupEnd = try #require(presenter.range(
+            of: "func scheduleRegisteredReaderCleanup()",
+            range: cleanupStart.lowerBound..<presenter.endIndex
+        ))
+        let cleanup = presenter[cleanupStart.lowerBound..<cleanupEnd.lowerBound]
+        guard let join = cleanup.range(of: "return await readerCleanupTask.value"),
+              let awaitWork = cleanup.range(of: "let result = await readerCleanupTask!.value") else { return false }
+        return join.lowerBound < awaitWork.lowerBound
     }
 
     @Test("deep-link router awaits cleanup before presenting a resolved book")

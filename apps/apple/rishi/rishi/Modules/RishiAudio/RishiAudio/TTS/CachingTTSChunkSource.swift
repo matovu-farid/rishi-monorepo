@@ -41,11 +41,23 @@ public actor CachingTTSChunkSource: TTSChunkSource {
 
     private let upstream: any TTSChunkSource
     private let store: TTSAudioCacheStore
+    private let writeChunk: @Sendable (FileHandle, Data) throws -> Void
     private var inFlight: [String: InFlightRequest] = [:]
 
     public init(upstream: any TTSChunkSource, store: TTSAudioCacheStore) {
         self.upstream = upstream
         self.store = store
+        self.writeChunk = { try $0.write(contentsOf: $1) }
+    }
+
+    init(
+        upstream: any TTSChunkSource,
+        store: TTSAudioCacheStore,
+        writeChunk: @escaping @Sendable (FileHandle, Data) throws -> Void
+    ) {
+        self.upstream = upstream
+        self.store = store
+        self.writeChunk = writeChunk
     }
 
     public nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
@@ -272,7 +284,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
             for try await chunk in await upstream.stream(request: request) {
                 try Task.checkCancellation()
                 publish(key: key, chunk: chunk)
-                try handle.write(contentsOf: chunk.data)
+                try writeChunk(handle, chunk.data)
                 wroteBytes += chunk.count
             }
             try Task.checkCancellation()

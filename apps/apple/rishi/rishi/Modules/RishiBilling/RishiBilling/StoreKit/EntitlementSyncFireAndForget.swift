@@ -1,68 +1,14 @@
 import Foundation
 
-
-
-/// App DI sets this once at bootstrap so StoreKit singleton paths
-/// (``CustomerEntitlements``, ``RestoreService``) can refresh
-/// ``EntitlementService`` after a successful entitlement-sync POST.
-/// Production wires it to ``EntitlementService/refreshSnapshot()``.
-public enum EntitlementSyncHooks {
-    nonisolated(unsafe) public static var onSynced: (@Sendable () async -> Void)?
-    nonisolated(unsafe) public static var workerClient: WorkerClient?
-}
-
-/// Outcome of a successful HTTP round-trip to entitlement-sync.
-/// `verified: false` is a business reject (permanent / mismatch), not a
-/// transport failure — callers should finish the StoreKit transaction.
 public struct EntitlementSyncResult: Sendable, Equatable {
     public let verified: Bool
     public let reason: String?
-
-    public init(verified: Bool, reason: String?) {
+    public init(verified: Bool, reason: String? = nil) {
         self.verified = verified
         self.reason = reason
     }
 }
 
-/// Awaits entitlement sync for call sites that are bare singletons with no
-/// dependency-injection surface today (``Store``, ``CustomerEntitlements``,
-/// ``RestoreService``). Uses the WorkerClient installed by the app composition
-/// root, so StoreKit callbacks cannot accidentally target a different API.
-///
-/// On HTTP success with `verified: true`, invokes ``EntitlementSyncHooks/onSynced``
-/// so Settings/gates can refresh without waiting for paywall dismiss or the
-/// next foreground. On HTTP success with `verified: false`, returns the
-/// result without calling `onSynced` (caller finishes the transaction).
-/// On transport failure, logs and rethrows so the caller can leave the
-/// StoreKit transaction unfinished for `Transaction.unfinished` / `updates` replay.
-///
-/// ``PurchaseService`` does NOT use this helper — it already has a real DI
-/// graph (``EntitlementSyncClient``) and keeps using that for testability.
-func syncEntitlement(jws: String) async throws -> EntitlementSyncResult {
-    do {
-        guard let workerClient = EntitlementSyncHooks.workerClient else {
-            throw EntitlementSyncConfigurationError.workerClientUnavailable
-        }
-        let response = try await workerClient.send(
-            EntitlementSyncEndpoint(body: .init(transactionJWS: jws))
-        )
-        Log.event("iap.entitlement_sync.done", level: .info,
-                  data: ["verified": "\(response.verified)"])
-        let result = EntitlementSyncResult(
-            verified: response.verified,
-            reason: response.reason
-        )
-        if result.verified {
-            await EntitlementSyncHooks.onSynced?()
-        }
-        return result
-    } catch {
-        Log.event("iap.entitlement_sync.failed", level: .warning,
-                  data: ["error": String(describing: error)])
-        throw error
-    }
-}
-
-enum EntitlementSyncConfigurationError: Error, Sendable, Equatable {
+public enum EntitlementSyncConfigurationError: Error {
     case workerClientUnavailable
 }

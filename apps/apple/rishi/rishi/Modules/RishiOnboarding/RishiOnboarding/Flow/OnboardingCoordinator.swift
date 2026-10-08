@@ -25,10 +25,22 @@ public final class OnboardingCoordinator {
 
     public internal(set) var currentStage: Stage = .welcome
 
+    private(set) var isTransitioning = false
+
     private let state: any OnboardingState
 
     public init(state: any OnboardingState) {
         self.state = state
+    }
+
+    func beginTransition() -> Bool {
+        guard !isTransitioning else { return false }
+        isTransitioning = true
+        return true
+    }
+
+    func endTransition() {
+        isTransitioning = false
     }
 
     /// Move to the next stage. Honors `state.primerShownMic` to skip the
@@ -56,6 +68,7 @@ public final class OnboardingCoordinator {
 
     /// Move back one stage. Clamped at `.welcome`.
     public func back() {
+        guard !isTransitioning else { return }
         let prev: Stage
         switch currentStage {
         case .welcome:              prev = .welcome

@@ -67,6 +67,16 @@ public enum AppAccountToken {
         return [.appAccountToken(derive(userId: session.userId))]
     }
 
+    /// Inactive canonical purchase reader. Uses the captured raw wire owner,
+    /// never a local derived UUID or an independently constructed session store.
+    static func currentPurchaseOptions(
+        snapshot: CredentialSnapshot,
+        authority: SessionCredentialAuthority
+    ) throws -> Set<Product.PurchaseOption> {
+        _ = try authority.snapshot(for: .normal(snapshot.lease))
+        return [.appAccountToken(derive(userId: snapshot.lease.rawUserID))]
+    }
+
     // MARK: - Byte plumbing (mirrors the Worker's uuidStringToBytes 1:1)
 
     private static func uuidStringToBytes(_ uuidString: String) -> [UInt8] {

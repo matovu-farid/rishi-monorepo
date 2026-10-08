@@ -17,6 +17,7 @@ import ReadiumShared
 /// through the VM facade in `EPUBReadAloudChapterContinuationTests` /
 /// `EPUBReadAloudStartIndexTests`; this suite pins the seam directly.
 @Suite("EPUBReadAloudCursor", .serialized)
+@MainActor
 struct EPUBReadAloudCursorTests {
 
     private func rationalityURL() throws -> URL {

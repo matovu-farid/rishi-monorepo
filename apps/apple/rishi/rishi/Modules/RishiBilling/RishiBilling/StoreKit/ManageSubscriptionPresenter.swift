@@ -121,6 +121,12 @@ public final class ManageSubscriptionPresenter {
     /// on the next successful call.
     public private(set) var lastError: Error?
 
+    /// Number of native subscription-sheet invocations still in flight.
+    public private(set) var activePresentationCount = 0
+
+    /// Whether at least one native subscription-sheet invocation is in flight.
+    public var isPresenting: Bool { activePresentationCount > 0 }
+
     public init(invoker: any ManageSubscriptionInvoker = DefaultManageSubscriptionInvoker()) {
         self.invoker = invoker
     }
@@ -129,6 +135,9 @@ public final class ManageSubscriptionPresenter {
     /// ``lastError`` rather than thrown — SwiftUI tap handlers don't
     /// have a clean place to handle a throwing async call inline.
     public func present() async {
+        activePresentationCount += 1
+        defer { activePresentationCount -= 1 }
+
         do {
             let outcome = try await invoker.present()
             self.lastOutcome = outcome

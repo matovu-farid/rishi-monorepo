@@ -8,15 +8,30 @@ public struct SampleOrImportScreen: View {
     public let onUseSample: () -> Void
     public let onImport: () -> Void
     public let onSkip: () -> Void
+    public let isSamplePreparing: Bool
+    public let isSampleRetryable: Bool
+    public let sampleFailureMessage: String?
+    public let recoveryMessage: String?
+    public let sampleUnavailable: Bool
 
     public init(
         onUseSample: @escaping () -> Void,
         onImport: @escaping () -> Void,
-        onSkip: @escaping () -> Void
+        onSkip: @escaping () -> Void,
+        isSamplePreparing: Bool = false,
+        isSampleRetryable: Bool = false,
+        sampleFailureMessage: String? = nil,
+        recoveryMessage: String? = nil,
+        sampleUnavailable: Bool = false
     ) {
         self.onUseSample = onUseSample
         self.onImport = onImport
         self.onSkip = onSkip
+        self.isSamplePreparing = isSamplePreparing
+        self.isSampleRetryable = isSampleRetryable
+        self.sampleFailureMessage = sampleFailureMessage
+        self.recoveryMessage = recoveryMessage
+        self.sampleUnavailable = sampleUnavailable
     }
 
     public var body: some View {
@@ -38,6 +53,24 @@ public struct SampleOrImportScreen: View {
                     .foregroundStyle(RishiColor.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, RishiSpacing.l)
+
+                if let recoveryMessage {
+                    Text(recoveryMessage)
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, RishiSpacing.l)
+                        .accessibilityIdentifier("onboarding-sample-recovery")
+                }
+
+                if let sampleFailureMessage {
+                    Text(sampleFailureMessage)
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, RishiSpacing.l)
+                        .accessibilityIdentifier("onboarding-sample-error")
+                }
             }
         } actions: {
             VStack(spacing: RishiSpacing.m) {
@@ -50,22 +83,26 @@ public struct SampleOrImportScreen: View {
                 .buttonStyle(.borderedProminent)
                 .tint(RishiColor.accent)
                 .accessibilityIdentifier("onboarding-sample-import")
+                .disabled(isSamplePreparing)
 
                 Button(action: onUseSample) {
-                    Text("Use a sample book")
+                    Text(isSamplePreparing ? "Preparing your sample…" : isSampleRetryable ? "Try sample again" : "Use a sample book")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
                         .onboardingCTAWidth()
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("onboarding-sample-use")
+                .disabled(isSamplePreparing || sampleUnavailable)
 
                 Button("Skip for now", action: onSkip)
                     .foregroundStyle(RishiColor.textSecondary)
                     .accessibilityIdentifier("onboarding-sample-skip")
+                    .disabled(isSamplePreparing)
             }
             .padding(.horizontal, RishiSpacing.l)
         }
+        .interactiveDismissDisabled(isSamplePreparing)
     }
 }
 

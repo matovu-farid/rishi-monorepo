@@ -17,13 +17,10 @@ import Observation
 /// selections need distinct CFI endpoints, that's a schema bump
 /// (`epub-v2`) with a decoder fallback that still accepts `epub-v1`.
 ///
-/// **Storage note.** `ReaderViewModel` is `@Observable final class
-/// @unchecked Sendable` (not `@MainActor`). These CRUD methods are
-/// `nonisolated async` — their array writes run on the generic executor
-/// AFTER `await store.…` resumes, so two concurrent calls would race on a
-/// plain stored array. The highlights cache therefore lives in an external
-/// `NSLock`-guarded, `ObjectIdentifier`-keyed box (identical in shape to
-/// ``PDFReaderViewModel+Highlights``). `@Observable` cannot track the
+/// **Storage note.** These CRUD methods inherit ReaderViewModel's MainActor
+/// isolation, including their continuations after store operations. The
+/// existing external `NSLock`-guarded, `ObjectIdentifier`-keyed cache remains
+/// unchanged in this migration. `@Observable` cannot track the
 /// external box, so every mutation bumps a tracked property (`theme`) via an
 /// identity assignment to force SwiftUI re-evaluation.
 extension ReaderViewModel {

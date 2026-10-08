@@ -1,8 +1,7 @@
-
 import Foundation
 
-
 struct PaywallFeature: Identifiable, Equatable {
-    let name: String
+    let request: PaywallRequest
+    var name: String { request.name }
     var id: String { name }
 }

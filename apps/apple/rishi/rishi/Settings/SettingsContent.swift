@@ -7,6 +7,10 @@
 import SwiftUI
 
 struct SettingsContentDependencies {
+    let credentialAuthority: SessionCredentialAuthority
+    let credentialSnapshot: CredentialSnapshot
+    let customerEntitlements: CustomerEntitlements
+    let store: Store
     let workerClient: WorkerClient
     let readerDefaults: AppReaderDefaults
     let ttsSettingsStore: any TTSSettingsStore
@@ -34,7 +38,7 @@ struct SettingsContent: View {
     @Environment(\.signOut) private var signOut
     @Environment(CurrentUserBox.self) private var currentUserBox
     @State private var displayedUser: User
-    @State private var customerEntitlements = CustomerEntitlements.shared
+    private var customerEntitlements: CustomerEntitlements { dependencies.customerEntitlements }
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
@@ -124,11 +128,13 @@ struct SettingsContent: View {
         .sheet(isPresented: $showUsernameEditor) {
             UsernameEditorView(username: displayedUser.username) { username in
                 let updated = try await dependencies.workerClient.send(
-                    UserUpdateEndpoint(username: username)
+                    UserUpdateEndpoint(username: username), credentialContext: .normal(dependencies.credentialSnapshot.lease)
                 )
                 await MainActor.run {
-                    displayedUser = updated
-                    currentUserBox.signIn(user: updated)
+                    _ = dependencies.credentialAuthority.performIfCurrent(dependencies.credentialSnapshot.lease) {
+                        displayedUser = updated
+                        currentUserBox.signIn(user: updated)
+                    }
                 }
                 return updated
             }
@@ -140,10 +146,9 @@ struct SettingsContent: View {
         }
         .rishiSubscriptionPresentation(isPresented: $showSubscriptions, onDismiss: {
             Task {
-            await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(
-                    reason: .foreground
-                )
-                guard pendingSubscriptionConfirmation else { return }
+            _ = await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
+                    credentialContext: .normal(dependencies.credentialSnapshot.lease))
+                guard dependencies.credentialAuthority.isCurrent(dependencies.credentialSnapshot.lease), pendingSubscriptionConfirmation else { return }
                 await MainActor.run {
                     pendingSubscriptionConfirmation = false
                     showSubscriptionConfirmation = true
@@ -155,15 +160,17 @@ struct SettingsContent: View {
                     dependencies: SubscriptionDependencies(
                         groupID: dependencies.groupID,
                         entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
-                        restoreService: dependencies.restoreService
-                    ),
+                        restoreService: dependencies.restoreService,
+                        customerEntitlements: dependencies.customerEntitlements, store: dependencies.store
+                    ), credentialAuthority: dependencies.credentialAuthority,
+                    credentialSnapshot: dependencies.credentialSnapshot,
                     onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
                 .environment(dependencies.entitlementSnapshotStore)
                 .environment(dependencies.manageSubscriptionPresenter)
-                .environment(Store.shared)
+                .environment(dependencies.store)
             } else {
                 NavigationStack {
                     ContentUnavailableView(

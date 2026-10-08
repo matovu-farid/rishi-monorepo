@@ -1,43 +1,25 @@
 import Foundation
 import Observation
 
-
-
-/// Owns the in-flight chat ``Task`` and exposes it to ``ChatPanelView``.
-///
-/// Construction is the app layer's responsibility: the viewmodel needs the
-/// resolved ``Conversation`` (so the panel is bound to a `(userId, bookId)`
-/// pair already), a ``ChatService`` to drive the turn, and a ``MessageStore``
-/// for history reload after each turn / cancel / error.
-///
-/// Threading: `@MainActor` because the SwiftUI panel binds directly to
-/// `messages` + `streamingState` and we want zero actor hops on the render
-/// path.
+/// Owns one panel's transcript loads and chat turns on the UI actor.
 @MainActor
 @Observable
 public final class ChatPanelViewModel {
-
-    // MARK: - Public surface
-
     public let conversation: Conversation
     public let bookId: BookID?
     public private(set) var messages: [Message] = []
     public let streamingState: ChatStreamingState
-
-    // MARK: - Dependencies
+    public private(set) var isLoadingHistory = false
+    public private(set) var historyError: Error?
+    public private(set) var successfulTurnRevision: UInt64 = 0
+    public private(set) var committedRawDraft: String?
 
     private let chatService: any ChatService
     private let messageStore: any MessageStore
-
-    // MARK: - In-flight task
-    //
-    // `internal` (not private) so the test target can `await activeTaskHandle?
-    // .value` to deterministically join the running turn instead of polling
-    // sleeps. The handle is `Task<Void, Never>` because the body absorbs all
-    // errors (they land on `streamingState.error`).
+    private var historyLoadID: UUID?
+    private var activeTurnID: UUID?
+    // Retained until the task drains so cancellation callers can join it.
     var activeTaskHandle: Task<Void, Never>?
-
-    // MARK: - Init
 
     public init(
         conversation: Conversation,
@@ -53,82 +35,93 @@ public final class ChatPanelViewModel {
         self.streamingState = streamingState
     }
 
-    // MARK: - Public API
-
-    /// Refreshes `messages` from the store. Swallows + logs errors — a failed
-    /// history load must never crash the panel; the UI shows whatever was
-    /// previously loaded.
     public func loadHistory() async {
+        await loadHistory(turnID: nil, allowsCancellation: false)
+    }
+
+    private func loadHistory(turnID: UUID?, allowsCancellation: Bool) async {
+        guard turnID == nil || activeTurnID == turnID else { return }
+        guard allowsCancellation || !Task.isCancelled else { return }
+        let loadID = UUID()
+        historyLoadID = loadID
+        isLoadingHistory = true
+        historyError = nil
+        defer {
+            if historyLoadID == loadID { isLoadingHistory = false }
+        }
         do {
-            messages = try await messageStore.messages(for: conversation.id)
+            let fetched = try await messageStore.messages(for: conversation.id)
+            guard historyLoadID == loadID,
+                  turnID == nil || activeTurnID == turnID,
+                  allowsCancellation || !Task.isCancelled else { return }
+            messages = fetched
         } catch {
-            Log.event("chat.history.load.failed", level: .error, data: [
-                "error": "\(error)",
-            ])
+            guard historyLoadID == loadID,
+                  turnID == nil || activeTurnID == turnID,
+                  allowsCancellation || !Task.isCancelled else { return }
+            historyError = error
+            Log.event("chat.history.load.failed", level: .error, data: ["error": "\(error)"])
         }
     }
 
-    /// Runs one chat turn. Empty / whitespace queries are rejected at this
-    /// layer so the composer can blindly forward the textfield value.
-    ///
-    /// The streaming Task is stored so ``cancel()`` can tear it down; any
-    /// previous in-flight turn is cancelled first.
+    /// Clears only the submitted draft whose turn committed, preserving edits.
+    public func draftAfterCommittedTurn(_ currentDraft: String) -> String {
+        committedRawDraft == currentDraft ? "" : currentDraft
+    }
+
     public func send(query rawQuery: String) {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-
         activeTaskHandle?.cancel()
+        let turnID = UUID()
+        activeTurnID = turnID
+        // A previous turn/history refresh cannot publish over this turn.
+        historyLoadID = nil
+        isLoadingHistory = false
+        committedRawDraft = nil
         streamingState.beginStreaming()
-
         let service = chatService
         let bookId = self.bookId
-        let state = streamingState
-
-        // KEEP: ChatPanelViewModel is @MainActor; activeTaskHandle drives the
-        // SSE consumer and updates @Observable streamingState. The for-await
-        // over service.stream(...) reads chunks off the @MainActor context;
-        // the heavy URL bytes loop and SSE parse live behind WorkerClient +
-        // ChatService (actors), so this loop only does fast event dispatch
-        // into the streamingState observable.
         activeTaskHandle = Task { [weak self] in
-            // Always reload history at the end so the UI shows whatever the
-            // service managed to persist (full turn / partial cancel / error).
-            defer { state.endStreaming() }
+            guard let self, self.activeTurnID == turnID else { return }
+            defer {
+                if self.activeTurnID == turnID {
+                    self.streamingState.endStreaming()
+                    self.activeTurnID = nil
+                    self.activeTaskHandle = nil
+                }
+            }
             do {
                 for try await event in service.stream(query: query, bookId: bookId) {
+                    guard self.activeTurnID == turnID else { return }
+                    try Task.checkCancellation()
                     switch event {
-                    case .token(let token):
-                        state.appendToken(token)
-                    case .toolCall:
-                        // v1 does not render tool calls — opaque to the UI.
-                        continue
+                    case .token(let token): self.streamingState.appendToken(token)
+                    case .toolCall: continue
                     case .completed:
-                        await self?.loadHistory()
+                        // ChatService emits completion only after the assistant commit.
+                        self.committedRawDraft = rawQuery
+                        self.successfulTurnRevision &+= 1
+                        await self.loadHistory(turnID: turnID, allowsCancellation: false)
                         return
                     }
                 }
-                // Stream finished without an explicit `.completed`. Treat as
-                // success — service contract finalises the assistant row
-                // either way.
-                await self?.loadHistory()
+                // A canceled stream may finish normally; it has no committed-success marker.
+                await self.loadHistory(turnID: turnID, allowsCancellation: true)
             } catch is CancellationError {
-                await self?.loadHistory()
+                await self.loadHistory(turnID: turnID, allowsCancellation: true)
             } catch {
-                state.failStreaming(error)
-                await self?.loadHistory()
+                guard self.activeTurnID == turnID, !Task.isCancelled else { return }
+                self.streamingState.failStreaming(error)
+                await self.loadHistory(turnID: turnID, allowsCancellation: false)
             }
         }
     }
 
-    /// Cancels the in-flight turn. Safe to call when idle. The stored Task
-    /// teardown clears `streamingState` via its `defer`, and the history
-    /// reload (also in the same Task) picks up any partial assistant row the
-    /// service persisted before cancel.
     public func cancel() {
         activeTaskHandle?.cancel()
-        // Do NOT nil out the handle here — the Task is still draining its
-        // defer block (which calls loadHistory + endStreaming). Tests that
-        // `await activeTaskHandle?.value` depend on the handle surviving
-        // until the Task body returns.
+        // Explicit history loads may outlive the presentation too.
+        historyLoadID = nil
+        isLoadingHistory = false
     }
 }

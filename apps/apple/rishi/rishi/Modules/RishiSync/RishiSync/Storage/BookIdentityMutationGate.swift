@@ -8,6 +8,12 @@ actor BookIdentityMutationGate {
         let token: UUID
         let continuation: CheckedContinuation<UUID, Error>
     }
+    private var protectedPositions: Set<UUID> = []
+    func protectPosition(_ id: UUID) { protectedPositions.insert(id) }
+    func releasePosition(_ id: UUID) { protectedPositions.remove(id) }
+    func positionIsProtected(_ id: UUID) -> Bool { protectedPositions.contains(id) }
+    func clearProtectedPositions() { protectedPositions.removeAll() }
+
     private var active: [UUID: UUID] = [:]
     private var exclusive: UUID?
     private var waiters: [Waiter] = []

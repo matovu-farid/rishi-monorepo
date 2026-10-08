@@ -42,35 +42,46 @@ public struct SubscriptionDependencies {
     public let groupID: GroupId?
     public let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
     public let restoreService: RestoreService
+    public let customerEntitlements: CustomerEntitlements
+    public let store: Store
 
     public init(
         groupID: GroupId?,
         entitlementRefreshCoordinator: EntitlementRefreshCoordinator,
-        restoreService: RestoreService
+        restoreService: RestoreService,
+        customerEntitlements: CustomerEntitlements,
+        store: Store
     ) {
         self.groupID = groupID
         self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
         self.restoreService = restoreService
+        self.customerEntitlements = customerEntitlements
+        self.store = store
     }
 }
 
 public struct SubscriptionsView: View {
     private static let macPaywallContentWidth: CGFloat = 560
 
-    @Environment(Store.self) private var store
+    private var store: Store { dependencies.store }
     @Environment(\.services) private var services
     @Environment(\.dismiss) private var dismiss
     @Environment(EntitlementSnapshotStore.self) private var entitlementStore
-    private let dependencies: SubscriptionDependencies?
-    @State private var customerEntitlements = CustomerEntitlements.shared
+    private let dependencies: SubscriptionDependencies
+    private let credentialAuthority: SessionCredentialAuthority
+    private let credentialSnapshot: CredentialSnapshot
+    private var customerEntitlements: CustomerEntitlements { dependencies.customerEntitlements }
     @State private var hasSession: Bool?
     @State private var tokenError = false
     @State private var isRestoring = false
+    @State private var isVisible = false
+    @State private var restoreAttempt: UUID?
     @State private var restoreMessage: String?
     /// Preloaded `appAccountToken` — only non-nil after a confirmed session.
     /// Used so `.inAppPurchaseOptions` never returns `[]` (which would allow
     /// a purchase without account binding; that API is non-throwing).
     @State private var appAccountToken: UUID?
+    @State private var purchaseCredentialLease: CredentialLease?
 
     private let onPurchaseCompleted: () -> Void
     private let onPurchaseProcessed: @MainActor () async -> Void
@@ -80,7 +91,7 @@ public struct SubscriptionsView: View {
         let storeKitPaid = groupID.map {
             customerEntitlements.hasActiveSubscription(in: $0.value)
         } ?? false
-        return serverPaid || storeKitPaid
+        return SubscriptionManagementPolicy.isSubscribed(serverPaidActive: serverPaid, deviceSubscriptionActive: storeKitPaid)
     }
 
     private var activeProductID: Product.ID? {
@@ -94,35 +105,30 @@ public struct SubscriptionsView: View {
         #endif
     }
 
-    public init(
+    init(
         dependencies: SubscriptionDependencies,
+        credentialAuthority: SessionCredentialAuthority,
+        credentialSnapshot: CredentialSnapshot,
         onPurchaseCompleted: @escaping () -> Void = {},
         onPurchaseProcessed: @escaping @MainActor () async -> Void = {}
     ) {
         self.dependencies = dependencies
-        self.onPurchaseCompleted = onPurchaseCompleted
-        self.onPurchaseProcessed = onPurchaseProcessed
-    }
-
-    public init(
-        onPurchaseCompleted: @escaping () -> Void = {},
-        onPurchaseProcessed: @escaping @MainActor () async -> Void = {}
-    ) {
-        self.dependencies = nil
+        self.credentialAuthority = credentialAuthority
+        self.credentialSnapshot = credentialSnapshot
         self.onPurchaseCompleted = onPurchaseCompleted
         self.onPurchaseProcessed = onPurchaseProcessed
     }
 
     private var groupID: GroupId? {
-        dependencies?.groupID ?? services?.billing.groupID
+        dependencies.groupID
     }
 
     private var entitlementRefreshCoordinator: EntitlementRefreshCoordinator? {
-        dependencies?.entitlementRefreshCoordinator ?? services?.billing.entitlementRefreshCoordinator
+        dependencies.entitlementRefreshCoordinator
     }
 
     private var restoreService: RestoreService? {
-        dependencies?.restoreService ?? services?.billing.restoreService
+        dependencies.restoreService
     }
 
     public var body: some View {
@@ -133,14 +139,20 @@ public struct SubscriptionsView: View {
                     .ignoresSafeArea()
                 content
             }
+            .onAppear { isVisible = true }
+            .onDisappear { isVisible = false; restoreAttempt = nil; isRestoring = false }
             .task {
-                guard let session = try? await KeychainSessionStore().load() else {
+                do {
+                    _ = try AppAccountToken.currentPurchaseOptions(snapshot: credentialSnapshot, authority: credentialAuthority)
+                    appAccountToken = AppAccountToken.derive(userId: credentialSnapshot.lease.rawUserID)
+                    purchaseCredentialLease = credentialSnapshot.lease
+                    hasSession = true
+                } catch {
                     hasSession = false
                     appAccountToken = nil
-                    return
+                    purchaseCredentialLease = nil
+                    tokenError = true
                 }
-                appAccountToken = AppAccountToken.derive(userId: session.userId)
-                hasSession = true
             }
         }
         #if targetEnvironment(macCatalyst)
@@ -284,8 +296,11 @@ public struct SubscriptionsView: View {
                 [.appAccountToken(token)]
             }
             .onInAppPurchaseStart { _ in
-                if (try? await KeychainSessionStore().load()) == nil {
+                // This callback cannot veto StoreKit. Options stay bound to
+                // the presented owner; only its admitted completion may publish.
+                guard let purchaseCredentialLease, credentialAuthority.isCurrent(purchaseCredentialLease) else {
                     await MainActor.run { tokenError = true }
+                    return
                 }
             }
             .onInAppPurchaseCompletion { _, result in
@@ -325,48 +340,45 @@ public struct SubscriptionsView: View {
         _ result: Result<Product.PurchaseResult, any Error>
     ) async {
         guard let purchaseResult = try? result.get(),
-              case .success(.verified) = purchaseResult
-        else {
-            return
-        }
-
-        await MainActor.run {
-            onPurchaseCompleted()
-        }
-
-        await store.process(purchaseResult: purchaseResult)
-        if let entitlementRefreshCoordinator {
-            await entitlementRefreshCoordinator.refreshIfSignedIn(
-                reason: .foreground
-            )
-        }
+              case .success(.verified(let transaction)) = purchaseResult,
+              let lease = purchaseCredentialLease,
+              transaction.appAccountToken == AppAccountToken.derive(userId: lease.rawUserID),
+              credentialAuthority.isCurrent(lease) else { return }
+        _ = credentialAuthority.performIfCurrent(lease) { onPurchaseCompleted() }
+        await dependencies.store.process(purchaseResult: purchaseResult, credentialContext: .normal(lease))
+        guard credentialAuthority.isCurrent(lease) else { return }
+        _ = await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
+            credentialContext: .normal(lease))
+        guard credentialAuthority.isCurrent(lease) else { return }
         await onPurchaseProcessed()
     }
 
     private func restorePurchases() async {
-        guard let restoreService, let entitlementRefreshCoordinator else {
-            restoreMessage = "Restore is unavailable until you are signed in."
-            return
-        }
-
+        let lease = credentialSnapshot.lease
+        guard credentialAuthority.isCurrent(lease), isVisible, !isRestoring else { return }
+        let attempt = UUID()
+        restoreAttempt = attempt
         isRestoring = true
-        defer { isRestoring = false }
+        defer {
+            if restoreAttempt == attempt { isRestoring = false; restoreAttempt = nil }
+        }
         do {
-            let outcome = try await restoreService.restore()
-            await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
-            restoreMessage = RestoreMessage.forOutcome(outcome)
-        } catch let error as RestoreError {
-            Log.event("iap.restore.user_facing_failure", level: .warning)
-            restoreMessage = RestoreMessage.forError(error)
+            let outcome = try await restoreAndRefresh(restoreService: dependencies.restoreService,
+                refreshCoordinator: dependencies.entitlementRefreshCoordinator, credentialContext: .normal(lease))
+            guard isVisible, restoreAttempt == attempt, !Task.isCancelled else { return }
+            _ = credentialAuthority.performIfCurrent(lease) { restoreMessage = RestoreMessage.forOutcome(outcome) }
         } catch {
-            Log.event(
-                "iap.restore.unexpected_failure",
-                level: .warning,
-                data: ["error": String(describing: error)]
-            )
-            restoreMessage = "We couldn’t verify your purchases right now. Check your Apple ID connection and try again."
+            let originalError = error
+            guard credentialAuthority.isCurrent(lease), isVisible,
+                  restoreAttempt == attempt, !Task.isCancelled else { return }
+            Log.error("iap.restore.user_facing_failure", error: originalError)
+            _ = credentialAuthority.performIfCurrent(lease) {
+                if let restoreError = originalError as? RestoreError { restoreMessage = RestoreMessage.forError(restoreError) }
+                else { restoreMessage = "We couldn’t verify your purchases right now. Check your Apple ID connection and try again." }
+            }
         }
     }
+
 }
 
 extension View {

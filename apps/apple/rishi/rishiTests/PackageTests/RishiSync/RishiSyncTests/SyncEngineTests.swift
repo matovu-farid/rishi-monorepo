@@ -2,7 +2,15 @@
 import Testing
 import Foundation
 import os
+import SwiftData
 
+@MainActor
+private final class CredentialStagingDependencyBox {
+    var value: AppDependencies?
+    var admittedTransaction: AccountChangeTransaction?
+    var rejectedCode: CredentialRejectionCode?
+    var rejectedContext: CredentialRejectionContext?
+}
 
 
 
@@ -24,6 +32,18 @@ struct SyncEngineTests {
         func hasCurrentDataUseConsent() async -> Bool { false }
     }
 
+    private final class LockedRequestCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func increment() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            return value
+        }
+    }
+
     private actor CompletionProbe {
         private var completed = false
 
@@ -42,6 +62,21 @@ struct SyncEngineTests {
         var cursors: [String: SyncCursorState] = [:]
         var cursorSaveCount = 0
         var recovery: SyncRecoveryState?
+        var recoveryPreparationFailure: String?
+        var recoveryEvents: [String] = []
+        func failRecoveryPreparation(_ stage: String) { recoveryPreparationFailure = stage }
+        func recoveryEventSnapshot() -> [String] { recoveryEvents }
+        var positionOperations: [UUID: UUID] = [:]
+        var positionDirtyTimes: [UUID: Date] = [:]
+        func operationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID? { positionOperations[entityId] }
+        func ensureOperationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID {
+            if let operation = positionOperations[entityId] { return operation }
+            let operation = UUID(); positionOperations[entityId] = operation; return operation
+        }
+        func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+            kind == .position ? positionDirtyTimes[entityId] : nil
+        }
+
 
         private struct InjectedFailure: Error {}
 
@@ -54,12 +89,14 @@ struct SyncEngineTests {
                 markDirtyFailures -= 1
                 throw InjectedFailure()
             }
+            if kind == .position { positionOperations[entityId] = UUID(); positionDirtyTimes[entityId] = Date() }
             if !dirty.contains(where: { $0.entityId == entityId && $0.kind == kind }) {
                 dirty.append(SyncPendingItem(entityId: entityId, kind: kind))
             }
         }
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
             dirty.removeAll { $0.entityId == entityId && $0.kind == kind }
+            positionDirtyTimes[entityId] = nil; positionOperations[entityId] = nil
             cleaned.append((entityId, kind))
             globalCursor = lastSyncedAt
         }
@@ -91,10 +128,25 @@ struct SyncEngineTests {
             cursorSaveCount += 1
         }
         func clearCursorState(for scope: SyncCursorScope) async throws {
+            if scope == .recovery {
+                recoveryEvents.append("cursor-clear")
+                if recovery?.reason == .rejectedPosition, recoveryPreparationFailure == "cursor" { throw InjectedFailure() }
+            }
             cursors[scope.rawValue] = nil
         }
         func recoveryState() async throws -> SyncRecoveryState? { recovery }
-        func saveRecoveryState(_ state: SyncRecoveryState) async throws { recovery = state }
+        func saveRecoveryState(_ state: SyncRecoveryState) async throws {
+            recoveryEvents.append("marker")
+            if state.reason == .rejectedPosition, recoveryPreparationFailure == "marker" { throw InjectedFailure() }
+            recovery = state
+        }
+        func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool {
+            recoveryEvents.append("retire")
+            guard positionOperations[entityId] == expectedOperationId, positionDirtyTimes[entityId] == expectedDirtyAt else { return false }
+            dirty.removeAll { $0.entityId == entityId && $0.kind == .position }
+            positionDirtyTimes[entityId] = nil; positionOperations[entityId] = nil
+            return true
+        }
         func clearRecoveryState() async throws { recovery = nil }
 
         func currentDirty() -> [SyncPendingItem] { dirty }
@@ -117,9 +169,14 @@ struct SyncEngineTests {
 
     private actor StubPositionStore: PositionStore {
         var rows: [BookID: Position] = [:]
+        var upsertPause: CommitPause?
+        func pauseNextUpsert(_ pause: CommitPause) { upsertPause = pause }
         func seed(_ position: Position) { rows[position.bookId] = position }
         func position(for bookId: BookID) async throws -> Position? { rows[bookId] }
-        func upsert(_ position: Position) async throws { rows[position.bookId] = position }
+        func upsert(_ position: Position) async throws {
+            if let pause = upsertPause { upsertPause = nil; await pause.enter() }
+            rows[position.bookId] = position
+        }
         func delete(_ id: PositionID) async throws {
             if let key = rows.first(where: { $0.value.id == id })?.key { rows[key] = nil }
         }
@@ -144,12 +201,17 @@ struct SyncEngineTests {
 
     private actor StubConversationStore: ConversationStore {
         var rows: [ConversationID: Conversation] = [:]
+        var upsertPause: CommitPause?
+        func pauseNextUpsert(_ pause: CommitPause) { upsertPause = pause }
         func seed(_ convo: Conversation) { rows[convo.id] = convo }
         func conversations(for userId: UserID) async throws -> [Conversation] {
             rows.values.filter { $0.userId == userId }
         }
         func conversation(_ id: ConversationID) async throws -> Conversation? { rows[id] }
-        func upsert(_ conversation: Conversation) async throws { rows[conversation.id] = conversation }
+        func upsert(_ conversation: Conversation) async throws {
+            if let pause = upsertPause { upsertPause = nil; await pause.enter() }
+            rows[conversation.id] = conversation
+        }
         func delete(_ id: ConversationID) async throws { rows.removeValue(forKey: id) }
     }
 
@@ -200,7 +262,8 @@ struct SyncEngineTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 
@@ -215,11 +278,14 @@ struct SyncEngineTests {
         workerClient: WorkerClient,
         fileStorage: BookFileStorage,
         chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil,
-        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+        ownerID: UUID = UUID()
     ) -> SyncEngine {
+        let testUserId = ownerID
+        let currentUserId: @Sendable () async -> UserID? = { testUserId }
         let queue = SyncQueue(metadataStore: metadata)
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
-        let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
+        let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata, currentUserId: currentUserId)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
@@ -233,15 +299,18 @@ struct SyncEngineTests {
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
-        let testUserId = UUID()
-        let currentUserId: @Sendable () async -> UserID? = { testUserId }
         let applier = ChangeApplier(
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
             bookmarkStore: EngineStubBookmarkStore(),
             metadataStore: metadata,
-            currentUserId: currentUserId
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = currentUserId
+
+                return integration
+            }()
         )
         return SyncEngine(
             config: config,
@@ -338,6 +407,7 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let fetchGate = DispatchSemaphore(value: 0)
+        let changesRequestCounter = LockedRequestCounter()
         defer {
             fetchGate.signal()
             fetchGate.signal()
@@ -345,7 +415,7 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                fetchGate.wait()
+                if changesRequestCounter.increment() == 1 { fetchGate.wait() }
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -389,11 +459,14 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let fetchGate = DispatchSemaphore(value: 0)
-        defer { fetchGate.signal(); fetchGate.signal() }
+        let changesRequestCounter = LockedRequestCounter()
+        defer { fetchGate.signal() }
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                fetchGate.wait()
+                if changesRequestCounter.increment() == 1 {
+                    fetchGate.wait()
+                }
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -448,11 +521,12 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let fetchGate = DispatchSemaphore(value: 0)
+        let changesRequestCounter = LockedRequestCounter()
         defer { fetchGate.signal(); fetchGate.signal() }
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                fetchGate.wait()
+                if changesRequestCounter.increment() == 1 { fetchGate.wait() }
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -498,6 +572,7 @@ struct SyncEngineTests {
             .filter { $0.url?.path == "/api/sync/changes" }
         #expect(afterRelease.count == 2)
         fetchGate.signal()
+        await engine.resetForAccountSwitch() // Drain this test's scheduled owner before resetting its URLProtocol fixture.
     }
 
     @Test("account reset cancels queued import sync work")
@@ -508,11 +583,12 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let fetchGate = DispatchSemaphore(value: 0)
+        let changesRequestCounter = LockedRequestCounter()
         defer { fetchGate.signal(); fetchGate.signal() }
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                fetchGate.wait()
+                if changesRequestCounter.increment() == 1 { fetchGate.wait() }
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -613,7 +689,106 @@ struct SyncEngineTests {
         })
     }
 
-    @Test("account reset waits for an active primary inbound wave before clearing account state")
+    @MainActor
+    @Test("credential cleanup reservation spans the real engine reset and an entered wave join", .timeLimit(.minutes(1)))
+    func credentialCleanupReservesOwnerThroughResetWaveJoin() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        defer { session.invalidateAndCancel() }
+        let metadata = StubMetadata()
+        let positions = StubPositionStore()
+        let (storage, _) = try await makeFileStorage()
+        let pause = CommitPause()
+        await positions.pauseNextUpsert(pause)
+        let remote = Position(bookId: UUID(), locator: "fixture", percentComplete: 0.3, updatedAt: Date())
+        let change = SyncChange(kind: "position", id: remote.id,
+                                payload: try SyncPayloadCodec.encodePosition(remote), updatedAt: remote.updatedAt, deleted: false)
+        struct Response: Encodable { let changes: [SyncChange] }
+        let body = try JSONEncoder().encode(Response(changes: [change]))
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" { return (200, body, nil) }
+            return (200, Data("{\"rows\":[],\"events\":[]}".utf8), nil)
+        }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+                                highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: session), fileStorage: storage)
+        let wave = Task { await engine.runOnce() }
+        await pause.waitUntilEntered()
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let a = try installStagingCredentials("A", authority: authority)
+        let cleanupEntered = CredentialStagingGate()
+        let deps = AppDependencies(credentialAuthority: authority, userIdBox: UserIdBox(DerivedUserID.from("A")),
+                                  accountGeneration: 2, persistAccountGeneration: { _ in }, credentialCleanup: { _ in
+            await cleanupEntered.markEntered()
+            await engine.resetForAccountSwitch()
+        })
+        let tx = try deps.beginAccountChange(expectedCredentialTicket: a.ticket)
+        let completion = try #require(deps.retireCredentialAccount(tx))
+        await cleanupEntered.waitUntilEntered()
+        let ticket = authority.attemptTicket()
+        #expect(throws: AccountDeletionCoordinatorError.accountChangedDuringDeletion) {
+            try deps.beginAccountChange(expectedCredentialTicket: ticket)
+        }
+        #expect(authority.attemptTicket() == ticket)
+        #expect(await metadata.resetCallCount() == 0)
+        await pause.resume()
+        _ = await wave.value
+        await completion.value
+        #expect(await metadata.resetCallCount() == 1)
+        #expect(deps.cachedUserId == nil)
+        _ = try deps.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+    }
+
+    @MainActor
+    @Test("definitively rejected initiating request unwinds before owned reset joins its real wave", .timeLimit(.minutes(1)))
+    func definitiveRequestUnwindsBeforeOwnedReset() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        defer { session.invalidateAndCancel() }
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let a = try installStagingCredentials("A", authority: authority)
+        let box = CredentialStagingDependencyBox()
+        let worker = WorkerClient(baseURL: URL(string: "https://sync-credential-fixture.test")!, session: session,
+                                  credentialAuthority: authority, dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider(),
+                                  admitCredentialRejection: { code, context in
+            await MainActor.run {
+                let result = box.value?.admitCredentialRejection(code, context: context) ?? .stale
+                box.admittedTransaction = box.value?.pendingAccountChange
+                box.rejectedCode = code
+                box.rejectedContext = context
+                return result
+            }
+        })
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/auth/refresh" {
+                return (401, Data("{\"error\":{\"code\":\"INVALID_REFRESH_TOKEN\",\"message\":\"fixture\"}}".utf8), nil)
+            }
+            return (401, Data(), nil)
+        }
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: StubPositionStore(),
+                                highlightStore: StubHighlightStore(), workerClient: worker, fileStorage: storage)
+        let deps = AppDependencies(credentialAuthority: authority, userIdBox: UserIdBox(DerivedUserID.from("A")),
+                                  accountGeneration: 3, persistAccountGeneration: { _ in }, credentialCleanup: { _ in
+            await engine.resetForAccountSwitch()
+        })
+        box.value = deps
+        _ = await engine.runOnce()
+        let tx = try #require(box.admittedTransaction)
+        let completion = try #require(deps.retireCredentialAccount(tx))
+        await completion.value
+        #expect(await metadata.resetCallCount() == 1)
+        #expect(deps.cachedUserId == nil)
+        let refreshes = EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/auth/refresh" }
+        #expect(refreshes.count == 1)
+        let refresh = try #require(refreshes.first)
+        #expect(refresh.httpMethod == "POST")
+        #expect(box.rejectedCode == .invalidRefreshToken)
+        #expect(box.rejectedContext == a.rejectionContext)
+        #expect(throws: CredentialAuthenticationFailure.signedOut) { try authority.snapshot() }
+    }
+
+    @Test("account reset waits for an entered primary inbound apply before clearing account state")
     func resetForAccountSwitchWaitsForActiveWave() async throws {
         EngineMockURLProtocol.reset()
         let session = makeSession()
@@ -621,39 +796,30 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let positionStore = StubPositionStore()
         let (storage, _) = try await makeFileStorage()
-        let fetchGate = DispatchSemaphore(value: 0)
-        defer { fetchGate.signal() }
+        let pause = CommitPause()
+        await positionStore.pauseNextUpsert(pause)
 
         let pendingBookId = UUID()
         let pendingPosition = Position(bookId: pendingBookId, locator: "page:1", percentComplete: 0.2, updatedAt: Date())
         await positionStore.seed(pendingPosition)
         try await metadata.markDirty(entityId: pendingBookId, kind: .position)
-
+        let remote = Position(bookId: UUID(), locator: "page:2", percentComplete: 0.4, updatedAt: Date())
+        let change = SyncChange(kind: "position", id: remote.id,
+            payload: try SyncPayloadCodec.encodePosition(remote), updatedAt: remote.updatedAt, deleted: false)
+        struct Response: Encodable { let changes: [SyncChange] }
+        let body = try JSONEncoder().encode(Response(changes: [change]))
         EngineMockURLProtocol.handler = { request in
-            if request.url?.path == "/api/sync/changes" {
-                fetchGate.wait()
-                return (200, self.emptyChangesBody(), nil)
-            }
-            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
-                return (200, Data("{ \"rows\": [] }".utf8), nil)
-            }
-            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+            if request.url?.path == "/api/sync/changes" { return (200, body, nil) }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
                 return (200, Data("{ \"rows\": [] }".utf8), nil)
             }
             return (404, Data(), nil)
         }
-
-        let engine = makeEngine(
-            metadata: metadata,
-            bookStore: StubBookStore(),
-            positionStore: positionStore,
-            highlightStore: StubHighlightStore(),
-            workerClient: workerClient,
-            fileStorage: storage
-        )
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positionStore,
+            highlightStore: StubHighlightStore(), workerClient: workerClient, fileStorage: storage)
         let waveTask = Task { await engine.runOnce() }
-        try await waitForRequest(path: "/api/sync/changes")
-
+        await pause.waitUntilEntered()
         let resetProbe = CompletionProbe()
         let resetTask = Task {
             await engine.resetForAccountSwitch()
@@ -661,52 +827,43 @@ struct SyncEngineTests {
         }
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(await resetProbe.isCompleted() == false)
-
-        fetchGate.signal()
+        await pause.resume()
         _ = await waveTask.value
         await resetTask.value
-
         #expect(await resetProbe.isCompleted())
         #expect(await metadata.resetCallCount() == 1)
         #expect(await metadata.currentDirty().isEmpty)
         #expect(EngineMockURLProtocol.capturedSnapshot().allSatisfy { $0.url?.path != "/api/sync/push" })
     }
 
-    @Test("account reset waits for a direct chat inbound wave before clearing account state")
+    @Test("account reset waits for an entered chat merge before clearing account state")
     func resetForAccountSwitchWaitsForActiveChatWave() async throws {
         EngineMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
+        let conversations = StubConversationStore()
+        let pause = CommitPause()
+        await conversations.pauseNextUpsert(pause)
         let (storage, _) = try await makeFileStorage()
-        let chatGate = DispatchSemaphore(value: 0)
-        defer { chatGate.signal() }
-
+        let body = Data("""
+        { "rows": [{ "id": "\(UUID().uuidString)", "user_id": "\(UUID().uuidString)",
+          "book_id": "00000000-0000-0000-0000-000000000000", "title": "Remote chat", "archived": false,
+          "created_at": 1700000100000, "updated_at": 1700000200000 }] }
+        """.utf8)
         EngineMockURLProtocol.handler = { request in
-            if request.url?.path == "/api/sync/changes" {
-                return (200, self.emptyChangesBody(), nil)
-            }
-            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
-                chatGate.wait()
-                return (200, Data("{ \"rows\": [] }".utf8), nil)
-            }
-            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+            if request.url?.path == "/api/sync/changes" { return (200, self.emptyChangesBody(), nil) }
+            if request.url?.path == "/api/sync/conversations", request.httpMethod == "GET" { return (200, body, nil) }
+            if request.url?.path == "/api/sync/messages", request.httpMethod == "GET" {
                 return (200, Data("{ \"rows\": [] }".utf8), nil)
             }
             return (404, Data(), nil)
         }
-
-        let engine = makeEngine(
-            metadata: metadata,
-            bookStore: StubBookStore(),
-            positionStore: StubPositionStore(),
-            highlightStore: StubHighlightStore(),
-            workerClient: workerClient,
-            fileStorage: storage
-        )
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(), conversationStore: conversations,
+            workerClient: workerClient, fileStorage: storage)
         let waveTask = Task { await engine.runOnce() }
-        try await waitForRequest(path: "/api/sync/conversations")
-
+        await pause.waitUntilEntered()
         let resetProbe = CompletionProbe()
         let resetTask = Task {
             await engine.resetForAccountSwitch()
@@ -714,11 +871,9 @@ struct SyncEngineTests {
         }
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(await resetProbe.isCompleted() == false)
-
-        chatGate.signal()
+        await pause.resume()
         _ = await waveTask.value
         await resetTask.value
-
         #expect(await resetProbe.isCompleted())
         #expect(await metadata.resetCallCount() == 1)
     }
@@ -808,7 +963,9 @@ struct SyncEngineTests {
         let wave = await engine.runOnce()
 
         #expect(wave.errors.isEmpty)
-        #expect(EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }.count == 2)
+        let requests = EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }
+        #expect(requests.count == 3) // Two apply pages, then one advisory verification readback.
+        #expect(requests.map { $0.url?.query } == [nil, "cursor=page-2", nil])
         #expect(await metadata.incrementalCursor() == nil)
         #expect(await metadata.savedCursorCount() == 1)
     }
@@ -832,11 +989,12 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                #expect(request.url?.query?.contains("scope=full") == true || request.url?.query?.contains("scope=incremental") == true)
-                if request.url?.query?.contains("scope=full") == true {
-                    #expect(request.url?.query?.contains("cursor=recovery-page-2") == true)
+                if request.url?.query == "cursor=recovery-page-2" {
+                    // A saved opaque cursor carries its scope; the endpoint omits the scope query.
+                    return (200, terminalBody, nil)
                 }
-                return (200, terminalBody, nil)
+                #expect(request.url?.query == nil) // Advisory incremental readback after promotion.
+                return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
                 return (200, Data("{ \"rows\": [] }".utf8), nil)
@@ -859,6 +1017,8 @@ struct SyncEngineTests {
         let wave = await engine.runOnce()
 
         #expect(wave.errors.isEmpty)
+        #expect(EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }.map { $0.url?.query }
+            == ["cursor=recovery-page-2", nil])
         #expect(await metadata.recoverySnapshot() == nil)
         let recoveryCursorState = try await metadata.cursorState(for: .recovery)
         #expect(recoveryCursorState == nil)
@@ -914,7 +1074,7 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let body = Data("""
-        { "changes": [{ "kind": "unknown", "id": "11111111-1111-4111-8111-111111111111", "payload": {}, "updated_at": "2026-08-07T00:00:00Z", "deleted": false }], "next_cursor": "must-not-save", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
+        { "changes": [{ "kind": "unknown", "id": "11111111-1111-4111-8111-111111111111", "payload": {}, "updated_at": 807667200, "deleted": false }], "next_cursor": "must-not-save", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
         """.utf8)
 
         EngineMockURLProtocol.handler = { request in
@@ -1021,6 +1181,10 @@ struct SyncEngineTests {
                 """.utf8)
                 return (200, body, nil)
             }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
             return (404, Data(), nil)
         }
 
@@ -1086,6 +1250,10 @@ struct SyncEngineTests {
             if request.url?.path == "/api/sync/changes" {
                 return (200, self.emptyChangesBody(), nil)
             }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
             return (404, Data(), nil)
         }
 
@@ -1143,6 +1311,10 @@ struct SyncEngineTests {
                 { "applied_count": 1 }
                 """.utf8), nil)
             }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
             return (404, Data(), nil)
         }
 
@@ -1191,6 +1363,10 @@ struct SyncEngineTests {
                 return (200, Data("""
                 { "applied_count": 1 }
                 """.utf8), nil)
+            }
+            if request.httpMethod == "GET",
+               ["/api/sync/conversations", "/api/sync/messages"].contains(request.url?.path ?? "") {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
             }
             return (404, Data(), nil)
         }
@@ -1517,4 +1693,333 @@ struct SyncEngineTests {
         try await Task.sleep(nanoseconds: 50_000_000) // 50ms
         #expect(spy.callCount() == 0, "delegate should not fire when no chat rows applied")
     }
+    @Test("Durable reader publication bypasses debounce and releases finite admission")
+    func readerCommitImmediate() async throws {
+        let metadata = StubMetadata(); let positions = StubPositionStore(); let owner = UUID()
+        let position = Position(bookId: UUID(), locator: "saved", updatedAt: Date(timeIntervalSince1970: 123))
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 17, bookID: position.bookId, contentRevision: UUID())
+        let released = CompletionProbe()
+        let authority = ReaderPositionPublicationAuthority(permit: permit, source: BookSourceAccessPermit()) {
+            SourceEffectAdmission { Task { await released.markCompleted() } }
+        }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        let result = try await engine.commitReaderPosition(position, authority: authority) { try await positions.upsert(position) }
+        #expect(result == .committed)
+        #expect(await metadata.currentDirty().contains(.init(entityId: position.bookId, kind: .position)))
+        #expect(!(await metadata.hasProtectedPositionPublication(position.bookId)))
+        #expect(try await positions.position(for: position.bookId) == position)
+        // Release completion is scheduled synchronously by admission.release.
+        while !(await released.isCompleted()) { await Task.yield() }
+    }
+
+    @Test("Failed upsert never dirties; failed publication protects exact saved snapshot for same-wave retry")
+    func readerPublicationHandoff() async throws {
+        EngineMockURLProtocol.reset()
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" { return (200, Data("{\"accepted_at\":123}".utf8), nil) }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" {
+                return (200, Data("{\"rows\":[]}".utf8), nil)
+            }
+            return (200, Data("{\"changes\":[],\"complete\":true}".utf8), nil)
+        }
+        let metadata = StubMetadata(); let positions = StubPositionStore(); let owner = UUID()
+        let position = Position(bookId: UUID(), locator: "durable", updatedAt: Date(timeIntervalSince1970: 123))
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 17, bookID: position.bookId, contentRevision: UUID())
+        let authority = ReaderPositionPublicationAuthority(permit: permit, source: BookSourceAccessPermit()) { SourceEffectAdmission {} }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        await #expect(throws: (any Error).self) {
+            try await engine.commitReaderPosition(position, authority: authority) { throw URLError(.cannotWriteToFile) }
+        }
+        #expect(await metadata.currentDirty().isEmpty)
+        await metadata.failNextMarkDirty()
+        #expect(try await engine.commitReaderPosition(position, authority: authority) { try await positions.upsert(position) } == .publicationDeferred)
+        #expect(await metadata.hasProtectedPositionPublication(position.bookId))
+        let wave = await engine.runOnce()
+        #expect(wave.errors.isEmpty)
+        #expect(wave.positionsPushed == 1)
+        #expect(await metadata.currentDirty().isEmpty)
+        #expect(!(await metadata.hasProtectedPositionPublication(position.bookId)))
+        #expect(try await positions.position(for: position.bookId) == position)
+    }
+
+    @Test("Rejected position prepares fresh recovery before retirement and replays equal-time winner in same wave")
+    func rejectedPositionSameWaveRecovery() async throws {
+        EngineMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let local = Position(bookId: UUID(), locator: "rejected", updatedAt: Date(timeIntervalSince1970: 123))
+        let remote = Position(bookId: local.bookId, locator: "winner", updatedAt: local.updatedAt)
+        await positions.seed(local)
+        try await metadata.markDirty(entityId: local.bookId, kind: .position)
+        let change = SyncChange(kind: "position", id: remote.id, payload: try SyncPayloadCodec.encodePosition(remote), updatedAt: remote.updatedAt, deleted: false)
+        let encoder = JSONEncoder()
+        let encoded = try encoder.encode(change)
+        let encodedString = try #require(String(data: encoded, encoding: .utf8))
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" { return (200, Data("{\"accepted_at\":123,\"accepted\":false}".utf8), nil) }
+            if request.url?.query?.contains("scope=full") == true {
+                return (200, Data("{\"changes\":[\(encodedString)],\"projection_complete\":true}".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[]}".utf8), nil)
+        }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage)
+        let wave = await engine.runOnce()
+        #expect(wave.positionsPushed == 0)
+        #expect(wave.errors.isEmpty)
+        let stored = try #require(try await positions.position(for: local.bookId))
+        #expect(stored.id == local.id)
+        #expect(stored.locator == remote.locator)
+        #expect(await metadata.recoverySnapshot() == nil)
+        let events = await metadata.recoveryEventSnapshot()
+        #expect(events.prefix(3) == ["marker", "cursor-clear", "retire"])
+    }
+
+    @Test("Rejected preparation failure keeps mutation pending", arguments: ["marker", "cursor"])
+    func rejectedPreparationFailure(_ stage: String) async throws {
+        EngineMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let local = Position(bookId: UUID(), locator: "pending")
+        await positions.seed(local); try await metadata.markDirty(entityId: local.bookId, kind: .position)
+        await metadata.failRecoveryPreparation(stage)
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" { return (200, Data("{\"accepted_at\":123,\"accepted\":false}".utf8), nil) }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[]}".utf8), nil)
+        }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage)
+        let wave = await engine.runOnce()
+        #expect(wave.errors.contains { $0.hasPrefix("position.recovery:") })
+        #expect(await metadata.currentDirty().contains(.init(entityId: local.bookId, kind: .position)))
+        #expect(!(await metadata.recoveryEventSnapshot().contains("retire")))
+    }
+
+    private actor CommitPause {
+        var entered = false
+        var entrants: [CheckedContinuation<Void, Never>] = []
+        var release: CheckedContinuation<Void, Never>?
+        func enter() async {
+            entered = true
+            entrants.forEach { $0.resume() }; entrants.removeAll()
+            await withCheckedContinuation { release = $0 }
+        }
+        func waitUntilEntered() async {
+            if entered { return }
+            await withCheckedContinuation { entrants.append($0) }
+        }
+        func resume() { release?.resume(); release = nil }
+    }
+
+    @Test("Local upsert and publication share the inbound and outbound book gate")
+    func readerUpsertPublicationGate() async throws {
+        EngineMockURLProtocol.reset()
+        let networkResume = DispatchSemaphore(value: 0)
+        defer { networkResume.signal() }
+        EngineMockURLProtocol.handler = { _ in
+            networkResume.wait()
+            return (200, Data("{\"accepted_at\":123}".utf8), nil)
+        }
+        let metadata = StubMetadata(); let positions = StubPositionStore(); let owner = UUID()
+        let local = Position(bookId: UUID(), locator: "durable", updatedAt: Date(timeIntervalSince1970: 123))
+        let remote = Position(bookId: local.bookId, locator: "remote", updatedAt: local.updatedAt.addingTimeInterval(1))
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 5, bookID: local.bookId, contentRevision: UUID())
+        let authority = ReaderPositionPublicationAuthority(permit: permit, source: BookSourceAccessPermit()) { SourceEffectAdmission {} }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let worker = makeWorkerClient(session: makeSession())
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: worker, fileStorage: storage, ownerID: owner)
+        let pause = CommitPause()
+        let commit = Task {
+            try await engine.commitReaderPosition(local, authority: authority) {
+                try await positions.upsert(local)
+                await pause.enter()
+            }
+        }
+        await pause.waitUntilEntered()
+        let applier = ChangeApplier(
+            bookStore: StubBookStore(),
+            positionStore: positions,
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: EngineStubBookmarkStore(),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
+        )
+        let change = SyncChange(kind: "position", id: remote.id, payload: try SyncPayloadCodec.encodePosition(remote), updatedAt: remote.updatedAt, deleted: false)
+        let inboundStarted = CompletionProbe(); let outboundStarted = CompletionProbe()
+        let inbound = Task { await inboundStarted.markCompleted(); return await applier.apply([change]) }
+        let uploader = PositionUploader(workerClient: worker, positionStore: positions, bookStore: StubBookStore(), metadataStore: metadata)
+        let outbound = Task {
+            await outboundStarted.markCompleted()
+            return try await uploader.pushPending(items: [.init(entityId: local.bookId, kind: .position)])
+        }
+        while !(await inboundStarted.isCompleted()) { await Task.yield() }
+        while !(await outboundStarted.isCompleted()) { await Task.yield() }
+        #expect(try await positions.position(for: local.bookId) == local)
+        #expect(EngineMockURLProtocol.capturedSnapshot().isEmpty)
+        await pause.resume()
+        #expect(try await commit.value == .committed)
+        #expect(await inbound.value.conflicts == 1)
+        networkResume.signal()
+        #expect(try await outbound.value == 1)
+        #expect(try await positions.position(for: local.bookId) == local)
+    }
+
+    @Test("New durable movement supersedes older deferred publication without restoring its payload")
+    func deferredMovementSuperseded() async throws {
+        EngineMockURLProtocol.reset()
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" { return (200, Data("{\"accepted_at\":123}".utf8), nil) }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[]}".utf8), nil)
+        }
+        let metadata = StubMetadata(); let owner = UUID()
+        let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let positions = SwiftDataPositionStore(dbStore: db)
+        let old = Position(bookId: UUID(), locator: "old", updatedAt: Date(timeIntervalSince1970: 123))
+        let newer = Position(id: old.id, bookId: old.bookId, locator: "new", updatedAt: old.updatedAt.addingTimeInterval(1))
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 7, bookID: old.bookId, contentRevision: UUID())
+        try await db.write { context in
+            context.insert(BookEntity(id: old.bookId, userId: owner, title: "Book", author: nil, formatTypeRawValue: "epub", addedAt: .now, openedAt: nil, fileURL: "book.epub", coverPath: nil, positionId: nil, conversationId: nil))
+        }
+        try await db.activateAccountMutation(permit: .init(ownerID: owner, accountGeneration: 7))
+        try await db.activateBookReading(permit: permit)
+        let authority = BookScopedMutationStore(dbStore: db).publicationAuthority(permit: permit, source: BookSourceAccessPermit())
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        await metadata.failNextMarkDirty()
+        #expect(try await engine.commitReaderPosition(old, authority: authority) { try await positions.upsert(old) } == .publicationDeferred)
+        #expect(try await engine.commitReaderPosition(newer, authority: authority) { try await positions.upsert(newer) } == .committed)
+        _ = await engine.runOnce()
+        #expect(try await positions.position(for: old.bookId) == newer)
+        #expect(!(await metadata.hasProtectedPositionPublication(old.bookId)))
+        await db.drainBookAdmission(permit: permit)
+    }
+
+    @Test("Failed recovery survives recreated native metadata and revisits a rejected book before stale cursor")
+    func rejectedRecoveryRecreatedNativeStore() async throws {
+        EngineMockURLProtocol.reset()
+        let owner = UUID(); let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let positions = SwiftDataPositionStore(dbStore: db)
+        let container = try SyncMetadataStoreBootstrap.makeContainer(inMemory: true)
+        let metadata = await SwiftDataSyncMetadataStore.make(container: container)
+        let local = Position(bookId: UUID(), locator: "rejected", updatedAt: Date(timeIntervalSince1970: 123))
+        let winner = Position(bookId: local.bookId, locator: "winner", updatedAt: local.updatedAt)
+        try await positions.upsert(local)
+        try await metadata.markDirty(entityId: local.bookId, kind: .position)
+        let enteredPush = DispatchSemaphore(value: 0); let resumePush = DispatchSemaphore(value: 0)
+        defer { resumePush.signal() }
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" {
+                enteredPush.signal(); resumePush.wait()
+                return (200, Data("{\"accepted_at\":123,\"accepted\":false}".utf8), nil)
+            }
+            if request.url?.query?.contains("scope=full") == true { return (500, Data(), nil) }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[]}".utf8), nil)
+        }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        let waveTask = Task { await engine.runOnce() }
+        await Task.detached { enteredPush.wait() }.value
+        try await metadata.saveCursorState(.init(scope: .recovery, cursor: "stale-prefix", accountGeneration: 0))
+        resumePush.signal()
+        let failedWave = await waveTask.value
+        #expect(failedWave.errors.contains { $0.hasPrefix("position.recovery:") })
+        #expect(try await metadata.recoveryState()?.reason == .rejectedPosition)
+        #expect(try await metadata.cursorState(for: .recovery) == nil)
+        #expect(try await metadata.dirtyAt(entityId: local.bookId, kind: .position) == nil)
+        let change = SyncChange(kind: "position", id: winner.id, payload: try SyncPayloadCodec.encodePosition(winner), updatedAt: winner.updatedAt, deleted: false)
+        let data = try JSONEncoder().encode(change)
+        let encoded = try #require(String(data: data, encoding: .utf8))
+        EngineMockURLProtocol.handler = { request in
+            #expect(request.url?.query?.contains("stale-prefix") != true)
+            if request.url?.query?.contains("scope=full") == true {
+                return (200, Data("{\"changes\":[\(encoded)],\"projection_complete\":true}".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[]}".utf8), nil)
+        }
+        let recreated = await SwiftDataSyncMetadataStore.make(container: container)
+        #expect(try await recreated.recoveryState()?.reason == .rejectedPosition)
+        let nextEngine = makeEngine(metadata: recreated, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        let repaired = await nextEngine.runOnce()
+        #expect(repaired.errors.isEmpty)
+        let row = try #require(try await positions.position(for: local.bookId))
+        #expect(row.id == local.id)
+        #expect(row.locator == winner.locator)
+        #expect(try await recreated.recoveryState() == nil)
+    }
+
+    @Test("Native finite authority drains entered publication then rejects revoked source/account", arguments: ["source", "account"])
+    func nativeRevocationDuringPublication(_ revoke: String) async throws {
+        let owner = UUID(); let db = try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
+        let positions = SwiftDataPositionStore(dbStore: db)
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let position = Position(bookId: UUID(), locator: "durable", updatedAt: Date(timeIntervalSince1970: 123))
+        let permit = BookReadingPermit(ownerID: owner, accountGeneration: 7, bookID: position.bookId, contentRevision: UUID())
+        let account = AccountMutationPermit(ownerID: owner, accountGeneration: 7)
+        try await db.write { context in
+            context.insert(BookEntity(id: position.bookId, userId: owner, title: "Book", author: nil, formatTypeRawValue: "epub", addedAt: .now, openedAt: nil, fileURL: "book.epub", coverPath: nil, positionId: nil, conversationId: nil))
+        }
+        try await db.activateAccountMutation(permit: account)
+        try await db.activateBookReading(permit: permit)
+        let invalidation = BookSourceInvalidationSignal()
+        let authority = BookScopedMutationStore(dbStore: db).publicationAuthority(permit: permit, source: BookSourceAccessPermit()) {
+            if invalidation.isInvalidated { throw BookSourceAccessError.revoked }
+        }
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: positions,
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage, ownerID: owner)
+        let pause = CommitPause()
+        let committed = Task {
+            try await engine.commitReaderPosition(position, authority: authority) {
+                try await positions.upsert(position)
+                await pause.enter()
+            }
+        }
+        await pause.waitUntilEntered()
+        let revocation: Task<Void, Error>?
+        if revoke == "source" { invalidation.invalidate(); revocation = nil }
+        else {
+            db.closeAccountAdmission(permit: account)
+            revocation = Task { try await db.revokeAccountMutation(permit: account) }
+        }
+        #expect(try await positions.position(for: position.bookId) == position)
+        #expect(try await metadata.dirtyAt(entityId: position.bookId, kind: .position) == nil)
+        await pause.resume()
+        // The operation entered while current and retains finite admission
+        // until mark + queue finish; revocation fences all future admissions.
+        #expect(try await committed.value == .committed)
+        try await revocation?.value
+        let later = Position(id: position.id, bookId: position.bookId, locator: "must-refuse", updatedAt: position.updatedAt.addingTimeInterval(1))
+        await #expect(throws: (any Error).self) {
+            try await engine.commitReaderPosition(later, authority: authority) { try await positions.upsert(later) }
+        }
+        #expect(try await positions.position(for: position.bookId) == position)
+        #expect(try await metadata.pendingCount() == 1)
+        await db.drainBookAdmission(permit: permit)
+        await db.drainAccountAdmission(permit: account)
+    }
+
 }

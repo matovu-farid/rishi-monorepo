@@ -55,6 +55,13 @@ enum ReadAloudUserNavigationIntent: Equatable, Sendable {
             : .stopPlaying
     }
 
+    /// Distinguishes a whole old paragraph from a fuzzy fragment match against
+    /// the new utterance after asynchronous destination extraction.
+    static func containsWholeParagraph(_ paragraph: String?, in candidates: [String]) -> Bool {
+        guard let paragraph = normalized(paragraph) else { return false }
+        return candidates.contains { normalized($0) == paragraph }
+    }
+
     private static func matchesAnyDestination(
         _ spokenParagraph: String?,
         _ destinationParagraphs: [String]

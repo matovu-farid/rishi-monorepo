@@ -14,6 +14,7 @@ struct LibraryGrid: View {
     public let onToggleSelection: (Book) -> Void
     public let onShareSingle: (Book) -> Void
     public let onStartSharedReading: (Book) -> Void
+    public let onBookVisibilityChange: (BookID, Bool) -> Void
 
     static let startSharedReadingContextMenuTitle = "Start Shared Reading"
 
@@ -40,7 +41,8 @@ struct LibraryGrid: View {
         onBeginSelection: @escaping (Book) -> Void = { _ in },
         onToggleSelection: @escaping (Book) -> Void = { _ in },
         onShareSingle: @escaping (Book) -> Void = { _ in },
-        onStartSharedReading: @escaping (Book) -> Void = { _ in }
+        onStartSharedReading: @escaping (Book) -> Void = { _ in },
+        onBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in }
     ) {
         self.books = books
         self.positionLookup = positionLookup
@@ -53,6 +55,7 @@ struct LibraryGrid: View {
         self.onToggleSelection = onToggleSelection
         self.onShareSingle = onShareSingle
         self.onStartSharedReading = onStartSharedReading
+        self.onBookVisibilityChange = onBookVisibilityChange
     }
     
 
@@ -129,6 +132,12 @@ struct LibraryGrid: View {
                 ? "Double-tap to select."
                 : bookActionHint
         )
+        .onScrollVisibilityChange { isVisible in
+            onBookVisibilityChange(book.id, isVisible)
+        }
+        .onDisappear {
+            onBookVisibilityChange(book.id, false)
+        }
         .contextMenu {
             Button {
                 onShareSingle(book)

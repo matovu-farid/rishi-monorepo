@@ -24,6 +24,22 @@ public actor EntitlementSyncClient: EntitlementSyncing {
         self.client = client
     }
 
+    nonisolated func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        client.usesCredentialAuthority(authority)
+    }
+
+    /// Original account admission survives the actor hop and every retry.
+    func sync(transactionJWS: String, credentialContext: CredentialRequestContext) async throws -> EntitlementSyncResult {
+        guard case .normal = credentialContext else { throw CredentialAuthenticationFailure.accountChanged }
+        // Receipt sync commits a remote effect. Deliver late successful HTTP
+        // to the original transaction finisher, without admitting another lease.
+        let admitted = try await client.sendAdmittedCreation(
+            EntitlementSyncEndpoint(body: .init(transactionJWS: transactionJWS)),
+            credentialContext: credentialContext
+        )
+        return EntitlementSyncResult(verified: admitted.response.verified, reason: admitted.response.reason)
+    }
+
     public func sync(transactionJWS: String) async throws -> EntitlementSyncResult {
         do {
             let response = try await client.send(

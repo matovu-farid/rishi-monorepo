@@ -29,35 +29,61 @@ public struct OnboardingFlowView: View {
         Group {
             switch coordinator.currentStage {
             case .welcome:
-                WelcomeScreen(onGetStarted: {
-                    // KEEP: coordinator is an @Observable @MainActor; advance
-                    // mutates currentStage which SwiftUI observes.
-                    Task { await coordinator.advance() }
-                }, logo: "rishi")
+                WelcomeScreen(onGetStarted: beginWelcomeTransition, logo: "rishi")
 
             case .voiceLanguagePrimer:
                 VoiceLanguagePrimer(
                     selection: $voiceLanguage,
-                    onContinue: {
-                        Task { await coordinator.advance() }
-                    },
-                    onSkip: {
-                        Task { await coordinator.skipCurrentStage() }
-                    }
+                    onBack: coordinator.back,
+                    onContinue: continueLanguage,
+                    onSkip: skipLanguage
                 )
 
             case .firstReaderHint:
-                FirstReaderHint(onGotIt: {
-                    // KEEP: coordinator advance + onCompleted callback (both UI).
-                    Task {
-                        await coordinator.advance()
-                        onCompleted()
-                    }
-                })
+                FirstReaderHint(onBack: coordinator.back, onGotIt: completeHint)
 
             case .completed:
                 Color.clear.onAppear { onCompleted() }
             }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let step = coordinator.currentStage.introStep {
+                OnboardingProgressView(step: step)
+            }
+        }
+        .disabled(coordinator.isTransitioning)
+    }
+
+    private func beginWelcomeTransition() {
+        guard coordinator.beginTransition() else { return }
+        Task {
+            defer { coordinator.endTransition() }
+            await coordinator.advance()
+        }
+    }
+
+    private func continueLanguage() {
+        guard coordinator.beginTransition() else { return }
+        Task {
+            defer { coordinator.endTransition() }
+            await coordinator.advance()
+        }
+    }
+
+    private func skipLanguage() {
+        guard coordinator.beginTransition() else { return }
+        Task {
+            defer { coordinator.endTransition() }
+            await coordinator.skipCurrentStage()
+        }
+    }
+
+    private func completeHint() {
+        guard coordinator.beginTransition() else { return }
+        Task {
+            defer { coordinator.endTransition() }
+            await coordinator.advance()
+            onCompleted()
         }
     }
 }

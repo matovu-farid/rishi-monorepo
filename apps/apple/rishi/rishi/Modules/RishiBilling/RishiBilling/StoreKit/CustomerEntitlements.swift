@@ -1,277 +1,251 @@
-
-
-
-
-
-
-
 import Foundation
-
-
-
 import OSLog
 import StoreKit
 
 private let logger = Logger(subsystem: "Rishi", category: "CustomerEntitlements")
-import Foundation
-
 public typealias SubscriptionGroupID = String
-
 
 @available(iOS 18.4, macOS 15.4, *)
 @MainActor @Observable
 public final class CustomerEntitlements {
-    
-    private var transactionUpdatesTask: Task<Void, any Error>?
-    private var statusUpdatesTask: Task<Void, any Error>?
+    private let authority: SessionCredentialAuthority
+    private let syncClient: EntitlementSyncClient
+    private let worker: WorkerClient
+    private let refreshCoordinator: EntitlementRefreshCoordinator
+    private let sources: CustomerEntitlementSources
+    private var observationGeneration: UUID?
+    private var transactionUpdatesTask: Task<Void, Never>?
+    private var statusUpdatesTask: Task<Void, Never>?
+    private var initialCheckTask: Task<Void, Never>?
     private var inFlightTransactionIds: Set<UInt64> = []
-    
+    private var errorOwner: CredentialLease?
+    public private(set) var subscriptionStatuses: [SubscriptionGroupID: [SubscriptionStatus]] = [:]
+    public private(set) var error: CustomerEntitlementsError?
+
+    init(credentialAuthority: SessionCredentialAuthority,
+         entitlementSyncClient: EntitlementSyncClient, workerClient: WorkerClient,
+         refreshCoordinator: EntitlementRefreshCoordinator,
+         sources: CustomerEntitlementSources = .storeKit) throws {
+        guard entitlementSyncClient.usesCredentialAuthority(credentialAuthority),
+              workerClient.usesCredentialAuthority(credentialAuthority),
+              refreshCoordinator.usesCredentialAuthority(credentialAuthority) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        authority = credentialAuthority
+        syncClient = entitlementSyncClient
+        worker = workerClient
+        self.refreshCoordinator = refreshCoordinator
+        self.sources = sources
+    }
+
     isolated deinit {
         transactionUpdatesTask?.cancel()
         statusUpdatesTask?.cancel()
+        initialCheckTask?.cancel()
     }
-    
-    
-    
-    public static let shared: CustomerEntitlements = .init()
-    
-    public private(set) var ownedNonConsumables: Set<Product.ID> = []
-    
-    public private(set) var subscriptionStatuses: [SubscriptionGroupID: [SubscriptionStatus]] = [:]
-    
-    public private(set) var error: CustomerEntitlementsError?
 
-    /// Returns whether StoreKit currently reports an active subscription in
-    /// the supplied group, including grace-period and billing-retry states.
+    /// One app/service-graph lifecycle. Multiple scenes can repeat start;
+    /// only graph retirement stops it.
+    func startObserving() {
+        guard observationGeneration == nil else { return }
+        let generation = UUID()
+        observationGeneration = generation
+        let transactionUpdate: CustomerEntitlementSources.Callback = { [weak self] event in
+            guard let self, self.observationGeneration == generation, !Task.isCancelled else { return }
+            await self.receive(event, origin: .purchaseCompletion, verifyAfterSync: true)
+        }
+        let backgroundUpdate: CustomerEntitlementSources.Callback = { [weak self] event in
+            guard let self, self.observationGeneration == generation, !Task.isCancelled else { return }
+            await self.receive(event, origin: .backgroundSync, verifyAfterSync: false)
+        }
+        let sources = sources
+        transactionUpdatesTask = Task { await sources.transactions(transactionUpdate) }
+        statusUpdatesTask = Task { await sources.statuses(backgroundUpdate) }
+        // Owned initial work never prevents either updates stream starting.
+        initialCheckTask = Task { await sources.initial(backgroundUpdate) }
+    }
+
+    func stopObserving() {
+        observationGeneration = nil
+        transactionUpdatesTask?.cancel(); transactionUpdatesTask = nil
+        statusUpdatesTask?.cancel(); statusUpdatesTask = nil
+        initialCheckTask?.cancel(); initialCheckTask = nil
+    }
+
+    func clearAccountProjection(lease: CredentialLease) {
+        guard errorOwner == lease else { return }
+        error = nil; errorOwner = nil
+    }
+
+    func isCurrent(_ context: CredentialRequestContext?) -> Bool {
+        guard case .some(.normal(let lease)) = context else { return false }
+        return authority.isCurrent(lease)
+    }
+
     public func hasActiveSubscription(in groupID: SubscriptionGroupID) -> Bool {
         subscriptionStatuses[groupID]?.activeSubscriptionStatuses.isEmpty == false
     }
 
-    /// The product currently active in a subscription group, if StoreKit has
-    /// reported current status for that group.
     public func activeProductID(in groupID: SubscriptionGroupID) -> Product.ID? {
         subscriptionStatuses[groupID]?.activeSubscriptionStatuses
             .sorted { $0.transaction.unsafePayloadValue.purchaseDate > $1.transaction.unsafePayloadValue.purchaseDate }
-            .first?
-            .transaction
-            .unsafePayloadValue
-            .productID
+            .first?.transaction.unsafePayloadValue.productID
     }
-    
-    /// Sync entitlement with the worker, then finish on any successful HTTP
-    /// (verified or business reject). On transport failure the transaction
-    /// is left unfinished so `Transaction.unfinished` / `Transaction.updates`
-    /// can retry. Snapshot refresh runs via ``EntitlementSyncHooks/onSynced``
-    /// only when the worker reports `verified: true`.
-    ///
-    /// User-facing `.entitlementSyncFailed` is only set for
-    /// ``EntitlementProcessOrigin/purchaseCompletion``. Background paths
-    /// (paywall open / unfinished replay) log rejects without alerting —
-    /// StoreKit Testing JWTs commonly fail Apple-root worker verify.
-    public func process(
-        transaction: Transaction,
-        jws: String,
-        origin: EntitlementProcessOrigin = .backgroundSync
-    ) async {
-        if inFlightTransactionIds.contains(transaction.id) {
-            logger.debug("""
-            Skipping duplicate process for in-flight transaction \(transaction.id)
-            """)
-            return
-        }
-        inFlightTransactionIds.insert(transaction.id)
-        defer { inFlightTransactionIds.remove(transaction.id) }
 
+    func process(transaction: Transaction, jws: String,
+                 origin: EntitlementProcessOrigin = .backgroundSync,
+                 credentialContext: CredentialRequestContext) async {
+        await process(receipt: .init(transaction: transaction, jws: jws), origin: origin,
+                      credentialContext: credentialContext)
+    }
+
+    func process(receipt: CustomerEntitlementReceipt, origin: EntitlementProcessOrigin,
+                 credentialContext: CredentialRequestContext) async {
+        guard isCurrent(credentialContext), !Task.isCancelled,
+              inFlightTransactionIds.insert(receipt.id).inserted else { return }
+        let generation = observationGeneration
+        defer { inFlightTransactionIds.remove(receipt.id) }
         do {
-            let result = try await syncEntitlement(jws: jws)
-            await transaction.finish()
-            if result.verified {
-                logger.debug("""
-                Finished transaction \(transaction.id) after successful entitlement sync
-                """)
-            } else {
-                logger.error("""
-                Entitlement sync rejected transaction \(transaction.id) \
-                (\(transaction.productID)); reason: \(result.reason ?? "unknown")
-                """)
-                if shouldSurfaceEntitlementSyncFailure(
-                    origin: origin,
-                    transaction: transaction
-                ) {
-                    updateError(.entitlementSyncFailed)
-                }
+            let result = try await syncClient.sync(transactionJWS: receipt.jws, credentialContext: credentialContext)
+            if result.verified, isCurrent(credentialContext), !Task.isCancelled {
+                _ = await refreshCoordinator.refreshIfSignedIn(reason: .foreground, credentialContext: credentialContext)
+            }
+            // Deliver the committed original HTTP result even after retirement.
+            await receipt.finish()
+            if !result.verified {
+                logger.error("Entitlement sync rejected \(receipt.id): \(result.reason ?? "unknown")")
+                surfaceFailure(receipt, origin: origin, context: credentialContext, generation: generation)
             }
         } catch {
-            logger.error("""
-            Entitlement sync failed for transaction \(transaction.id) \
-            (\(transaction.productID)); leaving unfinished for replay: \(error)
-            """)
-            if shouldSurfaceEntitlementSyncFailure(
-                origin: origin,
-                transaction: transaction
-            ) {
-                updateError(.entitlementSyncFailed)
-            }
+            logger.error("Entitlement sync failed for \(receipt.id); leaving unfinished: \(error)")
+            surfaceFailure(receipt, origin: origin, context: credentialContext, generation: generation)
         }
     }
 
-    /// Surface sync rejects only for a real purchase attempt that is not
-    /// StoreKit Testing (Xcode). Xcode rejects are expected until/unless the
-    /// non-prod worker accepts StoreKit Testing JWTs.
-    private func shouldSurfaceEntitlementSyncFailure(
-        origin: EntitlementProcessOrigin,
-        transaction: Transaction
-    ) -> Bool {
-        guard origin == .purchaseCompletion else { return false }
-        if transaction.environment == .xcode { return false }
-        return true
+    private func surfaceFailure(_ receipt: CustomerEntitlementReceipt, origin: EntitlementProcessOrigin,
+                                context: CredentialRequestContext, generation: UUID?) {
+        guard origin == .purchaseCompletion, !receipt.isXcode, observationGeneration == generation,
+              isCurrent(context), !Task.isCancelled else { return }
+        setError(.entitlementSyncFailed, context: context)
     }
-    
 
-    
-    
-    public func observeTransactionUpdates() {
-        transactionUpdatesTask?.cancel()
-        transactionUpdatesTask = Task { [weak self] in
-            logger.debug("Observing transaction updates")
-            for await update in Transaction.updates {
-                guard let self else { return }
-                guard let transaction = await unwrapVerificationResult(update) else { continue }
-             
-               
-            
-                await self.process(
-                    transaction: transaction,
-                    jws: update.jwsRepresentation,
-                    origin: .purchaseCompletion
-                )
-                
-                do {
-                   guard let workerClient = EntitlementSyncHooks.workerClient else {
-                       throw EntitlementSyncConfigurationError.workerClientUnavailable
-                   }
-                   let _ = try await VerifyEndPont(body: .init(transactionId: transaction.id))
-                       .send(using: workerClient)
-                }catch {
-                    print(error)
-                }
-             
+    private func setError(_ next: CustomerEntitlementsError, context: CredentialRequestContext) {
+        guard case .normal(let lease) = context, authority.isCurrent(lease) else { return }
+        error = next; errorOwner = lease
+    }
+
+    private func receive(_ event: CustomerEntitlementEvent, origin: EntitlementProcessOrigin,
+                         verifyAfterSync: Bool) async {
+        // Capture before the first verification/transport suspension. Device
+        // status remains a management projection even while signed out.
+        let context = (try? authority.snapshot()).map { CredentialRequestContext.normal($0.lease) }
+        switch event {
+        case .receipt(let receipt):
+            guard let context else { return }
+            await process(receipt: receipt, origin: origin, credentialContext: context)
+            guard verifyAfterSync, isCurrent(context), !Task.isCancelled else { return }
+            do {
+                _ = try await worker.send(VerifyEndPont(body: .init(transactionId: receipt.id)), credentialContext: context)
+            } catch { logger.error("Best-effort transaction verification failed: \(error)") }
+        case .invalid:
+            if let context { setError(.invalidTransaction, context: context) }
+        case .currentStatuses(let group, let statuses):
+            subscriptionStatuses[group] = statuses
+            if let context { _ = await refreshCoordinator.refreshIfSignedIn(reason: .foreground, credentialContext: context) }
+        case .statusUpdate(let status):
+            switch status.transaction {
+            case .unverified(_, let failure):
+                logger.error("Unverified subscription status: \(failure)")
+                if let context { setError(.invalidTransaction, context: context) }
+            case .verified(let transaction):
+                guard let group = transaction.subscriptionGroupID else { return }
+                let current = subscriptionStatuses[group] ?? []
+                subscriptionStatuses[group] = current.filter {
+                    $0.transaction.unsafePayloadValue.ownershipType != transaction.ownershipType
+                } + [status]
+                if let context { _ = await refreshCoordinator.refreshIfSignedIn(reason: .foreground, credentialContext: context) }
             }
         }
     }
-    
-    public func checkForCurrentEntitlements() async {
-        logger.debug("Checking for current entitlements")
-        for await result in Transaction.currentEntitlements {
-            guard let transaction = await unwrapVerificationResult(result) else {
-                logger.error("Encountered error while checking for current entitlements")
-                return
+}
+
+@available(iOS 18.4, macOS 15.4, *)
+enum CustomerEntitlementEvent {
+    case receipt(CustomerEntitlementReceipt)
+    case invalid
+    case currentStatuses(String, [SubscriptionStatus])
+    case statusUpdate(SubscriptionStatus)
+}
+
+/// Native sequence adapters and finite test seams. This value owns no tasks,
+/// caches, account lifetime, or entitlement state.
+@available(iOS 18.4, macOS 15.4, *)
+struct CustomerEntitlementSources: Sendable {
+    typealias Callback = @MainActor @Sendable (CustomerEntitlementEvent) async -> Void
+    let transactions: @MainActor @Sendable (@escaping Callback) async -> Void
+    let statuses: @MainActor @Sendable (@escaping Callback) async -> Void
+    let initial: @MainActor @Sendable (@escaping Callback) async -> Void
+
+    static let storeKit = Self(
+        transactions: { callback in
+            for await result in Transaction.updates {
+                guard !Task.isCancelled else { return }
+                await callback(event(result))
             }
-            logger.log("""
-            Processing current entitlement \(transaction.id) for \
-            \(transaction.productID)
-            """)
-//            SubscriptionService.shared.saveSubscription(subscription: .subscribed)
-            let jws = result.jwsRepresentation
-            Task.detached(priority: .background) {
-                await self.process(transaction: transaction, jws: jws)
-                
-            }
-        }
-        logger.debug("Finished checking for current entitlements")
-    }
-    
-    public func checkForUnfinishedTransactions() async {
-        logger.debug("Checking for unfinished transactions")
-        for await result in Transaction.unfinished {
-            guard let transaction = await unwrapVerificationResult(result) else {
-                logger.error("Encountered error while checking for unfinished transactions")
-                return
-            }
-            logger.log("""
-            Processing unfinished transaction ID \(transaction.id) for \
-            \(transaction.productID)
-            """)
-            let jws = result.jwsRepresentation
-            Task.detached(priority: .background) {
-                await self.process(transaction: transaction, jws: jws)
-            }
-        }
-        logger.debug("Finished checking for unfinished transactions")
-    }
-    
-    
-    
-    public func observeStatusUpdates() {
-        statusUpdatesTask?.cancel()
-        statusUpdatesTask = Task { [weak self] in
-            logger.debug("Observing status updates")
+        },
+        statuses: { callback in
             for await status in SubscriptionStatus.updates {
-                guard let self,
-                      let transaction = await unwrapVerificationResult(status.transaction),
-                      let subscriptionGroupID = transaction.subscriptionGroupID
-                else {
-                    continue
-                }
-                
-                let updatedStatuses: [SubscriptionStatus]
-                let currentStatuses = self.subscriptionStatuses[subscriptionGroupID]
-                if let currentStatuses {
-                    if let currentStatus = currentStatuses.first(where: {
-                        $0.transaction.unsafePayloadValue.ownershipType == transaction.ownershipType
-                    }) {
-                        updatedStatuses = currentStatuses.filter { $0 != currentStatus } + [status]
-                    } else {
-                        updatedStatuses = currentStatuses + [status]
-                    }
-                } else {
-                    updatedStatuses = [status]
-                }
-                
-                self.updateSubscriptionStatuses(for: subscriptionGroupID, statuses: updatedStatuses)
+                guard !Task.isCancelled else { return }
+                await callback(.statusUpdate(status))
+            }
+        },
+        initial: { callback in
+            for await result in Transaction.unfinished {
+                guard !Task.isCancelled else { return }
+                let next = event(result); await callback(next)
+                if case .invalid = next { break }
+            }
+            for await result in Transaction.currentEntitlements {
+                guard !Task.isCancelled else { return }
+                let next = event(result); await callback(next)
+                if case .invalid = next { break }
+            }
+            for await (group, statuses) in SubscriptionStatus.all {
+                guard !Task.isCancelled else { return }
+                await callback(.currentStatuses(group, statuses))
             }
         }
-    }
-    
-    public func checkCurrentStatuses() async {
-        logger.debug("Checking current statuses")
-        for await (subscriptionGroupID, statuses) in SubscriptionStatus.all {
-            updateSubscriptionStatuses(for: subscriptionGroupID, statuses: statuses)
-        }
-        logger.debug("Finished checking current statuses")
-    }
-    
-    
-    
- 
-    private func unwrapVerificationResult(
-        _ verificationResult: VerificationResult<Transaction>
-    ) async -> Transaction? {
-        
-        
-        switch verificationResult {
-        case .verified(let t):
-            logger.debug("""
-            Transaction ID \(t.id) for \(t.productID) is verified
-            """)
-            return t
-        case .unverified(let t, let error):
-            
-            logger.error("""
-            Transaction ID \(t.id) for \(t.productID) is unverified: \(error)
-            """)
-            updateError(.invalidTransaction)
-            return nil
-        }
-    }
-    
+    )
 
-    private func updateSubscriptionStatuses(for subscriptionGroupID: String, statuses: [SubscriptionStatus]) {
-        self.subscriptionStatuses[subscriptionGroupID] = statuses
+    private static func event(_ result: VerificationResult<Transaction>) -> CustomerEntitlementEvent {
+        switch result {
+        case .verified(let transaction): return .receipt(.init(transaction: transaction, jws: result.jwsRepresentation))
+        case .unverified(let transaction, let error):
+            logger.error("Unverified transaction \(transaction.id): \(error)")
+            return .invalid
+        }
     }
-    
-    private func updateError(_ error: CustomerEntitlementsError) {
-        self.error = error
+}
+
+/// Immutable input and original StoreKit completion capability. Native and
+/// memory-only regression tests share the same finite receipt processing path.
+@available(iOS 18.4, macOS 15.4, *)
+struct CustomerEntitlementReceipt: Sendable {
+    let id: UInt64
+    let productID: String
+    let jws: String
+    let isXcode: Bool
+    let finish: @Sendable () async -> Void
+
+    init(id: UInt64, productID: String, jws: String, isXcode: Bool,
+         finish: @escaping @Sendable () async -> Void) {
+        self.id = id; self.productID = productID; self.jws = jws
+        self.isXcode = isXcode; self.finish = finish
+    }
+
+    init(transaction: Transaction, jws: String) {
+        self.init(id: transaction.id, productID: transaction.productID, jws: jws,
+                  isXcode: transaction.environment == .xcode, finish: { await transaction.finish() })
     }
 }
 

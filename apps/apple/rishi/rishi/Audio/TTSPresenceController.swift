@@ -25,6 +25,9 @@ final class TTSPresenceController {
     private var currentSpeed: Double = 1.0
     private var lastSnapshot: TTSPresenceSnapshot?
     private var observationTask: Task<Void, Never>?
+    private var observesPlayback = true
+    private var publishesNativeEffects = true
+    private var now: @MainActor () -> Date = { Date() }
 
     #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
         private var activity: Activity<TTSPresenceAttributes>?
@@ -34,6 +37,19 @@ final class TTSPresenceController {
         self.state = state
         self.store = store
     }
+
+    #if DEBUG
+    /// Samples explicitly against a local store, without native publication.
+    convenience init(state: TTSPlaybackState, store: any TTSPresenceStore,
+                     testingNow: @escaping @MainActor () -> Date) {
+        self.init(state: state, store: store)
+        observesPlayback = false
+        publishesNativeEffects = false
+        now = testingNow
+    }
+
+    func samplePlaybackState() async { await publishSnapshot() }
+    #endif
 
     func beginSession(
         bookID: String,
@@ -50,18 +66,21 @@ final class TTSPresenceController {
         currentVoice = voice
         currentModel = model
         currentSpeed = speed
-        let initialSnapshot = makeSnapshot(forceStatus: .loading)
+        let initialSnapshot = makeSnapshot(forceStatus: .loading, updatedAt: now())
         lastSnapshot = initialSnapshot
         store.write(initialSnapshot)
-        #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadTimelines(
-                ofKind: TTSPresenceEnvironment.widgetKind
-            )
-        #endif
-        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
-            await updateLiveActivity(with: initialSnapshot)
-        #endif
+        if publishesNativeEffects {
+            #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: TTSPresenceEnvironment.widgetKind
+                )
+            #endif
+            #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
+                await updateLiveActivity(with: initialSnapshot)
+            #endif
+        }
         observationTask?.cancel()
+        guard observesPlayback else { return }
         observationTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.publishSnapshot()
@@ -89,46 +108,52 @@ final class TTSPresenceController {
     func endSession() async {
         observationTask?.cancel()
         observationTask = nil
-        let finalSnapshot = makeSnapshot(forceStatus: .stopped)
+        let finalSnapshot = makeSnapshot(forceStatus: .stopped, updatedAt: now())
         store.write(finalSnapshot)
         lastSnapshot = finalSnapshot
-        #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadTimelines(
-                ofKind: TTSPresenceEnvironment.widgetKind
-            )
-        #endif
-        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
-            if let activity {
-                await activity.end(
-                    ActivityContent(
-                        state: TTSPresenceAttributes.ContentState(
-                            snapshot: finalSnapshot
-                        ),
-                        staleDate: nil
-                    ),
-                    dismissalPolicy: .default
+        if publishesNativeEffects {
+            #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: TTSPresenceEnvironment.widgetKind
                 )
-                self.activity = nil
-            }
-        #endif
+            #endif
+            #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
+                if let activity {
+                    await activity.end(
+                        ActivityContent(
+                            state: TTSPresenceAttributes.ContentState(
+                                snapshot: finalSnapshot
+                            ),
+                            staleDate: nil
+                        ),
+                        dismissalPolicy: .default
+                    )
+                    self.activity = nil
+                }
+            #endif
+        }
     }
 
     private func publishSnapshot() async {
-        let snapshot = makeSnapshot(forceStatus: nil)
-        guard snapshot != lastSnapshot else { return }
+        let candidate = makeSnapshot(forceStatus: nil,
+                                     updatedAt: lastSnapshot?.updatedAt ?? now())
+        guard candidate != lastSnapshot else { return }
+        let snapshot = makeSnapshot(forceStatus: nil, updatedAt: now())
         lastSnapshot = snapshot
         store.write(snapshot)
-        #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadTimelines(
-                ofKind: TTSPresenceEnvironment.widgetKind
-            )
-        #endif
-        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
-            await updateLiveActivity(with: snapshot)
-        #endif
+        if publishesNativeEffects {
+            #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: TTSPresenceEnvironment.widgetKind
+                )
+            #endif
+            #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
+                await updateLiveActivity(with: snapshot)
+            #endif
+        }
     }
 
-    private func makeSnapshot(forceStatus: TTSStatus?) -> TTSPresenceSnapshot {
+    private func makeSnapshot(forceStatus: TTSStatus?, updatedAt: Date = Date()) -> TTSPresenceSnapshot {
         let status = forceStatus ?? state.status
         let currentPassageID = state.currentPassageId
         let currentPassageIndex = currentPassageID.flatMap(Int.init)
@@ -143,7 +168,8 @@ final class TTSPresenceController {
             voice: currentVoice,
             model: currentModel,
             speed: currentSpeed,
-            elapsed: state.elapsed
+            elapsed: state.elapsed,
+            updatedAt: updatedAt
         )
     }
 

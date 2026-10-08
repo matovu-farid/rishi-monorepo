@@ -27,16 +27,23 @@ struct SignedInContentDependencies {
     @MainActor
     static func make(
         services: BootstrappedServices,
+        appDependencies: AppDependencies,
+        credentialSnapshot: CredentialSnapshot,
         accountIdentity: LibraryAccountIdentity,
         currentAccountIdentity: @escaping @MainActor () -> LibraryAccountIdentity?,
         onSignedOut: @escaping @MainActor @Sendable () -> Void
-    ) -> Self {
+    ) throws -> Self {
+        let authority = appDependencies.credentialAuthority
+        _ = try authority.snapshot(for: .normal(credentialSnapshot.lease))
+        guard appDependencies.activeAccountIdentity == accountIdentity else { throw CredentialAuthenticationFailure.accountChanged }
+        let consent = CredentialBoundDataUseConsentStore(store: services.dataUseConsentStore, authority: authority, lease: credentialSnapshot.lease)
+        let sharedAPI = try services.sharedReadingAPIFactory(.normal(credentialSnapshot.lease))
+        let deletion = try appDependencies.accountDeletionCoordinator(snapshot: credentialSnapshot, accountIdentity: accountIdentity, publishSignedOut: onSignedOut)
         let deleteAccount: @Sendable (UUID) async throws -> Void = { userId in
-            try await services.accountDeletionCoordinator(
-                userId: userId,
-                signOut: onSignedOut
-            ).run()
+            guard userId == accountIdentity.userID else { throw CredentialAuthenticationFailure.accountChanged }
+            try await deletion.run()
         }
+
         return Self(
             library: LibraryTabDependencies(
                 bookStore: services.library.bookStore,
@@ -53,11 +60,14 @@ struct SignedInContentDependencies {
                 bookSourceRegistry: services.library.bookSourceRegistry,
                 bookImportLifecycle: services.library.bookImportLifecycle,
                 bookMaterializationCoordinator: services.library.bookMaterializationCoordinator,
+                bookImportRecovery: services.library.bookImportRecovery,
                 bookImportEvents: services.library.bookImportEvents,
                 currentAccountGeneration: services.library.currentAccountGeneration,
+                credentialAuthority: authority,
+                credentialSnapshot: credentialSnapshot,
                 accountIdentity: accountIdentity,
                 currentAccountIdentity: currentAccountIdentity,
-                sharedReadingAPI: services.sharedReadingAPI,
+                sharedReadingAPI: sharedAPI,
                 sharedReadingSessionRegistry: services.sharedReadingSessionRegistry,
                 sessionBookService: services.library.sessionBookService,
                 entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
@@ -65,6 +75,8 @@ struct SignedInContentDependencies {
                 voicePresenter: services.voice.presenter,
                 groupID: services.billing.groupID,
                 settings: SettingsContentDependencies(
+                    credentialAuthority: authority, credentialSnapshot: credentialSnapshot,
+                    customerEntitlements: services.billing.customerEntitlements, store: services.billing.store,
                     workerClient: services.workerClient,
                     readerDefaults: services.settings.readerDefaults,
                     ttsSettingsStore: services.audio.ttsSettingsStore,
@@ -77,8 +89,13 @@ struct SignedInContentDependencies {
                     restoreService: services.billing.restoreService,
                     manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
                     groupID: services.billing.groupID,
-                    dataUseConsentStore: services.dataUseConsentStore,
-                    onRevokeDataUse: { await services.voice.presenter.requestEnd() },
+                    dataUseConsentStore: consent,
+                    onRevokeDataUse: {
+                        do { try await services.voice.presenter.requestEnd(credentialContext: .normal(credentialSnapshot.lease)) }
+                        catch CredentialAuthenticationFailure.accountChanged { }
+                        catch is CancellationError { }
+                        catch { Log.error("voice.consent_revoke.failed", error: error) }
+                    },
                     deleteAccount: deleteAccount
                 )
             ),
@@ -86,7 +103,7 @@ struct SignedInContentDependencies {
             messageStore: services.chat.messageStore,
             voicePresenter: services.voice.presenter,
             entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-            dataUseConsentStore: services.dataUseConsentStore,
+            dataUseConsentStore: consent,
             deleteAccount: deleteAccount
         )
     }
@@ -97,7 +114,9 @@ struct SignedInView: View {
 
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUserBox
+    @Environment(TrialIntroPresentationState.self) private var trialPresentationState
     @Environment(\.signOut) private var signOut
+    @State private var trialRegistration: TrialIntroPresentationState.Registration?
 #if targetEnvironment(macCatalyst)
     @State private var showUsernameEditor = false
 #endif
@@ -116,32 +135,88 @@ struct SignedInView: View {
         if let services, let user,
            let appDependencies,
            let accountIdentity = appDependencies.activeAccountIdentity,
-           accountIdentity.userID == user.id {
+           accountIdentity.userID == user.id,
+           let snapshot = try? appDependencies.credentialAuthority.snapshot(),
+           DerivedUserID.from(snapshot.lease.rawUserID) == user.id,
+           let contentDependencies = try? SignedInContentDependencies.make(
+                services: services, appDependencies: appDependencies, credentialSnapshot: snapshot,
+                accountIdentity: accountIdentity,
+                currentAccountIdentity: { [weak appDependencies] in appDependencies?.activeAccountIdentity },
+                onSignedOut: { currentUserBox.signedOutAfterCredentialClear() }) {
 #if targetEnvironment(macCatalyst)
             let editUsername: @MainActor () -> Void = { showUsernameEditor = true }
 #else
             let editUsername: @MainActor () -> Void = {}
 #endif
             SignedInContent(
-                dependencies: SignedInContentDependencies.make(
-                    services: services,
-                    accountIdentity: accountIdentity,
-                    currentAccountIdentity: { [weak appDependencies] in appDependencies?.activeAccountIdentity },
-                    onSignedOut: { signOut() }
-                ),
+                dependencies: contentDependencies,
                 user: user,
                 onLibraryReadyForTrial: onLibraryReadyForTrial
             )
             .id(accountIdentity)
+            .id(snapshot.lease)
             .macCommandDispatch(readerDefaults: services.settings.readerDefaults)
             .readerPrefsMenuPublisher(
                 services: services,
                 user: user,
                 onSignedOut: { signOut() },
+                deleteAccount: { try await contentDependencies.deleteAccount(user.id) },
                 account: appDependencies.macAccountMenu,
                 onEditUsername: editUsername
             )
             .accountDeletionAlerts(account: appDependencies.macAccountMenu)
+            .onAppear {
+                guard trialRegistration == nil else { return }
+                trialRegistration = trialPresentationState.register(.signedIn, identity: accountIdentity) { [weak appDependencies, weak currentUserBox] in
+                    var safety = TrialChildSafety()
+                    let currentUserID: UUID?
+                    if case .signedIn(user: let user)? = currentUserBox?.state {
+                        currentUserID = user.id
+                    } else {
+                        currentUserID = nil
+                    }
+                    let accountMatches = currentUserID == accountIdentity.userID
+                        && appDependencies?.activeAccountIdentity == accountIdentity
+                    safety.consent = true
+                    safety.conversation = true
+                    safety.voice = true
+                    safety.libraryReady = true
+                    safety.libraryModal = true
+                    safety.firstBookFlowActive = false
+#if targetEnvironment(macCatalyst)
+                    let account = appDependencies?.macAccountMenu
+                    safety.signedIn = NoCardTrialPresentationPolicy.signedInSourceIsSafe(
+                        accountMatches: accountMatches,
+                        catalystModelAvailable: account != nil,
+                        usernameEditorPresented: showUsernameEditor,
+                        accountDeleteConfirmationPresented: account?.deleteConfirmationPresented == true,
+                        accountDeleteErrorPresented: account?.deleteError != nil
+                    )
+#else
+                    safety.signedIn = NoCardTrialPresentationPolicy.signedInSourceIsSafe(
+                        accountMatches: accountMatches
+                    )
+#endif
+                    return safety
+                }
+            }
+            .onDisappear {
+                guard let trialRegistration else { return }
+                trialPresentationState.unregister(
+                    trialRegistration,
+                    deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
+                )
+                self.trialRegistration = nil
+            }
+#if targetEnvironment(macCatalyst)
+            .onChange(of: showUsernameEditor) { _, _ in trialPresentationState.update() }
+            .onChange(of: appDependencies.macAccountMenu.deleteConfirmationPresented) { _, _ in
+                trialPresentationState.update()
+            }
+            .onChange(of: appDependencies.macAccountMenu.deleteError) { _, _ in
+                trialPresentationState.update()
+            }
+#endif
 #if targetEnvironment(macCatalyst)
             .sheet(isPresented: $showUsernameEditor) {
                 UsernameEditorView(username: user.username) { username in
@@ -174,6 +249,7 @@ struct SignedInContent: View {
     @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw: String = ""
     @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw: String = ""
     @Environment(AppRouter.self) private var router
+    @Environment(TrialIntroPresentationState.self) private var trialPresentationState
 #if targetEnvironment(macCatalyst)
     @Environment(ReaderWindowCoordinator.self) private var readerWindows
 #endif
@@ -181,6 +257,7 @@ struct SignedInContent: View {
     @State private var showDataUseConsent = false
     @State private var dataUseConsentGranted = false
     @State private var retryVoiceAfterConsent = false
+    @State private var trialRegistration: TrialIntroPresentationState.Registration?
 
     var body: some View {
         @Bindable var model = model
@@ -230,16 +307,48 @@ struct SignedInContent: View {
 #endif
         .task(id: user.id) {
             await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
-            dataUseConsentGranted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
-            showDataUseConsent = !dataUseConsentGranted
+            let granted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
+            _ = dependencies.library.credentialAuthority.performIfCurrent(dependencies.library.credentialSnapshot.lease) {
+                dataUseConsentGranted = granted
+                showDataUseConsent = !granted
+            }
         }
+        .onAppear {
+            guard trialRegistration == nil else { return }
+            trialRegistration = trialPresentationState.register(.signedInContent, identity: dependencies.library.accountIdentity) {
+                var safety = TrialChildSafety()
+                safety.signedIn = true
+                safety.consent = dataUseConsentGranted && !showDataUseConsent
+                safety.conversation = model.selectedConversation == nil
+                safety.voice = !dependencies.voicePresenter.isPresenting && dependencies.voicePresenter.failure == nil
+                safety.libraryReady = true
+                safety.libraryModal = true
+                safety.firstBookFlowActive = false
+                return safety
+            }
+        }
+        .onDisappear {
+            guard let trialRegistration else { return }
+            trialPresentationState.unregister(
+                trialRegistration,
+                deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
+            )
+            self.trialRegistration = nil
+        }
+        .onChange(of: dataUseConsentGranted) { _, _ in trialPresentationState.update() }
+        .onChange(of: showDataUseConsent) { _, _ in trialPresentationState.update() }
+        .onChange(of: model.selectedConversation?.id) { _, _ in trialPresentationState.update() }
+        .onChange(of: dependencies.voicePresenter.isPresenting) { _, _ in trialPresentationState.update() }
+        .onChange(of: dependencies.voicePresenter.failure) { _, _ in trialPresentationState.update() }
         .sheet(isPresented: $showDataUseConsent) {
             AIDataConsentView(
                 onAllow: {
                     Task {
                         await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
                         await dependencies.dataUseConsentStore.grant(for: user.id.uuidString)
-                        dataUseConsentGranted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
+                        let granted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
+                        guard granted, dependencies.library.credentialAuthority.isCurrent(dependencies.library.credentialSnapshot.lease) else { return }
+                        dataUseConsentGranted = granted
                         showDataUseConsent = false
                         NotificationCenter.default.post(name: AppRouter.shareRedemptionReady, object: nil)
                         if retryVoiceAfterConsent {
@@ -293,7 +402,7 @@ struct SignedInContent: View {
                 Button("See plans") {
                     dependencies.voicePresenter.clearFailure()
                     model.requestPaywall(
-                        "voice_chat_exhausted",
+                        .voiceChatExhausted,
                         serverPaidActive: dependencies.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
                     )
                 }
@@ -360,6 +469,7 @@ private struct SignedInContentPreviewHost: View {
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
         }
         .task { await libraryVM.refresh() }
+        .environment(TrialIntroPresentationState())
     }
 }
 
@@ -374,6 +484,7 @@ extension View {
         services: BootstrappedServices,
         user: User,
         onSignedOut: @escaping @MainActor @Sendable () -> Void,
+        deleteAccount: @escaping @MainActor @Sendable () async throws -> Void,
         account: MacAccountMenuModel?,
         onEditUsername: @escaping @MainActor () -> Void = {},
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
@@ -384,6 +495,7 @@ extension View {
                     services: services,
                     user: user,
                     onSignedOut: onSignedOut,
+                    deleteAccount: deleteAccount,
                     account: account,
                     onEditUsername: onEditUsername,
                     pdfViewMode: pdfViewMode
@@ -403,6 +515,7 @@ extension View {
         let services: BootstrappedServices
         let user: User
         let onSignedOut: @MainActor @Sendable () -> Void
+        let deleteAccount: @MainActor @Sendable () async throws -> Void
         let account: MacAccountMenuModel?
         let onEditUsername: @MainActor () -> Void
         let pdfViewMode: Binding<PDFViewModeSetting>?
@@ -411,12 +524,14 @@ extension View {
             services: BootstrappedServices,
             user: User,
             onSignedOut: @escaping @MainActor @Sendable () -> Void,
+            deleteAccount: @escaping @MainActor @Sendable () async throws -> Void,
             account: MacAccountMenuModel?,
             onEditUsername: @escaping @MainActor () -> Void,
             pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
             self.services = services
             self.onSignedOut = onSignedOut
+            self.deleteAccount = deleteAccount
             _vm = State(
                 wrappedValue: MacReaderPrefsMenuViewModel(
                     services: services,
@@ -459,12 +574,7 @@ extension View {
             var payload = vm.makeAccountPayload(subscriptionAction: action)
             payload.onDeleteAccount = { account?.requestDelete() }
             payload.onEditUsername = onEditUsername
-            account?.onDeleteConfirmed = {
-                try await services.accountDeletionCoordinator(
-                    userId: user.id,
-                    signOut: onSignedOut
-                ).run()
-            }
+            account?.onDeleteConfirmed = deleteAccount
             account?.update(payload)
         }
     }

@@ -11,7 +11,7 @@ import Foundation
 /// inbound bookmark hits the "unknown kind" branch and is silently dropped.
 /// Mirrors ChangeApplierConflictTests' highlight cases:
 ///   - live remote bookmark -> bookmarkStore.upsert + applied + markClean(.bookmark)
-///   - deleted=true -> bookmarkStore.delete + forget(.bookmark)
+///   - deleted=true -> bookmarkStore.delete + retained tombstone acknowledgment
 ///   - LWW: local.createdAt >= remote.createdAt keeps local (conflicts += 1, no echo)
 @Suite("ChangeApplier — bookmark inbound", .serialized)
 struct ChangeApplierBookmarkTests {
@@ -21,6 +21,7 @@ struct ChangeApplierBookmarkTests {
     private actor StubMetadata: SyncMetadataStore {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
         var forgetCalls: [(UUID, SyncEntityKind)] = []
+        var tombstoneAcknowledgements: [(UUID, SyncEntityKind, Date?, Date, String?)] = []
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -33,6 +34,29 @@ struct ChangeApplierBookmarkTests {
         func globalLastSyncedAt() async throws -> Date? { nil }
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {
             forgetCalls.append((entityId, kind))
+        }
+        func acknowledgeTombstoneIfUnchanged(
+            entityId: UUID,
+            kind: SyncEntityKind,
+            expectedDirtyAt: Date?,
+            lastSyncedAt: Date,
+            remoteEtag: String?
+        ) async throws -> Bool {
+            guard try await markCleanIfUnchanged(
+                entityId: entityId,
+                kind: kind,
+                expectedDirtyAt: expectedDirtyAt,
+                lastSyncedAt: lastSyncedAt,
+                remoteEtag: remoteEtag
+            ) else { return false }
+            tombstoneAcknowledgements.append((entityId, kind, expectedDirtyAt, lastSyncedAt, remoteEtag))
+            return true
+        }
+        func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool {
+            tombstoneAcknowledgements.contains { $0.0 == entityId && $0.1 == kind }
+        }
+        func acknowledgedTombstones() -> [(UUID, SyncEntityKind, Date?, Date, String?)] {
+            tombstoneAcknowledgements
         }
         func cleaned() -> [(UUID, SyncEntityKind, Date, String?)] { cleanCalls }
         func forgotten() -> [(UUID, SyncEntityKind)] { forgetCalls }
@@ -89,6 +113,11 @@ struct ChangeApplierBookmarkTests {
             highlightStore: StubHighlightStore(),
             bookmarkStore: bookmarkStore,
             metadataStore: metadata
+        ,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
         )
     }
 
@@ -134,7 +163,7 @@ struct ChangeApplierBookmarkTests {
         #expect(cleaned[0].1 == .bookmark)
     }
 
-    @Test("Inbound deleted bookmark -> bookmarkStore.delete + forget(.bookmark)")
+    @Test("Inbound deleted bookmark -> bookmarkStore.delete + retained tombstone acknowledgment")
     func deletedBookmarkRemoved() async throws {
         let bookmarkStore = StubBookmarkStore()
         let local = Bookmark(
@@ -152,10 +181,16 @@ struct ChangeApplierBookmarkTests {
         #expect(result.applied == 1)
         let stored = await bookmarkStore.snapshot()
         #expect(stored.isEmpty)
-        let forgotten = await metadata.forgotten()
-        #expect(forgotten.count == 1)
-        #expect(forgotten[0].0 == local.id)
-        #expect(forgotten[0].1 == .bookmark)
+        let acknowledged = await metadata.acknowledgedTombstones()
+        #expect(acknowledged.count == 1)
+        let acknowledgment = try #require(acknowledged.first)
+        #expect(acknowledgment.0 == local.id)
+        #expect(acknowledgment.1 == .bookmark)
+        #expect(acknowledgment.2 == nil)
+        #expect(acknowledgment.3 == change.updatedAt)
+        #expect(acknowledgment.4 == nil)
+        #expect(try await metadata.isTombstone(entityId: local.id, kind: .bookmark))
+        #expect(await metadata.forgotten().isEmpty)
     }
 
     @Test("LWW: same id, local.createdAt >= remote -> conflict, no overwrite (no echo)")

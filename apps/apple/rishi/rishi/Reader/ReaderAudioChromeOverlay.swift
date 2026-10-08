@@ -14,6 +14,7 @@ struct ReaderAudioChromeOverlay: View {
     let ttsState: TTSPlaybackState
     let voiceState: VoiceSessionState
     let readAloud: ReadAloudController?
+    let onPlayPauseReadAloud: () -> Void
     let onOpenVoiceChat: () -> Void
     let onOpenReadAloud: () -> Void
     let onEndVoice: () -> Void
@@ -66,9 +67,7 @@ struct ReaderAudioChromeOverlay: View {
                 if let readAloud {
                     ReadAloudControlsView(
                         state: ttsState,
-                        onPlayPause: {
-                            Task { await readAloud.togglePlayback() }
-                        },
+                        onPlayPause: onPlayPauseReadAloud,
                         onStop: {
                             Task { await readAloud.stop() }
                         },
@@ -204,5 +203,34 @@ extension View {
 enum ReaderAudioChromeVisibility {
     nonisolated static func shouldShow(voiceActive: Bool, ttsVisible: Bool) -> Bool {
         voiceActive || ttsVisible
+    }
+}
+
+/// Terminal failure may still have resources while cleanup drains. The host
+/// starts a fresh session through its entitlement/navigation gates in that case.
+enum ReaderReadAloudPlayAction: Equatable {
+    case restart, toggle
+
+    @MainActor
+    static func select(controller: ReadAloudController?) -> Self {
+        guard let controller,
+              controller.hasActivePlaybackSession,
+              !controller.requiresPlaybackRestart else { return .restart }
+        return .toggle
+    }
+}
+
+/// Voice dismissal can suspend beyond reader navigation. The tracked caller
+/// supplies the same request/follower gate used for a local narration start.
+enum ReaderVoiceReadAloudHandoff {
+    @MainActor
+    static func perform(
+        endVoice: @MainActor () async -> Void,
+        canContinue: @MainActor () -> Bool,
+        openReadAloud: @MainActor () async -> Void
+    ) async {
+        await endVoice()
+        guard !Task.isCancelled, canContinue() else { return }
+        await openReadAloud()
     }
 }

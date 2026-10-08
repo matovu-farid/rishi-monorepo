@@ -16,7 +16,10 @@ import Foundation
 
         private let streamer: TTSStreamer
         private let state: TTSPlaybackState
-        private var player: AudioPlayer?
+        private var player: (any ChunkedTTSNativePlayer)?
+        private let playerFactory: ChunkedTTSNativePlayerFactory
+        private var callbackTask: Task<Void, Never>?
+        private var callbackContinuation: AsyncStream<PlaybackEvent>.Continuation?
 
         private var bridgeTask: Task<Void, Never>?
         private var monitorTask: Task<Void, Never>?
@@ -27,6 +30,7 @@ import Foundation
         /// Set to `playbackGeneration` when `didStart` fires for that generation.
         private var didStartForGeneration = 0
         private var settledGeneration = 0
+        private var terminalTransitionGeneration = 0
         private var playbackStartedAt: Date?
         private var pendingResult: Result<Void, Error>?
         private var waiter: CheckedContinuation<Void, Error>?
@@ -34,7 +38,21 @@ import Foundation
         public init(streamer: TTSStreamer, state: TTSPlaybackState) {
             self.streamer = streamer
             self.state = state
-            self.player = nil
+            self.playerFactory = { didStart, didFinish in
+                ChunkedTTSNativeAudioPlayer(didStart: didStart, didFinish: didFinish)
+            }
+        }
+
+        /// Internal seam for native callback timing tests. Transport and state
+        /// transitions still run through the production engine.
+        init(
+            streamer: TTSStreamer,
+            state: TTSPlaybackState,
+            playerFactory: @escaping ChunkedTTSNativePlayerFactory
+        ) {
+            self.streamer = streamer
+            self.state = state
+            self.playerFactory = playerFactory
         }
 
         public func start(request: TTSStreamRequest) async {
@@ -67,30 +85,35 @@ import Foundation
                 "request_chars": String(request.text.count),
             ])
 
-            let callbacks = PlaybackCallbacks()
-            callbacks.didStart = { [weak self] in
-                Task { await self?.markPlaying(generation: generation, correlationID: correlationID) }
-            }
-            // AudioPlayer calls didFinishPlaying on both success (.completed)
-            // AND failure (.failed). Never map a failed finish to `.stopped` —
-            // CustomTTSEngine treats `.stopped` as speak success and Readium
-            // advances past the failed paragraph (the observed skip).
-            callbacks.didFinish = { [weak self] in
-                Task {
-                    await self?.handlePlaybackFinished(
-                        generation: generation,
-                        correlationID: correlationID
-                    )
-                }
-            }
-
-            let player = AudioPlayer(
-                didStartPlaying: { callbacks.didStart() },
-                didFinishPlaying: { callbacks.didFinish() }
+            guard generation == playbackGeneration else { return }
+            let events = AsyncStream<PlaybackEvent>.makeStream()
+            let continuation = events.continuation
+            // Native callbacks arrive serially, but separate Tasks can execute
+            // them in reverse order. Yield synchronously; one consumer awaits
+            // the complete start transition before processing finish.
+            let player = playerFactory(
+                { continuation.yield(.started) },
+                { continuation.yield(.finished) }
             )
             self.player = player
+            callbackContinuation = continuation
+            callbackTask = Task { [weak self, player] in
+                for await event in events.stream {
+                    guard !Task.isCancelled, let self else { return }
+                    switch event {
+                    case .started:
+                        await self.markPlaying(generation: generation, correlationID: correlationID)
+                    case .finished:
+                        await self.handlePlaybackFinished(
+                            player: player,
+                            generation: generation,
+                            correlationID: correlationID
+                        )
+                    }
+                }
+            }
             let stream = makeAudioStream(request: request, generation: generation)
-            player.start(stream, type: kAudioFileMP3Type)
+            player.start(stream)
             monitorForPlaybackFailure(player: player, generation: generation, correlationID: correlationID)
         }
 
@@ -130,6 +153,12 @@ import Foundation
                 playbackGeneration += 1
                 activeRequestTokens = nil
             }
+            // Do not await this consumer: terminal handling can cause stop()
+            // reentrantly. Generation/token fences reject in-flight events.
+            callbackContinuation?.finish()
+            callbackContinuation = nil
+            callbackTask?.cancel()
+            callbackTask = nil
             let bridge = bridgeTask
             bridgeTask?.cancel()
             bridgeTask = nil
@@ -151,6 +180,9 @@ import Foundation
                 try pending.get()
                 return
             }
+            guard activeRequestTokens != nil, settledGeneration != playbackGeneration else {
+                throw CancellationError()
+            }
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 if let existing = waiter {
                     waiter = continuation
@@ -168,6 +200,7 @@ import Foundation
 
         private func beginGeneration(_ generation: Int) {
             didStartForGeneration = 0
+            terminalTransitionGeneration = 0
             pendingResult = nil
             playbackStartedAt = nil
             if let existing = waiter {
@@ -230,7 +263,7 @@ import Foundation
         }
 
         private func monitorForPlaybackFailure(
-            player: AudioPlayer,
+            player: any ChunkedTTSNativePlayer,
             generation: Int,
             correlationID: String
         ) {
@@ -238,12 +271,9 @@ import Foundation
             monitorTask = Task { [weak self, player] in
                 guard let self else { return }
                 while !Task.isCancelled {
-                    let snapshot = await MainActor.run {
-                        (player.currentState, player.currentError)
-                    }
-                    if snapshot.0 == .failed {
+                    if let failure = await player.failure {
                         await self.markFailed(
-                            message: snapshot.1?.debugDescription,
+                            message: failure.message,
                             generation: generation,
                             correlationID: correlationID
                         )
@@ -254,7 +284,11 @@ import Foundation
             }
         }
 
-        private func handlePlaybackFinished(generation: Int, correlationID: String) async {
+        private func handlePlaybackFinished(
+            player: any ChunkedTTSNativePlayer,
+            generation: Int,
+            correlationID: String
+        ) async {
             guard generation == playbackGeneration else {
                 Log.event("tts.player.status.stale", data: [
                     "ignored": "finish",
@@ -264,12 +298,11 @@ import Foundation
                 ])
                 return
             }
-            guard let player else { return }
-            let snapshot = await MainActor.run {
-                (player.currentState, player.currentError?.debugDescription)
-            }
-            if snapshot.0 == .failed {
-                await markFailed(message: snapshot.1, generation: generation, correlationID: correlationID)
+            guard settledGeneration != generation else { return }
+            let failure = await player.failure
+            guard generation == playbackGeneration, settledGeneration != generation else { return }
+            if let failure {
+                await markFailed(message: failure.message, generation: generation, correlationID: correlationID)
             } else {
                 await markStopped(generation: generation, correlationID: correlationID)
             }
@@ -285,14 +318,20 @@ import Foundation
                 ])
                 return
             }
-            guard let tokens = activeRequestTokens else { return }
+            guard settledGeneration != generation,
+                  terminalTransitionGeneration != generation,
+                  didStartForGeneration != generation,
+                  let tokens = activeRequestTokens else { return }
             await MainActor.run {
                 // Do not clobber a failure that already won the race.
-                guard state.activeTokenSnapshot == tokens else { return }
+                guard !Task.isCancelled, state.activeTokenSnapshot == tokens else { return }
                 guard state.status != .error else { return }
                 state.update(status: .playing)
             }
-            guard generation == playbackGeneration else { return }
+            guard generation == playbackGeneration,
+                  settledGeneration != generation,
+                  terminalTransitionGeneration != generation,
+                  activeRequestTokens == tokens else { return }
             didStartForGeneration = generation
             playbackStartedAt = Date()
             Log.event("tts.player.status", data: [
@@ -315,10 +354,13 @@ import Foundation
                 ])
                 return
             }
-            guard let tokens = activeRequestTokens else { return }
+            guard settledGeneration != generation,
+                  terminalTransitionGeneration != generation,
+                  let tokens = activeRequestTokens else { return }
+            terminalTransitionGeneration = generation
             await MainActor.run {
                 // Do not clobber a typed or generic failure that already won.
-                guard state.activeTokenSnapshot == tokens else { return }
+                guard !Task.isCancelled, state.activeTokenSnapshot == tokens else { return }
                 guard state.status != .error else { return }
                 state.update(status: .stopped)
             }
@@ -350,7 +392,10 @@ import Foundation
             correlationID: String
         ) async {
             guard generation == playbackGeneration else { return }
-            guard let tokens = activeRequestTokens else { return }
+            guard settledGeneration != generation,
+                  terminalTransitionGeneration != generation,
+                  let tokens = activeRequestTokens else { return }
+            terminalTransitionGeneration = generation
             bridgeTask?.cancel()
             bridgeTask = nil
             // Avoid player.stop() here: stop() clears .failed back to .initial
@@ -358,7 +403,7 @@ import Foundation
             let text = message ?? "TTS playback failed"
             await MainActor.run {
                 guard state.typedFailure == nil else { return }
-                guard state.activeTokenSnapshot == tokens else { return }
+                guard !Task.isCancelled, state.activeTokenSnapshot == tokens else { return }
                 state.recordUserFacingFailure(.audioPlayback)
             }
             guard generation == playbackGeneration else { return }
@@ -406,8 +451,45 @@ import Foundation
         }
     }
 
-    private final class PlaybackCallbacks: @unchecked Sendable {
-        var didStart: @Sendable () -> Void = {}
-        var didFinish: @Sendable () -> Void = {}
+    private enum PlaybackEvent: Sendable {
+        case started
+        case finished
+    }
+
+    struct ChunkedTTSNativePlayerFailure: Sendable {
+        let message: String?
+    }
+
+    protocol ChunkedTTSNativePlayer: Sendable {
+        func start(_ stream: AsyncThrowingStream<Data, Error>)
+        func pause()
+        func resume()
+        func stop()
+        @MainActor var failure: ChunkedTTSNativePlayerFailure? { get }
+    }
+
+    typealias ChunkedTTSNativePlayerFactory = @Sendable (
+        _ didStart: @escaping @Sendable () -> Void,
+        _ didFinish: @escaping @Sendable () -> Void
+    ) -> any ChunkedTTSNativePlayer
+
+    private final class ChunkedTTSNativeAudioPlayer: ChunkedTTSNativePlayer {
+        private let player: AudioPlayer
+
+        init(didStart: @escaping @Sendable () -> Void, didFinish: @escaping @Sendable () -> Void) {
+            player = AudioPlayer(didStartPlaying: didStart, didFinishPlaying: didFinish)
+        }
+
+        func start(_ stream: AsyncThrowingStream<Data, Error>) {
+            player.start(stream, type: kAudioFileMP3Type)
+        }
+        func pause() { player.pause() }
+        func resume() { player.resume() }
+        func stop() { player.stop() }
+
+        @MainActor var failure: ChunkedTTSNativePlayerFailure? {
+            guard player.currentState == .failed else { return nil }
+            return ChunkedTTSNativePlayerFailure(message: player.currentError?.debugDescription)
+        }
     }
 #endif

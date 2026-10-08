@@ -100,7 +100,7 @@ struct AIDataConsentRequestTests {
             rishiSessionId: "session-1",
             onTerminal: { _ in }
         )
-        let request = await client.buildControlRequest()
+        let request = try await client.buildControlRequest()
 
         #expect(request.url?.absoluteString == "wss://api.rishi.test/api/voice-sessions/session-1/control")
         #expect(request.value(forHTTPHeaderField: "X-Rishi-Data-Use-Consent") == "2026-07-29")
@@ -114,7 +114,7 @@ struct AIDataConsentRequestTests {
             rishiSessionId: "session-1",
             onTerminal: { _ in }
         )
-        let request = await client.buildControlRequest()
+        let request = try await client.buildControlRequest()
 
         #expect(request.value(forHTTPHeaderField: "X-Rishi-Data-Use-Consent") == nil)
     }

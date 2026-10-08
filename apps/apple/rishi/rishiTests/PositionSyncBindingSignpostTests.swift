@@ -39,17 +39,19 @@ struct PositionSyncBindingSignpostTests {
         #expect(source.contains("category: \"position-sync\""))
     }
 
-    @Test("Reader binding wraps poll body with begin/endInterval")
+    @Test("Reader binding wraps commit body with begin/endInterval")
     func test_readerBindingEmitsSignpost() throws {
         let source = try Self.bindingSource("ReaderPositionSyncBinding.swift")
-        #expect(source.contains("reader.position.poll.tick"))
+        #expect(source.contains("reader.position.commit"))
         #expect(source.contains("beginInterval"))
         #expect(source.contains("endInterval"))
     }
 
-    @Test("Reader binding preserves the 250ms poll cadence")
+    @Test("Reader binding publishes persisted snapshots without polling")
     func test_pollCadencePreserved() throws {
         let source = try Self.bindingSource("ReaderPositionSyncBinding.swift")
-        #expect(source.contains("250_000_000"))
+        #expect(source.contains("installPersistedPositionHandler"))
+        #expect(source.contains("commitReaderPosition"))
+        #expect(!source.contains("Task.sleep"))
     }
 }

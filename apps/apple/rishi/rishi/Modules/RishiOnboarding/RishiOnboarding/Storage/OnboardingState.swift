@@ -56,3 +56,28 @@ actor InMemoryOnboardingState: OnboardingState {
     public func primerShownMic() async -> Bool { mic }
     public func setPrimerShownMic(_ value: Bool) async { mic = value }
 }
+
+/// Auth-triggered completion mutates on the storage owner under its captured lease.
+protocol CredentialOnboardingState: OnboardingState {
+    func setHasCompletedOnboarding(
+        _ value: Bool, lease: CredentialLease, authority: SessionCredentialAuthority
+    ) async -> Bool
+}
+
+extension UserDefaultsOnboardingState: CredentialOnboardingState {
+    func setHasCompletedOnboarding(
+        _ value: Bool, lease: CredentialLease, authority: SessionCredentialAuthority
+    ) async -> Bool {
+        authority.performIfCurrent(lease) {
+            defaults.set(value, forKey: Self.keyCompleted)
+        }
+    }
+}
+
+extension InMemoryOnboardingState: CredentialOnboardingState {
+    func setHasCompletedOnboarding(
+        _ value: Bool, lease: CredentialLease, authority: SessionCredentialAuthority
+    ) async -> Bool {
+        authority.performIfCurrent(lease) { completed = value }
+    }
+}

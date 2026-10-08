@@ -39,6 +39,30 @@ enum RishiE2EConfiguration {
             forKey: "rishi.library.firstBookPrompt.seen.\(userID.uuidString)"
         )
     }
+
+    /// Staged final reset path. The caller captures admission before async
+    /// launch/reset work; cleanup is owned by the actual app transaction.
+    @MainActor
+    static func beginCanonicalReset(dependencies: AppDependencies, authority: SessionCredentialAuthority,
+                                    expectedTicket: CredentialAttemptTicket,
+                                    clearPreferences: (UUID) -> Void) throws -> Task<Void, Never> {
+        guard dependencies.usesCredentialAuthority(authority), authority.attemptTicket() == expectedTicket else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        let transaction = try dependencies.beginAccountChange(expectedCredentialTicket: expectedTicket)
+        guard let transition = transaction.credentialTransition else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        if case .loaded(let outgoing) = transition.outgoing {
+            guard authority.performIfCurrent(transition, mutation: {
+                clearPreferences(DerivedUserID.from(outgoing.lease.rawUserID))
+            }) else { throw CredentialAuthenticationFailure.accountChanged }
+        }
+        guard let retirement = dependencies.retireCredentialAccount(transaction) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        return retirement
+    }
 }
 #endif
 
@@ -52,8 +76,9 @@ enum RishiE2EConfiguration {
 
 @main
 struct rishiApp: App {
-    @State private var deps = AppDependencies.shared
-    @State private var router = AppRouter()
+    @State private var deps: AppDependencies
+    @State private var router: AppRouter
+    @State private var trialPresentationCoordinator = TrialIntroPresentationCoordinator()
     #if targetEnvironment(macCatalyst)
         @State private var readerWindows = ReaderWindowCoordinator()
     #endif
@@ -68,20 +93,9 @@ struct rishiApp: App {
     #endif
 
     init() {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
-           !RishiE2EConfiguration.isRealAuth {
-            let uiTestUserID = UUID(uuidString: "7F7B3D2A-8B8D-4D2E-9D1D-9B4C8F7E6A10")!
-            deps.userIdBox.value = uiTestUserID
-            currentUserBox.signIn(
-                user: User(
-                    id: uiTestUserID,
-                    email: "ui-test@rishi.invalid",
-                    name: "Rishi UI Test"
-                )
-            )
-        }
-        #endif
+        let dependencies = AppDependencies.shared
+        _deps = State(initialValue: dependencies)
+        _router = State(initialValue: AppRouter(sharedReaderAccountIDProvider: { dependencies.cachedUserId }))
         SentryLaunchConfiguration.start()
         #if DEBUG
         if let sink = SimulatorDumpSink.make() {
@@ -94,11 +108,45 @@ struct rishiApp: App {
     
     }
 
+    private func makeRootWorkflow(adapter: CredentialAuthenticationAdapter) throws -> RootWorkflowOwner {
+        guard let services = deps.services else { throw CredentialAuthenticationFailure.accountChanged }
+        let bookService = services.library.sessionBookService
+        let resources = RootWorkflowOwner.Resources(
+            packages: services.library.sharePackageService,
+            prepareBook: { book, ownerID in try await bookService.prepare(book: book, ownerId: ownerID) },
+            api: services.sharedReadingAPIFactory, registry: services.sharedReadingSessionRegistry,
+            pendingInvites: .anonymous, makeTransport: { SharedReadingSignalingClient() })
+        #if targetEnvironment(macCatalyst)
+        let host = RootWorkflowOwner.Host(router: router, readerWindows: readerWindows)
+        #else
+        let host = RootWorkflowOwner.Host(router: router)
+        #endif
+        return try RootWorkflowOwner(dependencies: deps, authentication: adapter, currentUser: currentUserBox,
+                                     resources: resources, host: host)
+    }
+
     var body: some Scene {
         WindowGroup {
 
         
-            RootView()
+            Group {
+                if let adapter = deps.credentialAuthenticationAdapter {
+                    switch Result(catching: { try makeRootWorkflow(adapter: adapter) }) {
+                    case .success(let workflow):
+                        RootView(credentialAdapter: adapter, workflow: workflow)
+                            .environment(deps.services!.billing.store)
+                            .environment(deps.services!.billing.customerEntitlements)
+                    case .failure:
+                        ContentUnavailableView("Rishi could not open this session", systemImage: "exclamationmark.triangle")
+                    }
+                } else if deps.bootstrapFailure != nil {
+                    ContentUnavailableView {
+                        Label("Rishi could not start", systemImage: "exclamationmark.triangle")
+                    } actions: {
+                        Button("Retry") { Task { await deps.bootstrap() } }
+                    }
+                } else { ProgressView().accessibilityLabel("Loading Rishi") }
+            }
                 .onOpenURL { url in
                     // Google Sign-In can deliver OAuth callbacks through the
                     // SwiftUI scene rather than UIApplicationDelegate. Keep
@@ -120,8 +168,8 @@ struct rishiApp: App {
                 .environment(\.appDependencies, deps)
                 .environment(deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
-                .environment(SubscriptionService.shared)
                 .environment(router)
+                .environment(trialPresentationCoordinator)
                 #if targetEnvironment(macCatalyst)
                     .environment(readerWindows)
                     .modifier(ReaderWindowCoordinatorConfiguration(coordinator: readerWindows))
@@ -138,47 +186,33 @@ struct rishiApp: App {
                     #endif
 
                     #if DEBUG
-                    // Clear persisted auth before service construction. A
-                    // previous Catalyst run may leave an identity in
-                    // Keychain; bootstrapping with that identity performs
-                    // launch-time entitlement/network work before the
-                    // reset task can show the login form.
-                    let e2eResetUserID: UUID? = if RishiE2EConfiguration.isReset {
-                        (try? Keychain.load(.userId)).map(DerivedUserID.from)
-                    } else {
-                        nil
-                    }
                     if RishiE2EConfiguration.isReset {
-                        Keychain.delete(.accessToken)
-                        Keychain.delete(.refreshToken)
-                        Keychain.delete(.userId)
-                        try? await KeychainSessionStore().delete()
+                        do {
+                            let retirement = try RishiE2EConfiguration.beginCanonicalReset(
+                                dependencies: deps, authority: deps.credentialAuthority,
+                                expectedTicket: deps.credentialAuthority.attemptTicket(),
+                                clearPreferences: RishiE2EConfiguration.clearAccountScopedPreferences)
+                            // This DEBUG launch task owns reset, not an initiating auth request.
+                            await retirement.value
+                            if case .success? = deps.credentialRetirementResult {
+                                currentUserBox.signedOutAfterCredentialClear()
+                            }
+                        } catch { Log.error("debug.account-reset.failed", error: error) }
                     }
                     #endif
                     await deps.bootstrap()
                     #if DEBUG
-                    if RishiE2EConfiguration.isReset {
-                        // Reset is intentionally local-only. Server-side
-                        // deletion belongs to the host account client after
-                        // both peer runs finish.
-                        let localIdentity = e2eResetUserID
-                            ?? deps.cachedUserId
-                            ?? (try? Keychain.load(.userId)).map(DerivedUserID.from)
-                            ?? UUID()
-                        RishiE2EConfiguration.clearAccountScopedPreferences(for: localIdentity)
-                        guard let localPurge = deps.services?.accountDeletionCoordinator(
-                            userId: localIdentity,
-                            signOut: {}
-                        ) else {
-                            fatalError("Rishi E2E reset could not initialize local account cleanup")
-                        }
+                    if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
+                       !RishiE2EConfiguration.isRealAuth,
+                       let adapter = deps.credentialAuthenticationAdapter {
+                        let rawID = "7F7B3D2A-8B8D-4D2E-9D1D-9B4C8F7E6A10"
+                        let user = User(id: DerivedUserID.from(rawID), email: "ui-test@rishi.invalid", name: "Rishi UI Test")
                         do {
-                            try await localPurge.purgeLocalOnly()
-                        } catch {
-                            fatalError("Rishi E2E reset failed: \(error.localizedDescription)")
-                        }
-                        await deps.performSignOut(currentUserBox: currentUserBox)
-                        await deps.services?.onboarding.state.setHasCompletedOnboarding(true)
+                            try await adapter.completeSignIn(session: Session(token: "ui-test", userId: rawID, email: user.email),
+                                refreshToken: nil, user: user, attempt: adapter.beginAttempt(), debugOnboarding: true) {
+                                    currentUserBox.signIn(user: user)
+                                }
+                        } catch { Log.error("debug.ui-test-signin.failed", error: error) }
                     }
                     #endif
                     #if os(iOS) && canImport(WatchConnectivity)
@@ -297,7 +331,9 @@ struct rishiApp: App {
             await deps.refreshEntitlementsAtLaunch()
             return
         }
-        await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason)
+        guard let snapshot = try? deps.credentialAuthority.snapshot() else { return }
+        _ = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason,
+            credentialContext: .normal(snapshot.lease))
     }
 }
 

@@ -9,13 +9,17 @@ struct ReadingNowShelf: View {
     public let entries: [ReadingNowEntry]
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void
+    public let onBookVisibilityChange: (BookID, Bool) -> Void
+    @State private var visibility = ReadingNowShelfVisibility()
 
     public init(entries: [ReadingNowEntry],
                 coverURL: @escaping (Book) -> URL?,
-                onOpen: @escaping (Book) -> Void) {
+                onOpen: @escaping (Book) -> Void,
+                onBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in }) {
         self.entries = entries
         self.coverURL = coverURL
         self.onOpen = onOpen
+        self.onBookVisibilityChange = onBookVisibilityChange
     }
 
     public var body: some View {
@@ -35,7 +39,24 @@ struct ReadingNowShelf: View {
             }
         }
         .padding(.vertical, RishiSpacing.m)
-       
+        // Card visibility is measured in the horizontal scroll view. Gate it
+        // by the shelf's own visibility in the parent vertical scroll view.
+        .onScrollVisibilityChange { isVisible in
+            let update = visibility.setShelfVisible(isVisible)
+            for bookID in update.visibleCardIDs {
+                onBookVisibilityChange(bookID, update.shelfVisible)
+            }
+        }
+        .onDisappear {
+            for bookID in visibility.reset() {
+                onBookVisibilityChange(bookID, false)
+            }
+        }
+        .onChange(of: entries.map(\.id)) { _, bookIDs in
+            for bookID in visibility.removeCards(notIn: Set(bookIDs)) {
+                onBookVisibilityChange(bookID, false)
+            }
+        }
     }
 
     @ViewBuilder
@@ -75,6 +96,43 @@ struct ReadingNowShelf: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
+        .onScrollVisibilityChange { isVisible in
+            let isEffectivelyVisible = visibility.setCardVisible(entry.book.id, isVisible)
+            onBookVisibilityChange(entry.book.id, isEffectivelyVisible)
+        }
+        .onDisappear {
+            _ = visibility.setCardVisible(entry.book.id, false)
+            onBookVisibilityChange(entry.book.id, false)
+        }
+    }
+}
+
+struct ReadingNowShelfVisibility: Equatable {
+    private(set) var shelfIsVisible = false
+    private(set) var visibleCardIDs: Set<BookID> = []
+
+    mutating func setShelfVisible(_ visible: Bool) -> (shelfVisible: Bool, visibleCardIDs: Set<BookID>) {
+        shelfIsVisible = visible
+        return (visible, visibleCardIDs)
+    }
+
+    mutating func setCardVisible(_ bookID: BookID, _ visible: Bool) -> Bool {
+        if visible { visibleCardIDs.insert(bookID) }
+        else { visibleCardIDs.remove(bookID) }
+        return shelfIsVisible && visible
+    }
+
+    mutating func reset() -> Set<BookID> {
+        let ids = visibleCardIDs
+        shelfIsVisible = false
+        visibleCardIDs.removeAll()
+        return ids
+    }
+
+    mutating func removeCards(notIn validBookIDs: Set<BookID>) -> Set<BookID> {
+        let removed = visibleCardIDs.subtracting(validBookIDs)
+        visibleCardIDs.subtract(removed)
+        return removed
     }
 }
 

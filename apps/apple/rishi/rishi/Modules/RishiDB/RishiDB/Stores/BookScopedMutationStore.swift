@@ -153,6 +153,18 @@ public struct BookScopedMutationStore: Sendable {
         try await dbStore.withReadingEffect(permit: permit, originatingSource: originatingSource, sourceEffects: sourceEffects, body: body)
     }
 
+    public func publicationAuthority(
+        permit: BookReadingPermit, source: BookSourceAccessPermit,
+        validateSource: @escaping @Sendable () throws -> Void = {}
+    ) -> ReaderPositionPublicationAuthority {
+        ReaderPositionPublicationAuthority(permit: permit, source: source) { [dbStore] in
+            try validateSource()
+            let admission = try await dbStore.admitReadingPublication(permit: permit)
+            do { try validateSource(); return admission }
+            catch { admission.release(); throw error }
+        }
+    }
+
     public func upsert(_ position: Position, permit: BookReadingPermit, originatingSource: BookSourceAccessPermit? = nil, sourceEffects: (any BookSourceEffectAdmitting)? = nil) async throws {
         guard position.bookId == permit.bookID else { throw BookScopedMutationError.unauthorized }
         try await withReadingWrite(permit: permit, originatingSource: originatingSource, sourceEffects: sourceEffects) { context in

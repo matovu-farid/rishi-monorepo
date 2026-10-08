@@ -77,9 +77,11 @@ private final class DeletionIdentityProbe: @unchecked Sendable {
 struct AccountChangeTransactionTests {
     @Test("the generation fence is committed before the drain task")
     func beginsSynchronously() async throws {
-        let dependencies = AppDependencies()
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
         let previousGeneration = dependencies.accountGeneration
-        let transaction = try dependencies.beginAccountChange()
+        let transaction = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
         #expect(transaction.expectedAccountGeneration == previousGeneration + 1)
         #expect(dependencies.accountGeneration == transaction.expectedAccountGeneration)
         await transaction.drain.value
@@ -87,17 +89,22 @@ struct AccountChangeTransactionTests {
 
     @Test("active library identity stays gated during a transition and reactivates on commit")
     func activeLibraryIdentityTracksCommittedAccount() async throws {
-        let dependencies = AppDependencies()
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
         let userID = UUID()
-        #expect(await dependencies.replaceUserId(userID, forceTransition: true))
+        let installation = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
+        _ = try await dependencies.installCredentialSession(Session(token: "fixture", userId: userID.uuidString, email: nil), refreshToken: nil, in: installation)
+        #expect(dependencies.userIdBox.value == userID)
         let firstIdentity = dependencies.activeAccountIdentity
         #expect(firstIdentity?.userID == userID)
 
-        let transition = try dependencies.beginAccountChange()
+        let transition = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
         #expect(dependencies.activeAccountIdentity == nil)
         await transition.drain.value
 
-        #expect(await dependencies.replaceUserId(userID, forceTransition: true))
+        _ = try await dependencies.installCredentialSession(Session(token: "fixture-rotated", userId: userID.uuidString, email: nil), refreshToken: nil, in: transition)
+        #expect(dependencies.userIdBox.value == userID)
         #expect(dependencies.activeAccountIdentity?.userID == userID)
         #expect(dependencies.activeAccountIdentity?.generation == dependencies.accountGeneration)
         #expect(dependencies.activeAccountIdentity?.generation != firstIdentity?.generation)
@@ -211,7 +218,7 @@ struct AccountChangeTransactionTests {
             for: book,
             url: URL(fileURLWithPath: "/tmp/reimported.pdf"),
             accountGeneration: 29,
-            contentRevision: UUID(),
+            readingPermit: BookReadingPermit(ownerID: userID, accountGeneration: 29, bookID: book.id, contentRevision: UUID()),
             requiresSecurityScope: false,
             observeChanges: false
         )
@@ -246,24 +253,29 @@ struct AccountChangeTransactionTests {
 
     @Test("sign-out after failed deletion begins a fresh active-generation drain")
     func signOutAfterDeleteFailureUsesFreshTransaction() async throws {
-        let dependencies = AppDependencies()
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
         let userID = UUID()
-        dependencies.userIdBox.value = userID
+        let session = try installStagingCredentials(userID.uuidString, authority: authority)
+        try await dependencies.restoreCredentialIdentity(session)
         let activeGeneration = dependencies.accountGeneration + 1
         let coordinator = AccountDeletionCoordinator(
-            deleteServer: { throw AccountDeletionTestError.serverDeleteFailed },
-            purgeLocal: {},
-            currentAccountGeneration: { activeGeneration },
-            reactivateLocalOwner: { token in await dependencies.restoreOwnerAfterDeletionFailure(token) },
-            signOut: {},
-            beginAccountChange: { try dependencies.beginAccountChange() }
+            admittedDeleteServer: { _ in throw AccountDeletionTestError.serverDeleteFailed },
+            purgeLocal: { _ in },
+            restoreOwner: { try await dependencies.restoreCredentialOwnerAfterDeletionFailure($0) },
+            isCurrent: { dependencies.isCurrentCredentialAccountChange($0) },
+            beginCleanup: { dependencies.beginAccountCleanup($0) },
+            endCleanup: { dependencies.endAccountCleanup($0) },
+            signOut: { try dependencies.clearCredentialSessionAndIdentity(in: $0) },
+            beginChange: { try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket()) }
         )
 
         await #expect(throws: AccountDeletionTestError.serverDeleteFailed) { try await coordinator.run() }
         #expect(dependencies.pendingAccountChange == nil)
         #expect(dependencies.activeAccountIdentity == LibraryAccountIdentity(userID: userID, generation: activeGeneration))
 
-        let signOutTransition = try dependencies.beginAccountChange()
+        let signOutTransition = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
         #expect(signOutTransition.outgoingAccountID == userID)
         #expect(signOutTransition.outgoingAccountGeneration == activeGeneration)
         #expect(signOutTransition.expectedAccountGeneration == activeGeneration + 1)
@@ -330,9 +342,12 @@ struct AccountChangeTransactionTests {
 
     @Test("identity transitions are blocked throughout global deletion cleanup")
     func identityTransitionIsBlockedDuringCleanup() async throws {
-        let dependencies = AppDependencies()
+        let authority = SessionCredentialAuthority(persistence: CredentialStagingMemoryPersistence())
+        let fixture = try CredentialIdentityFixture(authority: authority)
+        let dependencies = fixture.dependencies
         let ownerID = UUID()
-        dependencies.userIdBox.value = ownerID
+        let session = try installStagingCredentials(ownerID.uuidString, authority: authority)
+        try await dependencies.restoreCredentialIdentity(session)
         let probe = DeletionIdentityProbe(ownerID: nil, generation: 0)
         let coordinator = AccountDeletionCoordinator(
             deleteServer: {},
@@ -340,7 +355,7 @@ struct AccountChangeTransactionTests {
             purgeLocalForGeneration: { _ in
                 let blocked = await MainActor.run {
                     do {
-                        _ = try dependencies.beginAccountChange()
+                        _ = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
                         return false
                     } catch {
                         return true
@@ -352,12 +367,12 @@ struct AccountChangeTransactionTests {
             beginAccountDeletionCleanup: { dependencies.beginAccountDeletionCleanup($0) },
             endAccountDeletionCleanup: { dependencies.endAccountDeletionCleanup($0) },
             signOut: {},
-            beginAccountChange: { try dependencies.beginAccountChange() }
+            beginAccountChange: { try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket()) }
         )
 
         try await coordinator.run()
         #expect(probe.transitionAttemptWasBlocked())
-        let laterTransition = try dependencies.beginAccountChange()
+        let laterTransition = try dependencies.beginAccountChange(expectedCredentialTicket: authority.attemptTicket())
         #expect(laterTransition.outgoingAccountID == ownerID)
     }
 }

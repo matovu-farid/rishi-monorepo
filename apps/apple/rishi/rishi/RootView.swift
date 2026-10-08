@@ -5,59 +5,56 @@
 
 import StoreKit
 import SwiftUI
+import Combine
+import Dispatch
 
 struct RootView: View {
 
-    private struct PendingCreatorInvitation {
-        let accountID: UUID
-        let invitation: SharedReadingInvitation
+    private let credentialAdapter: CredentialAuthenticationAdapter?
+
+    @State private var workflow: RootWorkflowOwner?
+
+    init() {
+        credentialAdapter = nil
+        _workflow = State(initialValue: nil)
     }
 
-    /// A bearer session link is allowed one connection attempt for an account
-    /// at a time.  Startup restoration and URL notifications can both arrive
-    /// for the same link, so this identity is deliberately finer grained than
-    /// a simple "is redeeming" flag.
-    private struct PendingSessionRedemptionKey: Equatable {
-        let accountID: UUID
-        let token: String
-    }
-
-    private enum SharedReaderPresentationFailure: Error {
-        case readerUnavailable
-        case presentationRejected
-
-        var message: String {
-            switch self {
-            case .readerUnavailable:
-                "The reading session connected, but its book could not be opened."
-            case .presentationRejected:
-                "The new reading session could not be opened."
-            }
-        }
+    init(credentialAdapter: CredentialAuthenticationAdapter, workflow: RootWorkflowOwner) {
+        self.credentialAdapter = credentialAdapter
+        _workflow = State(initialValue: workflow)
+        _trialRootGraphID = State(initialValue: workflow.rootID)
     }
 
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var deps
+    @Environment(TrialIntroPresentationCoordinator.self) private var trialCoordinator
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var trialPresentationState = TrialIntroPresentationState()
+    @State private var trialLifetimeAuthority = TrialRootLifetimeAuthority()
+    @State private var trialRootGraphID = UUID()
+    @State private var activeTrialClaimID: UUID?
+    @State private var trialReleaseObserverID: UUID?
+    @State private var trialAccountFenceToken: UUID?
+    @State private var fencedTrialIdentity: LibraryAccountIdentity?
+    @State private var blockedTrialClaimID: UUID?
+    @State private var trialEvaluationInFlight = false
+    @State private var trialEvaluationAttemptID: UUID?
+    @State private var settledTrialRevision: UInt64?
+    @State private var settledTrialIdentity: LibraryAccountIdentity?
+    @State private var trialRetryFromOtherRelease = false
 
     @State private var bootstrapped = false
 
     @State private var showOnboarding = false
-    @State private var pendingShareTitle = "Shared books"
-    @State private var pendingShareMessage: String?
-    @State private var pendingSessionToken: String?
-    @State private var pendingSessionInvitations: [String: PendingCreatorInvitation] = [:]
-    @State private var pendingSessionRedemptionKey: PendingSessionRedemptionKey?
-    @State private var pendingSessionRedemptionTask: Task<Void, Never>?
     @State private var showNoCardTrialIntro = false
-    @State private var noCardTrialIntroCheckInFlight = false
     #if targetEnvironment(macCatalyst)
-        @State private var showSubscriptions = false
-        @State private var pendingSubscriptionConfirmation = false
-        @State private var showSubscriptionConfirmation = false
+        @State private var subscriptionState = RootSubscriptionPresentationState()
+        private var showSubscriptions: Bool { subscriptionState.isPresented }
+        private var pendingSubscriptionConfirmation: Bool { subscriptionState.pendingConfirmation }
+        private var showSubscriptionConfirmation: Bool { subscriptionState.showsConfirmation }
     #endif
     @Environment(CurrentUserBox.self) private var currentUserBox
-    @State private var sharedReadingFenceToken: UUID?
-    @State private var sharedReadingDrainCleanupToken: UUID?
     #if targetEnvironment(macCatalyst)
         @Environment(ReaderWindowCoordinator.self) private var readerWindows
     #endif
@@ -78,129 +75,151 @@ struct RootView: View {
 
     @ViewBuilder
     private func realBody(deps: AppDependencies) -> some View {
-
-        realBodyContent(deps: deps)
+        let credentialTicket = credentialAdapter?.authority.attemptTicket()
+        return realBodyContent(deps: deps)
+            .onChange(of: deps.credentialRetirementResult != nil) { _, _ in
+                credentialAdapter?.reconcileRetirement(into: currentUserBox)
+            }
+            .background {
+                #if canImport(UIKit)
+                TrialRootLifetimeAnchor(
+                    hostID: trialPresentationState.hostID,
+                    graphID: trialRootGraphID,
+                    state: trialPresentationState,
+                    authority: trialLifetimeAuthority,
+                    onRetire: {
+                        workflow?.retire()
+                        retireTrialRoot(force: true)
+                    },
+                    onChange: { trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+                )
+                .frame(width: 1, height: 1)
+                .hidden()
+                #endif
+            }
+            .environment(trialPresentationState)
+            .modifier(ReaderPositionSaveFailureAlert(
+                presentation: deps.readerPositionSaveFailures,
+                accountIdentity: deps.activeAccountIdentity
+            ))
             .environment(\.services, deps.services)
             .environment(deps.services!.billing.entitlementSnapshotStore)
             .environment(deps.services!.billing.manageSubscriptionPresenter)
-            .environment(Store.shared)
-            .checkCustomerEntitlements()
+            .environment(deps.services!.billing.store)
 
             .environment(
                 \.signOut,
                 {
-                    guard (try? deps.beginAccountChange()) != nil else { return }
-                    Task {
-                        router.clearReaderTourRequest()
-                        deps.services?.voice.presenter.cancelPrewarm()
-                        #if targetEnvironment(macCatalyst)
-                            showSubscriptions = false
-                            if case .signedIn(let user) = currentUserBox.state {
-                                readerWindows.invalidate(userID: user.id)
+                    if let credentialAdapter {
+                        guard let credentialTicket else { return }
+                        do { try credentialAdapter.retireCurrentAccount(expected: credentialTicket, into: currentUserBox) }
+                        catch {
+                            if let recovery = AuthenticationRecovery.forError(error) {
+                                currentUserBox.state = .authenticationRecovery(recovery)
                             }
-                        #endif
-                        let sharePackageService = deps.services?.library.sharePackageService
-                        await sharePackageService?.beginAccountSwitchAndWait()
-                        if case .signedIn(let user) = currentUserBox.state {
-                            await PendingShareStore.shared.clearTransientState(for: user.id)
                         }
-                        await deps.services?.voice.presenter.requestEnd()
-                        await deps.performSignOut(currentUserBox: currentUserBox)
-                        await sharePackageService?.endAccountSwitch()
-                        showOnboarding = false
-                        showNoCardTrialIntro = false
+                        return
                     }
+                    // Preview-only hosts have no account mutation capability.
+                    return
                 }
             )
             .loadProducts()
-            .observeErrors()
-            .onReceive(NotificationCenter.default.publisher(for: .rishiSearchableDataDidChange)) { _ in
+            .observeErrors(observation: { source, isRegistered, liveBlocking in
+                if isRegistered {
+                    _ = trialPresentationState.registerPurchaseError(source: source, provider: liveBlocking)
+                } else {
+                    trialPresentationState.unregisterPurchaseError(
+                        source: source,
+                        deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
+                    )
+                }
+            })
+            .onAppear { installTrialRootProvider(deps: deps) }
+            .onDisappear { retireTrialRoot() }
+            .onChange(of: signedInUserID) { oldID, newID in
+                if let oldID, let oldIdentity = deps.activeAccountIdentity, oldIdentity.userID == oldID {
+                    trialPresentationState.invalidate(identity: oldIdentity)
+                }
+                if let newID, let identity = deps.activeAccountIdentity, identity.userID == newID {
+                    trialPresentationState.update()
+                    scheduleTrialEvaluation(deps: deps)
+                }
+            }
+            .onChange(of: deps.activeAccountIdentity) { oldIdentity, newIdentity in
+                guard oldIdentity != newIdentity else { return }
+                #if targetEnvironment(macCatalyst)
+                retireSubscriptionPresentation()
+                #endif
+                if let oldIdentity { trialPresentationState.invalidate(identity: oldIdentity) }
+                if activeTrialClaimID != nil {
+                    trialCoordinator.retireHost(trialPresentationState.hostID)
+                    showNoCardTrialIntro = false
+                    trialPresentationState.setOwnedCover(nil)
+                    activeTrialClaimID = nil
+                }
+                fencedTrialIdentity = newIdentity
+                trialPresentationState.update()
+                scheduleTrialEvaluation(deps: deps)
+            }
+            .onChange(of: scenePhase) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: router.path.count) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showOnboarding) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.alertMessage) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.pendingToken) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.hasPendingInvitation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.isRedeeming) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: trialPresentationState.revision) { _, _ in scheduleTrialEvaluation(deps: deps) }
+            #if targetEnvironment(macCatalyst)
+            .onChange(of: Set(readerWindows.openWindows.keys)) { _, _ in
+                trialPresentationState.update(); scheduleTrialEvaluation(deps: deps)
+            }
+            .onChange(of: showSubscriptions) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: pendingSubscriptionConfirmation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showSubscriptionConfirmation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            #endif
+            .onChange(of: deps.services!.billing.manageSubscriptionPresenter.isPresenting) { _, _ in
+                trialPresentationState.update(); scheduleTrialEvaluation(deps: deps)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .rishiSearchableDataDidChange)
+                    .receive(on: DispatchQueue.main)
+            ) { _ in
                 Task { await deps.services?.systemIntegration.spotlight.requestReindex() }
             }
-            .task {
-                guard case .signedOut = currentUserBox.state else { return }
-#if DEBUG
-                // A reused simulator may still contain a previous account's
-                // Keychain session. The app-level E2E reset task is purging
-                // that account locally; do not race it by restoring the old
-                // identity here or briefly starting its sync/session flows.
-                if RishiE2EConfiguration.isReset {
-                    currentUserBox.state = .signedOut
-                    return
-                }
-#endif
-                currentUserBox.state = .loading
-                if let userId = try? Keychain.load(.userId), !userId.isEmpty {
-                    let uuidUserId = DerivedUserID.from(userId)
-
-                    let workerClient = deps.services!.workerClient
-                    do {
-                        guard try await RishiAppIntentRuntime.validatedPersistedIdentity() == uuidUserId else {
-                            throw RishiAppIntentRuntimeError.signedOut
-                        }
-                        let user = try await RishiAppIntentRuntime.validateServerIdentity(
-                            using: workerClient,
-                            userID: uuidUserId
-                        )
-                        guard await deps.replaceUserId(uuidUserId) else {
-                            throw RishiAppIntentRuntimeError.unavailable
-                        }
-                        currentUserBox.signIn(user: user)
-                    } catch {
-                        Log.error("root.current_user.bootstrap_failed", error: error)
-                        Keychain.delete(.accessToken)
-                        Keychain.delete(.refreshToken)
-                        Keychain.delete(.userId)
-                        do {
-                            try await KeychainSessionStore().delete()
-                        } catch {
-                            Log.error("root.current_user.session-delete.failed", error: error)
-                        }
-                        _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
-                        currentUserBox.state = .signedOut
-                    }
-                } else {
-                    Keychain.delete(.accessToken)
-                    Keychain.delete(.refreshToken)
-                    Keychain.delete(.userId)
-                    do {
-                        try await KeychainSessionStore().delete()
-                    } catch {
-                        Log.error("root.current_user.session-delete.failed", error: error)
-                    }
-                    _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
-                    currentUserBox.state = .signedOut
-                }
-            }
+            .task { await restorePersistedIdentityIfNeeded(deps: deps) }
             #if targetEnvironment(macCatalyst)
             .onReceive(NotificationCenter.default.publisher(for: .rishiPresentSubscriptions)) { _ in
-                showSubscriptions = true
+                guard let snapshot = try? deps.credentialAuthority.snapshot(),
+                      DerivedUserID.from(snapshot.lease.rawUserID) == signedInUserID else { return }
+                subscriptionState.request(snapshot, authority: deps.credentialAuthority)
             }
-            .rishiSubscriptionPresentation(isPresented: $showSubscriptions, onDismiss: {
-                Task {
-                    await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
-                    guard pendingSubscriptionConfirmation else { return }
-                    await MainActor.run {
-                        pendingSubscriptionConfirmation = false
-                        showSubscriptionConfirmation = true
-                    }
+            .rishiSubscriptionPresentation(item: Binding(
+                get: { subscriptionState.isPresented ? subscriptionState.active : nil },
+                set: { if $0 == nil { subscriptionState.setPresented(false) } }
+            ), onDismiss: {
+                // Claim the original native receipt before any await. A newer
+                // queued request can now present without being adopted here.
+                guard let receipt = subscriptionState.claimNativeDismissal(authority: deps.credentialAuthority) else { return }
+                Task { @MainActor in
+                    _ = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
+                        credentialContext: .normal(receipt.lease))
+                    subscriptionState.finishDismissal(receipt, authority: deps.credentialAuthority)
                 }
-            }) {
-                SubscriptionsView(
-                    dependencies: SubscriptionDependencies(
-                        groupID: deps.services!.billing.groupID,
-                        entitlementRefreshCoordinator: deps.services!.billing.entitlementRefreshCoordinator,
-                        restoreService: deps.services!.billing.restoreService
-                    ),
-                    onPurchaseCompleted: {
-                    pendingSubscriptionConfirmation = true
-                    showSubscriptions = false
-                })
+            }) { presented in
+                subscriptionSheet(deps: deps, presented: presented)
+                .onAppear {
+                    subscriptionState.presentationDidAppear(presented, authority: deps.credentialAuthority)
+                }
                 .environment(deps.services!.billing.entitlementSnapshotStore)
                 .environment(deps.services!.billing.manageSubscriptionPresenter)
-                .environment(Store.shared)
+                .environment(deps.services!.billing.store)
             }
-            .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
+            .alert("Subscription active", isPresented: Binding(
+                get: { subscriptionState.showsConfirmation },
+                set: { if !$0 { subscriptionState.dismissConfirmation() } }
+            )) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Thank you for subscribing. Your plan is now active.")
@@ -212,14 +231,32 @@ struct RootView: View {
         Group {
             switch currentUserBox.state {
             case .signedOut:
-                SignedOutView()
+                if let credentialAdapter {
+                    SignedOutView(credentialAdapter: credentialAdapter)
+                } else {
+                    SignedOutView()
+                }
             case .loading:
                 #if DEBUG
                     Text("Current UserBox loading")
                 #endif
                 ProgressView()
 
-            case .signedIn(user: _):
+            case .authenticationRecovery(let recovery):
+                ContentUnavailableView {
+                    Label("Sign-in needs attention", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text(recovery.message)
+                } actions: {
+                    Button("Retry") {
+                        Task { await restorePersistedIdentityIfNeeded(deps: deps) }
+                    }
+                    Button("Sign in") {
+                        currentUserBox.state = .signedOut
+                    }
+                }
+
+            case .signedIn(let user):
                 // Per spec ("Replace the binary signed-in subscription
                 // redirect with server-derived routing"): every signed-in
                 // user — trial, paid, exhausted, or expired — reaches
@@ -228,7 +265,10 @@ struct RootView: View {
                 // the EntitlementSnapshotStore injected below.
                 SignedInView(
                     onLibraryReadyForTrial: {
-                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
+                        guard let identity = deps.activeAccountIdentity,
+                              identity.userID == user.id else { return }
+                        trialPresentationState.requestLibraryReady(identity: identity)
+                        scheduleTrialEvaluation(deps: deps)
                     }
                 )
 
@@ -240,110 +280,72 @@ struct RootView: View {
             bootstrapped = true
             await updateOnboardingPresentation(deps: deps)
         }
-        .task(id: signedInUserID) {
-            // A SwiftUI `.task(id:)` is cancelled whenever the signed-in
-            // branch is rebuilt. Redemption owns durable queue state, so run
-            // it in an unstructured task instead of allowing a view rebuild to
-            // cancel the network request halfway through.
-            guard signedInUserID != nil else { return }
-            if let token = await PendingSessionInviteStore.anonymous.load() {
-                await MainActor.run {
-                    // A link received while this asynchronous startup read is
-                    // in flight is newer than the persisted snapshot. Never
-                    // let the old snapshot replace that explicit link.
-                    guard pendingSessionToken == nil else { return }
-                    pendingSessionToken = token
-                }
-            }
-            Task { await redeemPendingSharesIfEligible(deps: deps) }
-            schedulePendingSessionRedemptionIfEligible(deps: deps)
+        .task(id: deps.activeAccountIdentity) {
+            workflow?.updateEligibility(identity: workflowIdentity(deps: deps), onboardingPresented: showOnboarding)
+            await workflow?.loadPendingIfEligible()
         }
-        .onChange(of: signedInUserID) { previous, _ in
-            pendingSessionInvitations = [:]
-            // A redeem request may have committed server-side even when its
-            // URLSession response is still in flight. Let it return so the
-            // stale attempt can compensate with its original-account bearer.
-            pendingSessionRedemptionTask = nil
-            pendingSessionRedemptionKey = nil
-            if let previous {
-                router.detachSharedReaderPresentation(for: previous)
-                #if targetEnvironment(macCatalyst)
-                    readerWindows.detachSharedReading(for: previous)
-                #endif
-            }
+        .onChange(of: signedInUserID) { _, _ in
+            workflow?.updateEligibility(identity: workflowIdentity(deps: deps), onboardingPresented: showOnboarding)
         }
-        .task {
-            guard sharedReadingFenceToken == nil else { return }
-            sharedReadingFenceToken = deps.installSynchronousAccountTransitionFence {
-                guard let accountID = deps.cachedUserId else { return }
-                router.detachSharedReaderPresentation(for: accountID)
-                #if targetEnvironment(macCatalyst)
-                    readerWindows.detachSharedReading(for: accountID)
-                #endif
-            }
-            sharedReadingDrainCleanupToken = deps.installPostSharedReadingDrainHandler { accountID in
-                router.clearDetachedSharedReaderContexts(for: accountID)
-                #if targetEnvironment(macCatalyst)
-                    readerWindows.clearDetachedSharedReading(for: accountID)
-                #endif
-            }
+        .onChange(of: showOnboarding) { _, presented in
+            workflow?.updateEligibility(identity: workflowIdentity(deps: deps), onboardingPresented: presented)
         }
+        .task { workflow?.start() }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
-            Task { await redeemPendingSharesIfEligible(deps: deps) }
+            let owner = workflow
+            Task { await owner?.redeemPendingPackages() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareRedemptionReady)) { _ in
-            Task { await redeemPendingSharesIfEligible(deps: deps) }
+            let owner = workflow
+            Task { await owner?.redeemPendingPackages() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.sessionTokenQueued)) { notification in
-            guard let token = notification.object as? String, !token.isEmpty else { return }
-            pendingSessionToken = token
-            schedulePendingSessionRedemptionIfEligible(deps: deps)
+            guard let token = notification.object as? String else { return }
+            workflow?.queueSessionToken(token)
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.creatorInvitationQueued)) { notification in
             guard let invitation = notification.object as? SharedReadingInvitation,
-                  let accountID = signedInUserID
-            else { return }
-            pendingSessionInvitations[invitation.sessionID] = PendingCreatorInvitation(
-                accountID: accountID,
-                invitation: invitation
-            )
+                  let identity = workflowIdentity(deps: deps) else { return }
+            workflow?.queueInvitation(invitation, identity: identity)
         }
-        .alert(
-            pendingShareTitle,
-            isPresented: Binding(
-                get: { pendingShareMessage != nil },
-                set: { if !$0 { pendingShareMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
+        .alert(workflow?.alertTitle ?? "Shared books", isPresented: Binding(
+            get: { workflow?.alertMessage != nil },
+            set: { if !$0 { workflow?.dismissAlert() } }
+        )) {
+            Button("OK", role: .cancel) { workflow?.dismissAlert() }
         } message: {
-            Text(pendingShareMessage ?? "")
+            Text(workflow?.alertMessage ?? "")
         }
         #if canImport(UIKit)
             .fullScreenCover(isPresented: $showOnboarding) {
-                OnboardingHost(
-                    coordinator: deps.services!.onboarding.coordinator,
-                    readerDefaults: deps.services!.settings.readerDefaults,
-                    onCompleted: {
-                        showOnboarding = false
-                        schedulePendingSessionRedemptionIfEligible(deps: deps)
-                    }
-                )
+                onboardingHost(deps: deps)
             }
         #else
             .sheet(isPresented: $showOnboarding) {
-                OnboardingHost(
-                    coordinator: deps.services!.onboarding.coordinator,
-                    readerDefaults: deps.services!.settings.readerDefaults,
-                    onCompleted: {
-                        showOnboarding = false
-                        schedulePendingSessionRedemptionIfEligible(deps: deps)
-                    }
-                )
+                onboardingHost(deps: deps)
             }
         #endif
-            .fullScreenCover(isPresented: $showNoCardTrialIntro) {
+            .fullScreenCover(isPresented: $showNoCardTrialIntro, onDismiss: {
+                guard let claimID = activeTrialClaimID else { return }
+                trialPresentationState.coverDidDismiss(claimID: claimID)
+                let graphWasRetired = trialLifetimeAuthority.ownedCoverDidDismiss(hostID: trialPresentationState.hostID)
+                trialPresentationState.setOwnedCover(nil)
+                activeTrialClaimID = nil
+                if graphWasRetired { retireTrialRoot(force: true) }
+            }) {
                 NoCardTrialScreen(onGotIt: { showNoCardTrialIntro = false })
+                    .onAppear {
+                guard let claimID = activeTrialClaimID else { return }
+                        Task {
+                            _ = await trialCoordinator.coverAppeared(
+                                claimID: claimID,
+                                hostID: trialPresentationState.hostID,
+                                state: trialPresentationState,
+                                host: trialHost,
+                                effects: trialEffects(deps: deps)
+                            )
+                        }
+                    }
             }
     }
 
@@ -368,383 +370,405 @@ struct RootView: View {
         return user.id
     }
 
+    private var trialHost: TrialIntroPresentationCoordinator.Host {
+        .init(
+            snapshot: { trialPresentationState.snapshot() },
+            bindCover: { claimID in
+                guard let deps,
+                      let snapshot = trialPresentationState.snapshot(),
+                      snapshot.permitsCheck,
+                      deps.activeAccountIdentity == snapshot.identity else { return false }
+                activeTrialClaimID = claimID
+                trialPresentationState.setOwnedCover(claimID)
+                showNoCardTrialIntro = true
+                return true
+            },
+            dismissCover: { claimID in
+                guard activeTrialClaimID == claimID else { return }
+                showNoCardTrialIntro = false
+            }
+        )
+    }
+
+    private func trialEffects(deps: AppDependencies) -> TrialIntroPresentationCoordinator.Effects {
+        .init(
+            hasSeen: { userID in
+                await deps.services!.onboarding.trialState.hasSeenNoCardIntro(userId: userID)
+            },
+            refreshEntitlement: {
+                guard let snapshot = try? deps.credentialAuthority.snapshot() else { return nil }
+                return await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn,
+                    credentialContext: .normal(snapshot.lease))
+            },
+            setSeenTrue: { userID in
+                await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(true, userId: userID)
+            }
+        )
+    }
+
+    private func trialSnapshot(deps: AppDependencies) -> TrialIntroPresentationSnapshot {
+        let currentID = signedInUserID
+        let identity = deps.activeAccountIdentity.flatMap { $0.userID == currentID ? $0 : nil }
+        var hasOtherPresentation = showOnboarding || workflow?.alertMessage != nil
+            || workflow?.pendingToken != nil || workflow?.hasPendingInvitation == true
+            || workflow?.isRedeeming == true
+        #if targetEnvironment(macCatalyst)
+        hasOtherPresentation = hasOtherPresentation || showSubscriptions || pendingSubscriptionConfirmation || showSubscriptionConfirmation
+        #endif
+        let presentation = NoCardTrialPresentationPolicy.rootPresentation(
+            trialCoverPresented: showNoCardTrialIntro,
+            trialClaimID: activeTrialClaimID,
+            competingPresentationActive: hasOtherPresentation
+        )
+        #if targetEnvironment(macCatalyst)
+        let readerWindowsAbsent = readerWindows.openWindows.isEmpty
+        let nativeActive = deps.services?.billing.manageSubscriptionPresenter.isPresenting ?? false
+        #else
+        let readerWindowsAbsent = true
+        let nativeActive = deps.services?.billing.manageSubscriptionPresenter.isPresenting ?? false
+        #endif
+        let lifetimeFacts = trialLifetimeAuthority.snapshotFacts(
+            hostID: trialPresentationState.hostID,
+            graphID: trialRootGraphID,
+            localSceneIsActive: scenePhase == .active
+        )
+        return TrialIntroPresentationSnapshot(
+            hostID: trialPresentationState.hostID,
+            identity: identity,
+            revision: trialPresentationState.currentRevision,
+            hostActive: lifetimeFacts.hostActive,
+            sceneActive: lifetimeFacts.sceneActive,
+            rootPathEmpty: router.path.isEmpty,
+            sharedReaderAbsent: router.sharedReaderRoute == nil,
+            catalystReaderWindowsAbsent: readerWindowsAbsent,
+            rootPresentation: presentation,
+            child: nil,
+            restoreActive: deps.services?.billing.manageSubscriptionPresenter.isPresenting ?? false,
+            nativePresentationActive: nativeActive
+        )
+    }
+
+    private func installTrialRootProvider(deps: AppDependencies) {
+        trialPresentationState.registerRoot { trialSnapshot(deps: deps) }
+        fencedTrialIdentity = deps.activeAccountIdentity
+        if trialAccountFenceToken == nil {
+            trialAccountFenceToken = deps.installSynchronousAccountTransitionFence {
+                #if targetEnvironment(macCatalyst)
+                retireSubscriptionPresentation()
+                #endif
+                if let outgoingIdentity = fencedTrialIdentity {
+                    trialPresentationState.invalidate(identity: outgoingIdentity)
+                }
+                if activeTrialClaimID != nil {
+                    showNoCardTrialIntro = false
+                    trialPresentationState.setOwnedCover(nil)
+                    activeTrialClaimID = nil
+                }
+                trialCoordinator.retireHost(trialPresentationState.hostID)
+                fencedTrialIdentity = nil
+            }
+        }
+        guard trialReleaseObserverID == nil else { scheduleTrialEvaluation(deps: deps); return }
+        trialReleaseObserverID = trialCoordinator.observeReleases { accountID, claimID, _ in
+            guard trialPresentationState.currentIdentity?.userID == accountID,
+                  blockedTrialClaimID == claimID else { return }
+            trialRetryFromOtherRelease = true
+            scheduleTrialEvaluation(deps: deps)
+        }
+        scheduleTrialEvaluation(deps: deps)
+    }
+
+    private func retireTrialRoot(force: Bool = false) {
+        guard force || activeTrialClaimID == nil else { return }
+        if let claimID = activeTrialClaimID {
+            showNoCardTrialIntro = false
+            trialPresentationState.setOwnedCover(nil)
+            activeTrialClaimID = nil
+            trialPresentationState.coverDidDismiss(claimID: claimID)
+        }
+        if let identity = trialPresentationState.currentIdentity { trialPresentationState.invalidate(identity: identity) }
+        trialPresentationState.unregisterRoot()
+        trialCoordinator.retireHost(trialPresentationState.hostID)
+        if let token = trialReleaseObserverID { trialCoordinator.removeReleaseObserver(token) }
+        trialReleaseObserverID = nil
+        if let token = trialAccountFenceToken { deps?.removeSynchronousAccountTransitionFence(token) }
+        trialAccountFenceToken = nil
+        fencedTrialIdentity = nil
+    }
+
+    private func workflowIdentity(deps: AppDependencies) -> LibraryAccountIdentity? {
+        deps.activeAccountIdentity.flatMap { $0.userID == signedInUserID ? $0 : nil }
+    }
+
+    @MainActor
+    private func restorePersistedIdentityIfNeeded(deps: AppDependencies) async {
+        #if DEBUG
+        if RishiE2EConfiguration.isReset { return }
+        #endif
+        await workflow?.restoreAndLoadPendingIfEligible()
+    }
+
+    @ViewBuilder
+    private func onboardingHost(deps: AppDependencies) -> some View {
+        let completed = {
+            showOnboarding = false
+            workflow?.updateEligibility(identity: workflowIdentity(deps: deps), onboardingPresented: false)
+        }
+        if let credentialAdapter {
+            let ticket = credentialAdapter.authority.attemptTicket()
+            OnboardingHost(coordinator: deps.services!.onboarding.coordinator,
+                           readerDefaults: deps.services!.settings.readerDefaults,
+                           eraseCredentialAccount: { try credentialAdapter.retireCurrentAccount(expected: ticket, into: currentUserBox) },
+                           onCompleted: completed)
+        } else {
+            OnboardingHost(coordinator: deps.services!.onboarding.coordinator,
+                           readerDefaults: deps.services!.settings.readerDefaults,
+                           onCompleted: completed)
+        }
+    }
+
+    #if targetEnvironment(macCatalyst)
+    private func retireSubscriptionPresentation() {
+        subscriptionState.retireForAccountFence()
+    }
+
+    @ViewBuilder
+    private func subscriptionSheet(deps: AppDependencies, presented: RootSubscriptionPresentationState.Presentation) -> some View {
+        let billing = deps.services!.billing
+        let dependencies = SubscriptionDependencies(groupID: billing.groupID,
+            entitlementRefreshCoordinator: billing.entitlementRefreshCoordinator,
+            restoreService: billing.restoreService, customerEntitlements: billing.customerEntitlements,
+            store: billing.store)
+        if deps.credentialAuthority.isCurrent(presented.snapshot.lease) {
+            SubscriptionsView(dependencies: dependencies, credentialAuthority: deps.credentialAuthority,
+                              credentialSnapshot: presented.snapshot, onPurchaseCompleted: {
+                // SubscriptionsView already holds atomic original-lease admission.
+                // This callback must not reenter that authority lock.
+                subscriptionState.purchaseCompleted(presentationID: presented.id)
+            })
+        } else { ContentUnavailableView("Sign in required", systemImage: "person.crop.circle.badge.exclamationmark") }
+    }
+    #endif
+
+    private func scheduleTrialEvaluation(deps: AppDependencies) {
+        guard !trialEvaluationInFlight,
+              activeTrialClaimID == nil,
+              let identity = deps.activeAccountIdentity,
+              identity.userID == signedInUserID,
+              trialPresentationState.pendingReadyIdentity == identity,
+              let snapshot = trialPresentationState.snapshot(),
+              NoCardTrialPresentationPolicy.permitsCheck(snapshot) else { return }
+        guard settledTrialIdentity != identity || settledTrialRevision != snapshot.revision || trialRetryFromOtherRelease else { return }
+        #if DEBUG
+        if RishiE2EConfiguration.isRealAuth { return }
+        #endif
+        trialEvaluationInFlight = true
+        let attemptID = UUID()
+        trialEvaluationAttemptID = attemptID
+        trialRetryFromOtherRelease = false
+        blockedTrialClaimID = nil
+        Task { @MainActor in
+            let outcome = await trialCoordinator.evaluate(
+                hostID: trialPresentationState.hostID,
+                state: trialPresentationState,
+                identity: identity,
+                effects: trialEffects(deps: deps),
+                host: trialHost
+            )
+            guard NoCardTrialPresentationPolicy.isCurrentAttempt(
+                completedAttemptID: attemptID,
+                activeAttemptID: trialEvaluationAttemptID
+            ) else { return }
+            trialEvaluationInFlight = false
+            trialEvaluationAttemptID = nil
+            let currentIdentity = deps.activeAccountIdentity
+            let pendingIdentity = trialPresentationState.pendingReadyIdentity
+            let canSettleAttempt = NoCardTrialPresentationPolicy.shouldSettleAttempt(
+                attemptIdentity: identity,
+                currentIdentity: currentIdentity,
+                pendingReadyIdentity: pendingIdentity
+            )
+            let settled = trialPresentationState.snapshot()?.revision ?? snapshot.revision
+            let currentSnapshot = trialPresentationState.snapshot()
+            let canRetryChangedFacts = NoCardTrialPresentationPolicy.shouldRetryAfterSafetyRevisionChange(
+                outcome: outcome,
+                attemptedRevision: snapshot.revision,
+                currentSnapshot: currentSnapshot,
+                hasPendingReadiness: pendingIdentity == identity
+            )
+            if canSettleAttempt {
+                settledTrialIdentity = identity
+                settledTrialRevision = canRetryChangedFacts ? snapshot.revision : settled
+            }
+            if canSettleAttempt, case .blockedByOtherClaim(let claimID) = outcome {
+                blockedTrialClaimID = claimID
+                if trialCoordinator.wasReleased(claimID: claimID, accountID: identity.userID) {
+                    trialRetryFromOtherRelease = true
+                }
+            }
+            if trialRetryFromOtherRelease || canRetryChangedFacts || (pendingIdentity != nil && pendingIdentity != identity) {
+                scheduleTrialEvaluation(deps: deps)
+            }
+        }
+    }
+
     private var signedInWireUserID: String? {
         guard signedInUserID != nil else { return nil }
-        if let persisted = try? Keychain.load(.userId), !persisted.isEmpty {
-            return persisted
+        if let credentialAdapter {
+            guard let snapshot = try? credentialAdapter.authority.snapshot(),
+                  DerivedUserID.from(snapshot.lease.rawUserID) == signedInUserID else { return nil }
+            return snapshot.lease.rawUserID
         }
-        return signedInUserID?.uuidString
+        return nil
     }
 
-    private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
-        guard currentUserBox.isSigned else {
-            Log.sharedReading(.bookPackageRedeem, context: .init(outcome: .skipped, diagnostic: "signed_out"))
-            return
-        }
-        // Sharing is an explicit bearer-link action. It must not wait for the
-        // optional onboarding flow; a newly signed-in recipient should receive
-        // the book immediately and can finish onboarding afterward.
-        Log.sharedReading(.bookPackageRedeem, context: .init(outcome: .started))
-        let result = await deps.services!.library.sharePackageService.redeemPendingIfEligible()
-        Log.sharedReading(.bookPackageRedeem, context: .init(
-            outcome: .finished,
-            importedCount: result.importedCount,
-            discardedCount: result.discardedCount,
-            alreadyUsedCount: result.alreadyUsedCount
-        ))
-        guard result.discardedCount > 0 else { return }
-        await MainActor.run {
-            pendingShareTitle = "Shared books"
-            if result.alreadyUsedCount > 0 {
-                pendingShareMessage = result.alreadyUsedCount == 1
-                    ? "This one-time shared link has already been used."
-                    : "These one-time shared links have already been used."
-            } else {
-                pendingShareMessage = result.discardedCount == 1
-                    ? "One shared link is expired or no longer available."
-                    : "\(result.discardedCount) shared links are expired or no longer available."
-            }
-        }
+
+}
+
+#if canImport(UIKit)
+@MainActor
+private struct TrialRootLifetimeAnchor: UIViewRepresentable {
+    let hostID: UUID
+    let graphID: UUID
+    let state: TrialIntroPresentationState
+    let authority: TrialRootLifetimeAuthority
+    let onRetire: @MainActor () -> Void
+    let onChange: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(hostID: hostID, graphID: graphID, state: state, authority: authority, onRetire: onRetire, onChange: onChange)
     }
 
-    @MainActor
-    private func schedulePendingSessionRedemptionIfEligible(deps: AppDependencies) {
-        guard currentUserBox.isSigned,
-              !showOnboarding,
-              let accountID = signedInUserID,
-              let token = pendingSessionToken
-        else { return }
+    func makeUIView(context: Context) -> TrialAnchorView {
+        let view = TrialAnchorView()
+        view.sceneChanged = { [weak coordinator = context.coordinator] scene in coordinator?.attach(to: scene) }
+        return view
+    }
 
-        let key = PendingSessionRedemptionKey(accountID: accountID, token: token)
-        guard pendingSessionRedemptionKey != key else { return }
+    func updateUIView(_ uiView: TrialAnchorView, context: Context) {
+        context.coordinator.onRetire = onRetire
+        context.coordinator.onChange = onChange
+        uiView.sceneChanged = { [weak coordinator = context.coordinator] scene in coordinator?.attach(to: scene) }
+    }
 
-        // A newly queued link supersedes an older attempt, but never cancel
-        // its in-flight redeem: the server may already have admitted it. Its
-        // key becomes stale and it must release the returned membership.
-        pendingSessionRedemptionKey = key
-        pendingSessionRedemptionTask = Task { @MainActor [key] in
-            await redeemPendingSessionIfEligible(deps: deps, key: key)
-            guard pendingSessionRedemptionKey == key else { return }
-            pendingSessionRedemptionTask = nil
-            pendingSessionRedemptionKey = nil
-        }
+    static func dismantleUIView(_ uiView: TrialAnchorView, coordinator: Coordinator) {
+        coordinator.dismantle()
     }
 
     @MainActor
-    private func isCurrentPendingSessionRedemption(
-        _ key: PendingSessionRedemptionKey,
-        deps: AppDependencies
-    ) -> Bool {
-        !Task.isCancelled
-            && pendingSessionRedemptionKey == key
-            && pendingSessionToken == key.token
-            && signedInUserID == key.accountID
-            && deps.cachedUserId == key.accountID
-    }
+    final class Coordinator {
+        let hostID: UUID
+        let graphID: UUID
+        let state: TrialIntroPresentationState
+        let authority: TrialRootLifetimeAuthority
+        var onRetire: @MainActor () -> Void
+        var onChange: @MainActor () -> Void
+        private weak var scene: UIWindowScene?
+        private var sceneID: UUID?
+        private var anchor: TrialRootLifetimeAuthority.Anchor?
+        private var disconnectObserver: NSObjectProtocol?
+        private var activationObservers: [NSObjectProtocol] = []
 
-    @MainActor
-    private func redeemPendingSessionIfEligible(
-        deps: AppDependencies,
-        key: PendingSessionRedemptionKey
-    ) async {
-        guard isCurrentPendingSessionRedemption(key, deps: deps), !showOnboarding else { return }
-        let token = key.token
-        guard let sessionAPI = deps.services?.sharedReadingAPI else {
-            pendingShareTitle = "Reading session"
-            pendingShareMessage = "Rishi could not start the reading session. Please try again."
-            return
+        init(hostID: UUID, graphID: UUID, state: TrialIntroPresentationState, authority: TrialRootLifetimeAuthority,
+             onRetire: @escaping @MainActor () -> Void, onChange: @escaping @MainActor () -> Void) {
+            self.hostID = hostID; self.graphID = graphID; self.state = state
+            self.authority = authority; self.onRetire = onRetire; self.onChange = onChange
         }
-        // Every await below is fenced to this account generation. A link that
-        // finishes redeeming after sign-out must be discarded, never registered
-        // or routed into the next account.
-        let userID = key.accountID
-        let accountGeneration = deps.accountGeneration
-        let activeSessionIDAtStart = activeSharedReaderRoute(for: userID)?.sessionID
-        var redeemedSessionID: String?
-        var accountBoundCleanupAPI: SharedReadingAPI?
-        var replacementRuntime: SharedReadingSessionRuntime?
-        var stage = "redeem"
-        do {
-            Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .started))
-            let redemption = try await sessionAPI.redeemWithAccountBoundCleanup(token: token)
-            let response = redemption.response
-            accountBoundCleanupAPI = redemption.cleanupAPI
-            redeemedSessionID = response.sessionId
-            Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .completed, sessionID: response.sessionId))
-            guard isCurrentPendingSessionRedemption(key, deps: deps),
-                  deps.accountGeneration == accountGeneration else {
-                await releaseAbandonedSession(
-                    response.sessionId, runtime: nil, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
+
+        func attach(to nextScene: UIWindowScene?) {
+            // UIKit can temporarily remove the window while a full-screen cover is presented.
+            // Keep the last exact scene observer and anchor until a new scene or true dismantle.
+            guard let nextScene else {
+                if let anchor { _ = authority.retainAfterTransientWindowDetach(anchor) }
                 return
             }
-            // Redeeming an invitation to the room already displayed on this
-            // device must never replace its live runtime or leave its member.
-            if isActiveSharedReader(sessionID: response.sessionId, accountID: userID) {
-                await clearPendingSessionToken(ifCurrent: key)
-                pendingSessionInvitations.removeValue(forKey: response.sessionId)
-                return
+            guard scene !== nextScene else { return }
+            removeObserver()
+            scene = nextScene
+            let exactSceneID = UUID()
+            let isActive = nextScene.activationState == .foregroundActive
+            let registration = authority.register(hostID: hostID, graphID: graphID, sceneID: exactSceneID, sceneActive: isActive)
+            state.installHostLifetime(registration, isCurrent: { [authority] token in authority.isCurrent(token) })
+            sceneID = exactSceneID
+            anchor = registration
+            disconnectObserver = NotificationCenter.default.addObserver(
+                forName: UIScene.didDisconnectNotification,
+                object: nextScene,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.sceneDidDisconnect(exactSceneID) }
             }
-            let transport = SharedReadingSignalingClient()
-            let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
-                try await sessionAPI.markBookReady(sessionId: response.sessionId, token: token, contentHash: response.book.contentHash)
-            }
-            let coordinator = SharedReadingSessionCoordinator(
-                transport: transport,
-                localParticipantUserId: signedInWireUserID ?? userID.uuidString,
-                refreshAdmission: refreshAdmission,
-                refreshBearerToken: { try await sessionAPI.refreshBearerToken() }
-            )
-            stage = "prepare"
-            Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .started, sessionID: response.sessionId))
-            let preparedBook = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
-            guard isCurrentPendingSessionRedemption(key, deps: deps),
-                  deps.accountGeneration == accountGeneration else {
-                await releaseAbandonedSession(
-                    response.sessionId, runtime: nil, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
-                return
-            }
-            let importedHash = preparedBook.contentHash
-            Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .completed, sessionID: response.sessionId))
-            guard importedHash.caseInsensitiveCompare(response.book.contentHash) == .orderedSame else {
-                throw SharedReadingError.from(code: .bookHashMismatch)
-            }
-            stage = "admission"
-            Log.sharedReading(.sessionLifecycle, context: .init(operation: .bookReady, outcome: .started, sessionID: response.sessionId))
-            let admission = try await sessionAPI.markBookReady(
-                sessionId: response.sessionId,
-                token: token,
-                contentHash: importedHash
-            )
-            Log.sharedReading(.sessionLifecycle, context: .init(operation: .bookReady, outcome: .completed, sessionID: response.sessionId))
-            guard isCurrentPendingSessionRedemption(key, deps: deps),
-                  deps.accountGeneration == accountGeneration else {
-                await releaseAbandonedSession(
-                    response.sessionId, runtime: nil, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
-                return
-            }
-            let invitation = pendingSessionInvitations[response.sessionId]
-                .flatMap { $0.accountID == userID ? $0.invitation : nil }
-            let runtime = SharedReadingSessionRuntime(
-                api: sessionAPI, cleanupAPI: redemption.cleanupAPI,
-                coordinator: coordinator, transport: transport,
-                join: SharedReadingJoin(response: response, admission: admission, localBookId: preparedBook.book.id),
-                localParticipantUserID: signedInWireUserID ?? userID.uuidString,
-                accountID: userID, sessionRegistry: deps.services!.sharedReadingSessionRegistry,
-                invitation: invitation,
-                isAccountCurrent: {
-                    deps.cachedUserId == userID && deps.accountGeneration == accountGeneration
+            for (name, active) in [(UIScene.didActivateNotification, true), (UIScene.willDeactivateNotification, false)] {
+                let observer = NotificationCenter.default.addObserver(forName: name, object: nextScene, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.sceneActivationChanged(exactSceneID, active: active) }
                 }
-            )
-            replacementRuntime = runtime
-            stage = "connect"
-            try await runtime.connectAndPrepare()
-            guard isCurrentPendingSessionRedemption(key, deps: deps),
-                  deps.accountGeneration == accountGeneration else {
-                await releaseAbandonedSession(
-                    response.sessionId, runtime: runtime, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
-                return
+                activationObservers.append(observer)
             }
-            guard let context = runtime.readerContext else {
-                throw SharedReaderPresentationFailure.readerUnavailable
+            publishChange(for: registration)
+        }
+
+        func sceneActivationChanged(_ exactSceneID: UUID, active: Bool) {
+            guard sceneID == exactSceneID, let anchor,
+                  authority.setSceneActive(anchor, active: active) else { return }
+            publishChange(for: anchor)
+        }
+
+        func sceneDidDisconnect(_ disconnectedSceneID: UUID) {
+            guard let anchor, authority.sceneDidDisconnect(anchor: anchor, sceneID: disconnectedSceneID) else { return }
+            state.retireHostLifetime(anchor)
+            removeObserver()
+            self.anchor = nil
+            publishRetirement(of: anchor)
+        }
+
+        func dismantle() {
+            removeObserver()
+            guard let anchor else { return }
+            self.anchor = nil
+            if authority.retire(anchor) {
+                state.retireHostLifetime(anchor)
+                publishRetirement(of: anchor)
             }
-            guard router.presentSharedReader(context, for: userID) else {
-                throw SharedReaderPresentationFailure.presentationRejected
-            }
-            await clearPendingSessionToken(ifCurrent: key)
-            pendingSessionInvitations.removeValue(forKey: response.sessionId)
-        } catch let error as SharedReaderPresentationFailure {
-            if let redeemedSessionID {
-                await releaseAbandonedSession(
-                    redeemedSessionID, runtime: replacementRuntime, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
-            }
-            guard isCurrentPendingSessionRedemption(key, deps: deps),
-                  deps.accountGeneration == accountGeneration else { return }
-            await clearPendingSessionToken(ifCurrent: key)
-            if let redeemedSessionID { pendingSessionInvitations.removeValue(forKey: redeemedSessionID) }
-            pendingShareTitle = "Reading session"
-            pendingShareMessage = error.message + currentRoomPreservedMessage(protectedSessionID: activeSessionIDAtStart, accountID: userID)
-        } catch let error as SharedReadingError {
-            if let redeemedSessionID {
-                await releaseAbandonedSession(
-                    redeemedSessionID, runtime: replacementRuntime, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
-            }
-            guard isCurrentPendingSessionRedemption(key, deps: deps) else { return }
-            Log.sharedReading(.errorMapping, level: .error, context: .init(
-                outcome: .failed,
-                correlationID: error.correlationId,
-                statusCode: error.httpStatus,
-                errorCode: error.code.rawValue,
-                diagnostic: error.diagnostic,
-                stage: error.stage ?? stage,
-                localSocketCode: error.localSocketCode
-            ))
-            await MainActor.run {
-                pendingShareTitle = "Reading session"
-                if !error.retryable {
-                    pendingSessionInvitations = pendingSessionInvitations.filter { $0.value.accountID != signedInUserID }
+        }
+
+        private func publishChange(for anchor: TrialRootLifetimeAuthority.Anchor) {
+            let authority = self.authority
+            let state = self.state
+            let onChange = self.onChange
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard authority.isCurrent(anchor) else { return }
+                    state.update()
+                    onChange()
                 }
-                #if DEBUG
-                pendingShareMessage = error.debugPresentationMessage(operationStage: stage)
-                    + currentRoomPreservedMessage(protectedSessionID: activeSessionIDAtStart, accountID: userID)
-                #else
-                pendingShareMessage = error.presentationMessage + currentRoomPreservedMessage(protectedSessionID: activeSessionIDAtStart, accountID: userID)
-                #endif
             }
-            if !error.retryable { await clearPendingSessionToken(ifCurrent: key) }
-        } catch {
-            if let redeemedSessionID {
-                await releaseAbandonedSession(
-                    redeemedSessionID, runtime: replacementRuntime, api: accountBoundCleanupAPI,
-                    accountID: userID, protectedSessionID: activeSessionIDAtStart
-                )
+        }
+
+        private func publishRetirement(of anchor: TrialRootLifetimeAuthority.Anchor) {
+            let authority = self.authority
+            let state = self.state
+            let onRetire = self.onRetire
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard authority.isLatestRetired(anchor) else { return }
+                    state.update()
+                    onRetire()
+                }
             }
-            guard isCurrentPendingSessionRedemption(key, deps: deps) else { return }
-            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, errorCode: "UNKNOWN"))
-            pendingShareTitle = "Reading session"
-            pendingShareMessage = "Rishi could not open this reading session. Please try again."
-                + currentRoomPreservedMessage(protectedSessionID: activeSessionIDAtStart, accountID: userID)
-            #if DEBUG
-            pendingShareMessage = "Reading session failed during \(stage): \(String(describing: error))"
-                + currentRoomPreservedMessage(protectedSessionID: activeSessionIDAtStart, accountID: userID)
-            #endif
         }
-    }
 
-    @MainActor
-    private func currentRoomPreservedMessage(protectedSessionID: String?, accountID: UUID) -> String {
-        guard let protectedSessionID,
-              isActiveSharedReader(sessionID: protectedSessionID, accountID: accountID) else { return "" }
-        return " Your current reading session remains open."
-    }
-
-    @MainActor
-    private func activeSharedReaderRoute(for accountID: UUID) -> SharedReadingReaderRoute? {
-        #if targetEnvironment(macCatalyst)
-        let route = router.catalystSharedReaderRoute
-        #else
-        let route = router.sharedReaderRoute
-        #endif
-        guard route?.accountID == accountID else { return nil }
-        return route
-    }
-
-    @MainActor
-    private func isActiveSharedReader(sessionID: String, accountID: UUID) -> Bool {
-        activeSharedReaderRoute(for: accountID)?.sessionID == sessionID
-    }
-
-    @MainActor
-    private func clearPendingSessionToken(ifCurrent key: PendingSessionRedemptionKey) async {
-        guard pendingSessionRedemptionKey == key,
-              pendingSessionToken == key.token else { return }
-        pendingSessionToken = nil
-        // The actor compares atomically with any newer enqueue. Clearing the
-        // view state alone is insufficient because a later startup read could
-        // resurrect an already-consumed link.
-        await PendingSessionInviteStore.anonymous.clear(token: key.token)
-    }
-
-    /// A redeem creates a pending membership even before book admission. A
-    /// failed replacement releases that membership, but never the room that
-    /// was active when redemption began or one that became active meanwhile.
-    @MainActor
-    private func releaseAbandonedSession(
-        _ sessionID: String,
-        runtime: SharedReadingSessionRuntime?,
-        api: SharedReadingAPI?,
-        accountID: UUID,
-        protectedSessionID: String?
-    ) async {
-        guard sessionID != protectedSessionID,
-              !isActiveSharedReader(sessionID: sessionID, accountID: accountID) else {
-            await runtime?.closeLocally()
-            return
+        private func removeObserver() {
+            if let disconnectObserver { NotificationCenter.default.removeObserver(disconnectObserver) }
+            disconnectObserver = nil
+            activationObservers.forEach(NotificationCenter.default.removeObserver)
+            activationObservers.removeAll()
         }
-        // The redeem response carries an API bound to the exact bearer used
-        // for that request. This remains the *old* account even if sign-out
-        // began while the response was in flight. Never use the live API for
-        // compensation, because its token provider may now be the next user.
-        guard let api else {
-            Log.sharedReading(.sessionLifecycle, level: .error, context: .init(
-                operation: .leave, outcome: .failed, sessionID: sessionID,
-                errorCode: "MISSING_ACCOUNT_BOUND_CLEANUP"
-            ))
-            return
-        }
-        // Superseding a link cancels its redemption task. Keep the cleanup
-        // independent so that cancellation cannot also cancel its HTTP leave.
-        let cleanup = Task { @MainActor in
-            guard !isActiveSharedReader(sessionID: sessionID, accountID: accountID) else {
-                await runtime?.closeLocally()
-                return
-            }
-            if runtime?.isRegistryDrainRemoteLeaveOwned == true {
-                await runtime?.closeLocally()
-                return
-            }
-            do {
-                _ = try await api.leave(sessionId: sessionID, deliberate: true)
-            } catch {
-                Log.sharedReading(.sessionLifecycle, level: .error, context: .init(
-                    operation: .leave, outcome: .failed, sessionID: sessionID,
-                    errorCode: "ABANDONED_MEMBERSHIP_LEAVE_FAILED"
-                ))
-            }
-            await runtime?.closeLocally()
-        }
-        await cleanup.value
-    }
-
-    /// Shows the no-card trial explainer exactly once per account when the
-    /// signed-in library reports that its first-book flow has settled.
-    @MainActor
-    private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
-        #if DEBUG
-        // Shared-reading E2E owns the disposable-account lifecycle and is
-        // focused on the authenticated library/session path. Catalyst cannot
-        // reliably synthesize a tap through this full-screen first-run sheet,
-        // so keep that unrelated onboarding surface out of the real-auth UI
-        // test while leaving the production path unchanged.
-        guard !RishiE2EConfiguration.isRealAuth else { return }
-        #endif
-        guard !noCardTrialIntroCheckInFlight else { return }
-        noCardTrialIntroCheckInFlight = true
-        defer { noCardTrialIntroCheckInFlight = false }
-
-        guard case .signedIn(let user) = currentUserBox.state else { return }
-        let alreadySeen = await deps.services!.onboarding.trialState.hasSeenNoCardIntro(userId: user.id)
-        guard !alreadySeen else { return }
-
-        let refreshResult = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-            reason: .signIn
-        )
-        guard case .signedIn(let currentUser) = currentUserBox.state,
-              currentUser.id == user.id
-        else { return }
-        guard NoCardTrialIntroEligibility.shouldPresent(for: refreshResult) else { return }
-
-        // Re-check after the await so another path that records the intro wins.
-        guard !(await deps.services!.onboarding.trialState.hasSeenNoCardIntro(userId: user.id))
-        else { return }
-        await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(true, userId: user.id)
-        guard case .signedIn(let presentedUser) = currentUserBox.state,
-              presentedUser.id == user.id
-        else {
-            await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(false, userId: user.id)
-            return
-        }
-        showNoCardTrialIntro = true
     }
 }
+
+@MainActor
+private final class TrialAnchorView: UIView {
+    var sceneChanged: (@MainActor (UIWindowScene?) -> Void)?
+    override func didMoveToWindow() { super.didMoveToWindow(); sceneChanged?(window?.windowScene) }
+}
+#endif

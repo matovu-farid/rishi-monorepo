@@ -32,6 +32,33 @@ public final class SwiftDataPositionStore: PositionStore, Sendable {
         }
     }
 
+    public func positions(for bookIDs: Set<BookID>) async throws -> [BookID: Position] {
+        guard !bookIDs.isEmpty else { return [:] }
+        Log.event("db.read", level: .debug, data: [
+            "table": Tables.Positions.table,
+            "operation": "positions_for_books",
+            "count": String(bookIDs.count),
+        ])
+        do {
+            return try await dbStore.read { context -> [BookID: Position] in
+                let requestedIDs = Array(bookIDs)
+                let descriptor = FetchDescriptor<PositionEntity>(
+                    predicate: #Predicate { requestedIDs.contains($0.bookId) },
+                    sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+                )
+                var latestByBook: [BookID: Position] = [:]
+                for entity in try context.fetch(descriptor) where bookIDs.contains(entity.bookId) {
+                    guard latestByBook[entity.bookId] == nil else { continue }
+                    latestByBook[entity.bookId] = entity.positionValue
+                }
+                return latestByBook
+            }
+        } catch {
+            Log.error("db.error", error: error)
+            throw RishiError.persistence("positions(for:) failed: \(error)")
+        }
+    }
+
     public func upsert(_ position: Position) async throws {
         Log.event("db.write", level: .debug, data: [
             "table": Tables.Positions.table,

@@ -62,12 +62,21 @@ final class BackgroundSyncLifecycle {
     private weak var dependencies: AppDependencies?
     private var userIdBox: UserIdBox
     private var pendingDeviceToken: Data?
+    private let credentialRegistrar: APNsDeviceRegistrar?
     private var activeRecoveries = Set<RecoveryKey>()
     private var completedRecoveries = Set<RecoveryKey>()
 
     init(dependencies: AppDependencies, userIdBox: UserIdBox) {
         self.dependencies = dependencies
         self.userIdBox = userIdBox
+        credentialRegistrar = nil
+    }
+
+    /// Explicit actual-registrar injection for an inactive scoped lifecycle.
+    init(dependencies: AppDependencies, userIdBox: UserIdBox, credentialRegistrar: APNsDeviceRegistrar) {
+        self.dependencies = dependencies
+        self.userIdBox = userIdBox
+        self.credentialRegistrar = credentialRegistrar
     }
 
     static func shouldRunSilentPush(autoSync: Bool) -> Bool {
@@ -229,22 +238,13 @@ final class BackgroundSyncLifecycle {
         platform: String,
         appVersion: String
     ) async {
-        guard let userId = userIdBox.value else {
-            pendingDeviceToken = token
-            return
-        }
-        guard let registrar = await resolveServices(userId: userId)?.sync.apnsDeviceRegistrar
-        else { return }
+        pendingDeviceToken = token
+        guard let dependencies, let snapshot = try? dependencies.credentialAuthority.snapshot(),
+              userIdBox.value == DerivedUserID.from(snapshot.lease.rawUserID) else { return }
         do {
-            try await registrar.register(
-                token: token,
-                platform: platform,
-                appVersion: appVersion
-            )
-            pendingDeviceToken = nil
-        } catch {
-
-        }
+            try await retryPendingDeviceTokenIfAvailable(platform: platform, appVersion: appVersion,
+                                                        credentialContext: .normal(snapshot.lease))
+        } catch { Log.error("sync.device.registration.failed", error: error) }
     }
 
     func retryPendingDeviceTokenIfAvailable(
@@ -253,6 +253,27 @@ final class BackgroundSyncLifecycle {
     ) async {
         guard let token = pendingDeviceToken else { return }
         await registerDeviceToken(token, platform: platform, appVersion: appVersion)
+    }
+
+    /// Auth retry retains its admitted context through service resolution and send.
+    func retryPendingDeviceTokenIfAvailable(
+        platform: String, appVersion: String, credentialContext: CredentialRequestContext
+    ) async throws {
+        guard case .normal(let lease) = credentialContext, let dependencies,
+              dependencies.performCredentialMutation(lease, mutation: {}) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        guard let token = pendingDeviceToken else { return }
+        let ownerID = DerivedUserID.from(lease.rawUserID)
+        let registrar: APNsDeviceRegistrar
+        if let credentialRegistrar { registrar = credentialRegistrar }
+        else if let resolved = await resolveServices(userId: ownerID)?.sync.apnsDeviceRegistrar { registrar = resolved }
+        else { throw CredentialAuthenticationFailure.accountChanged }
+        try await registrar.register(token: token, platform: platform, appVersion: appVersion,
+                                     credentialContext: credentialContext)
+        guard dependencies.performCredentialMutation(lease, mutation: {
+            if pendingDeviceToken == token { pendingDeviceToken = nil }
+        }) else { throw CredentialAuthenticationFailure.accountChanged }
     }
 
     #if canImport(UIKit)

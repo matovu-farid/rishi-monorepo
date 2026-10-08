@@ -12,6 +12,7 @@ import Foundation
 ///   2. On UIKit hosts, the coordinator can build the navigator from the
 ///      VM without throwing.
 @Suite("ReaderView smoke", .serialized)
+@MainActor
 struct ReaderViewSmokeTests {
 
     private func aliceURL() throws -> URL {

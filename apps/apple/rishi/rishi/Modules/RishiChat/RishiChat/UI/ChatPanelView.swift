@@ -29,6 +29,22 @@ public struct ChatPanelView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            if viewModel.isLoadingHistory {
+                ProgressView("Loading history…")
+                    .padding(RishiSpacing.s)
+            }
+            if let error = viewModel.historyError {
+                VStack {
+                    Text("Could not load history: \(error.localizedDescription)")
+                    Button("Reload history") { Task { await viewModel.loadHistory() } }
+                }
+                .padding(RishiSpacing.s)
+            }
+            if let error = viewModel.streamingState.error {
+                Text("Message failed: \(error.localizedDescription)")
+                    .foregroundStyle(RishiColor.danger)
+                    .padding(RishiSpacing.s)
+            }
             transcript
             Divider()
             composer
@@ -37,6 +53,10 @@ public struct ChatPanelView: View {
         .task {
             await viewModel.loadHistory()
         }
+        .onChange(of: viewModel.successfulTurnRevision) { _, _ in
+            inputText = viewModel.draftAfterCommittedTurn(inputText)
+        }
+        .onDisappear { viewModel.cancel() }
     }
 
     // MARK: - Transcript
@@ -45,6 +65,11 @@ public struct ChatPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: RishiSpacing.s) {
+                    if viewModel.messages.isEmpty && !viewModel.isLoadingHistory
+                        && viewModel.historyError == nil && !viewModel.streamingState.isStreaming {
+                        Text("Start a conversation.")
+                            .foregroundStyle(RishiColor.textPrimary)
+                    }
                     ForEach(viewModel.messages) { message in
                         ChatMessageBubble(message: message)
                             .id(message.id)
@@ -99,9 +124,7 @@ public struct ChatPanelView: View {
                 .accessibilityLabel(A11yLabel.chatCancelStreaming)
             } else {
                 Button {
-                    let toSend = inputText
-                    inputText = ""
-                    viewModel.send(query: toSend)
+                    viewModel.send(query: inputText)
                 } label: {
                     Image(systemName: "paperplane.fill")
                         .foregroundStyle(RishiColor.accent)

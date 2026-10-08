@@ -7,11 +7,27 @@ import GoogleSignInSwift
 
 struct SignedOutView: View {
 
+    private let credentialAdapter: CredentialAuthenticationAdapter?
+
+    init() { credentialAdapter = nil }
+
+    init(credentialAdapter: CredentialAuthenticationAdapter) {
+        self.credentialAdapter = credentialAdapter
+    }
+
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
     
-    @Environment(\.appDependencies) private var deps
+    @Environment(\.appDependencies) private var legacyDependencies
+
+    private var deps: AppDependencies? {
+        if let credentialAdapter { return credentialAdapter.appDependencies }
+        return legacyDependencies
+    }
     
-    var workerClient: WorkerClient? { deps?.services?.workerClient }
+    var workerClient: WorkerClient? {
+        if let credentialAdapter { return credentialAdapter.workerClient }
+        return deps?.services?.workerClient
+    }
     var onSignedIn: (User) -> Void = { _ in }
     @State var currentUser:User? = nil
     @State var isSignedIn:Bool = false
@@ -21,6 +37,7 @@ struct SignedOutView: View {
 
     @State private var viewModel = SignedOutViewModel(authService: nil)
     @State private var pendingAppleNonce: String?
+    @State private var pendingAppleAttempt: CredentialAuthenticationAttempt?
     @State private var signInInFlight = false
     @State private var appleAuthorizationConsumed = false
     @State private var googleSignInCoordinator = GoogleSignInCoordinator()
@@ -180,7 +197,7 @@ struct SignedOutView: View {
     }
 
     private func signInWithEmailPassword() {
-        guard !signInInFlight, let deps, let workerClient = deps.services?.workerClient else {
+        guard !signInInFlight, let deps, let workerClient else {
             viewModel.recordFailure(RishiError.network(
                 code: "email_sign_in_unavailable",
                 message: "Authentication is not available."
@@ -188,28 +205,28 @@ struct SignedOutView: View {
             return
         }
         signInInFlight = true
+        let attempt = credentialAdapter?.beginAttempt()
         Task { @MainActor in
             defer { signInInFlight = false }
             do {
                 let auth: EmailPasswordSignInEndpoint.Response
-                if RishiE2EConfiguration.isRealAuth {
-                    auth = try await workerClient.send(
-                        TestEmailPasswordSignInEndpoint(email: email, password: password)
-                    )
+                if showsEmailPasswordForm {
+                    auth = try await exchange(TestEmailPasswordSignInEndpoint(email: email, password: password),
+                                              workerClient: workerClient, attempt: attempt)
                 } else {
-                    auth = try await workerClient.send(
-                        EmailPasswordSignInEndpoint(email: email, password: password)
-                    )
+                    auth = try await exchange(EmailPasswordSignInEndpoint(email: email, password: password),
+                                              workerClient: workerClient, attempt: attempt)
                 }
-                try await completeSignIn(auth, deps: deps)
+                try await completeSignIn(auth, deps: deps, attempt: attempt)
             } catch {
-                viewModel.recordFailure(error)
+                recordFailure(error, attempt: attempt)
             }
         }
     }
     func configure(_ request: ASAuthorizationAppleIDRequest) {
         guard !signInInFlight else { return }
         signInInFlight = true
+        pendingAppleAttempt = credentialAdapter?.beginAttempt()
         request.requestedScopes = [
             .fullName,
             .email
@@ -224,8 +241,10 @@ struct SignedOutView: View {
             return
         }
         appleAuthorizationConsumed = true
+        let attempt = pendingAppleAttempt
         defer {
             pendingAppleNonce = nil
+            pendingAppleAttempt = nil
             signInInFlight = false
         }
 
@@ -233,33 +252,38 @@ struct SignedOutView: View {
         case .success(let authorization):
 
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                viewModel.recordFailure(RishiError.network(
+                recordFailure(RishiError.network(
                     code: "siwa_invalid_credential",
                     message: "Apple returned an unsupported credential."
-                ))
+                ), attempt: attempt)
                 return
             }
 
             guard let token = credential.identityToken,
                   let jwt = String(data: token, encoding: .utf8) else {
-                viewModel.recordFailure(RishiError.network(
+                recordFailure(RishiError.network(
                     code: "siwa_missing_identity_token",
                     message: "Apple did not return an identity token."
-                ))
+                ), attempt: attempt)
                 return
             }
 
-            guard let deps, let workerClient = deps.services?.workerClient else {
-                viewModel.recordFailure(RishiError.network(
+            guard let deps, let workerClient else {
+                recordFailure(RishiError.network(
                     code: "siwa_unavailable",
                     message: "Authentication is not available."
-                ))
+                ), attempt: attempt)
                 return
             }
 
             do {
+                let credentialAdapter = self.credentialAdapter
                 let auth = try await AppleSignInExchange(send: { body in
-                    try await workerClient.send(JWTEndPoint(body: body))
+                    if let credentialAdapter {
+                        guard let attempt else { throw CredentialAuthenticationFailure.accountChanged }
+                        return try await credentialAdapter.exchange(JWTEndPoint(body: body), attempt: attempt)
+                    }
+                    return try await workerClient.send(JWTEndPoint(body: body))
                 }).run(
                     identityToken: jwt,
                     authorizationCode: credential.authorizationCode,
@@ -269,48 +293,57 @@ struct SignedOutView: View {
                     try await completeSignIn(
                         auth,
                         deps: deps,
-                        invalidUserIDCode: "siwa_invalid_user_id"
+                        invalidUserIDCode: "siwa_invalid_user_id",
+                        attempt: attempt
                     )
             } catch {
                 print("Apple sign-in Worker exchange failed: \(error)")
-                viewModel.recordFailure(error)
+                recordFailure(error, attempt: attempt)
             }
 
         case .failure(let error):
             print("Apple authorization failed: \(error)")
-            viewModel.recordFailure(error)
+            recordFailure(error, attempt: attempt)
         }
     }
 
     private func signInWithGoogle() {
         guard !signInInFlight else { return }
         signInInFlight = true
+        let attempt = credentialAdapter?.beginAttempt()
 
         Task { @MainActor in
             defer { signInInFlight = false }
 
-            guard let deps, let workerClient = deps.services?.workerClient else {
-                viewModel.recordFailure(RishiError.network(
+            guard let deps, let workerClient else {
+                recordFailure(RishiError.network(
                     code: "google_sign_in_unavailable",
                     message: "Authentication is not available."
-                ))
+                ), attempt: attempt)
                 return
             }
 
             do {
                 let identityToken = try await googleSignInCoordinator.signIn()
-                let auth = try await workerClient.send(
+                if let credentialAdapter, let attempt, !credentialAdapter.isCurrent(attempt) {
+                    throw CredentialAuthenticationFailure.accountChanged
+                }
+                let auth = try await exchange(
                     GoogleAuthEndpoint(
                         body: GoogleAuthEndpoint.Body(identityToken: identityToken)
-                    )
+                    ), workerClient: workerClient, attempt: attempt
                 )
                 try await completeSignIn(
                     auth,
                     deps: deps,
-                    invalidUserIDCode: "google_invalid_user_id"
+                    invalidUserIDCode: "google_invalid_user_id",
+                    attempt: attempt
                 )
             } catch {
                 guard !GoogleSignInCoordinator.isCancellation(error) else { return }
+                if let credentialAdapter {
+                    guard let attempt, credentialAdapter.mayReportFailure(for: attempt) else { return }
+                }
                 GoogleSignInCoordinator.signOut()
                 print("Google sign-in Worker exchange failed: \(error)")
                 viewModel.recordFailure(error)
@@ -321,7 +354,8 @@ struct SignedOutView: View {
     private func completeSignIn(
         _ auth: JWTEndPoint.ResponseType,
         deps: AppDependencies,
-        invalidUserIDCode: String
+        invalidUserIDCode: String,
+        attempt: CredentialAuthenticationAttempt?
     ) async throws {
         guard let userId = UUID(uuidString: auth.userId) else {
             throw RishiError.network(
@@ -336,98 +370,59 @@ struct SignedOutView: View {
             )
         }
 
-        do {
-            try Keychain.save(auth.accessToken, for: .accessToken)
-            try Keychain.save(auth.refreshToken, for: .refreshToken)
-            try Keychain.save(auth.userId, for: .userId)
-            try await KeychainSessionStore().save(
-                Session(token: auth.accessToken, userId: auth.userId, email: auth.user.email)
-            )
-        } catch {
-            Keychain.delete(.accessToken)
-            Keychain.delete(.refreshToken)
-            Keychain.delete(.userId)
-            try? await KeychainSessionStore().delete()
-            throw error
+        if let credentialAdapter {
+            guard let attempt else { throw CredentialAuthenticationFailure.accountChanged }
+            try await credentialAdapter.completeSignIn(
+                session: Session(token: auth.accessToken, userId: auth.userId, email: auth.user.email),
+                refreshToken: auth.refreshToken, user: auth.user, attempt: attempt, debugOnboarding: false
+            ) {
+                currentUser = auth.user
+                currentUserBox.signIn(user: auth.user)
+                isSignedIn = true
+            }
+            return
         }
 
-        guard await deps.replaceUserId(userId) else {
-            Keychain.delete(.accessToken)
-            Keychain.delete(.refreshToken)
-            Keychain.delete(.userId)
-            try? await KeychainSessionStore().delete()
-            _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
-            throw RishiError.network(
-                code: "spotlight_transition_failed",
-                message: "Unable to switch to the signed-in account. Please try again."
-            )
-        }
-        currentUser = auth.user
-        await deps.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
-            platform: {
-                #if targetEnvironment(macCatalyst)
-                    "macos-catalyst"
-                #else
-                    "ios"
-                #endif
-            }(),
-            appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
-        )
-        // Install the account context before the signed-in view can trigger
-        // pending share redemption. Share redemption is explicit library
-        // transfer and must not race the consent/account setup below.
-        await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
-        isSignedIn = true
-        currentUserBox.signIn(user: auth.user)
-        await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-            reason: .signIn
-        )
+        throw CredentialAuthenticationFailure.accountChanged
     }
 
     private func completeSignIn(
         _ auth: EmailPasswordSignInEndpoint.Response,
-        deps: AppDependencies
+        deps: AppDependencies,
+        attempt: CredentialAuthenticationAttempt?
     ) async throws {
         let userID = DerivedUserID.from(auth.user.id)
-        do {
-            try Keychain.save(auth.token, for: .accessToken)
-            Keychain.delete(.refreshToken)
-            try Keychain.save(auth.user.id, for: .userId)
-            try await KeychainSessionStore().save(
-                Session(token: auth.token, userId: auth.user.id, email: auth.user.email)
-            )
-        } catch {
-            Keychain.delete(.accessToken)
-            Keychain.delete(.refreshToken)
-            Keychain.delete(.userId)
-            try? await KeychainSessionStore().delete()
-            throw error
+        if let credentialAdapter {
+            guard let attempt else { throw CredentialAuthenticationFailure.accountChanged }
+            let user = User(id: userID, email: auth.user.email, name: auth.user.name)
+            try await credentialAdapter.completeSignIn(
+                session: Session(token: auth.token, userId: auth.user.id, email: auth.user.email),
+                refreshToken: nil, user: user, attempt: attempt,
+                debugOnboarding: showsEmailPasswordForm
+            ) {
+                currentUser = user
+                currentUserBox.signIn(user: user)
+                isSignedIn = true
+            }
+            return
         }
+        throw CredentialAuthenticationFailure.accountChanged
+    }
 
-        guard await deps.replaceUserId(userID) else {
-            Keychain.delete(.accessToken)
-            Keychain.delete(.refreshToken)
-            Keychain.delete(.userId)
-            try? await KeychainSessionStore().delete()
-            _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
-            throw RishiError.network(
-                code: "email_sign_in_transition_failed",
-                message: "Unable to switch to the signed-in account. Please try again."
-            )
+    private func recordFailure(_ error: Error, attempt: CredentialAuthenticationAttempt?) {
+        if let credentialAdapter {
+            guard let attempt, credentialAdapter.mayReportFailure(for: attempt) else { return }
         }
+        viewModel.recordFailure(error)
+    }
 
-        let user = User(id: userID, email: auth.user.email, name: auth.user.name)
-        #if DEBUG
-        if RishiE2EConfiguration.isRealAuth {
-            await deps.services?.onboarding.state.setHasCompletedOnboarding(true)
-            await deps.services?.dataUseConsentStore.setCurrentUser(userID.uuidString)
-            await deps.services?.dataUseConsentStore.grant(for: userID.uuidString)
+    private func exchange<E: WorkerEndpoint>(_ endpoint: E, workerClient: WorkerClient,
+                                             attempt: CredentialAuthenticationAttempt?) async throws -> E.Response {
+        if let credentialAdapter {
+            guard let attempt else { throw CredentialAuthenticationFailure.accountChanged }
+            return try await credentialAdapter.exchange(endpoint, attempt: attempt)
         }
-        #endif
-        currentUser = user
-        currentUserBox.signIn(user: user)
-        isSignedIn = true
-        await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
+        return try await workerClient.send(endpoint)
     }
 
     private var appleButton: some View {

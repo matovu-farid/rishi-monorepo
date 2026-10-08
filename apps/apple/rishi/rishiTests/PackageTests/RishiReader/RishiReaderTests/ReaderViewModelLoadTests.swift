@@ -10,9 +10,8 @@ import ReadiumShared
 ///
 /// Confirms that:
 ///   1. The Readium publication load body runs OFF the main thread.
-///   2. The awaited continuation lands off main (so any caller-side
-///      MainActor inheritance from SwiftUI `.task` does not drag the
-///      multi-second ZIP unpack onto the main draw loop).
+///   2. Detached loader work stays separate from the MainActor-owned
+///      view model; the awaiting model resumes on MainActor.
 ///   3. The post-load UI state assignment (publication, title) remains
 ///      observable from main — i.e. we only offload the BODY, not the
 ///      handoff back to the view model.
@@ -23,6 +22,7 @@ import ReadiumShared
 /// records `Thread.isMainThread` at the moment the loader body is
 /// entered.
 @Suite("ReaderViewModel.load isolation", .serialized)
+@MainActor
 struct ReaderViewModelLoadTests {
 
     actor AsyncGate {

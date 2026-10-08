@@ -23,6 +23,7 @@ import ReadiumShared
 // loader and inserts a small sleep so the test can sample mid-flight.
 
 @Suite("ReaderViewModel.loadingState lifecycle", .serialized)
+@MainActor
 struct ReaderViewModelLoadingStateTests {
 
     // MARK: - Helpers

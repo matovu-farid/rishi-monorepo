@@ -1,7 +1,6 @@
 import Foundation
-// `@preconcurrency` downgrades the Readium `Publication` non-Sendable
-// error to a warning, matching ``ReaderViewModel`` which hands this
-// cursor the same already-parsed publication value.
+// Readium's installed content APIs lack complete Sendable annotations.
+// The model owns this cursor and the already-parsed publication it reads.
 @preconcurrency import ReadiumShared
 
 
@@ -23,10 +22,10 @@ import Foundation
 /// `navigateTo` locator the VM applies explicitly. The position mutation is now
 /// a visible contract between the two types rather than a buried coupling.
 ///
-/// `@unchecked Sendable` mirrors ``ReaderViewModel`` — the Readium
-/// `Publication` it holds is not Sendable, but it is only mutated through the
-/// nonisolated Readium APIs after the parse handoff.
-final class EPUBReadAloudCursor: @unchecked Sendable {
+/// Owned by the MainActor reader model. Instance async calls inherit their
+/// caller's isolation; detached helpers read supplied immutable snapshots
+/// without accessing the mutable narration cursor.
+final class EPUBReadAloudCursor {
 
     /// Paragraphs for a read-aloud batch plus the locator (if any) the reader
     /// should navigate to so the visible page follows the narrated chapter.

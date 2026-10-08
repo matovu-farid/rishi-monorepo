@@ -20,6 +20,7 @@ struct OutboundDrainer: Sendable {
     struct DrainResult: Sendable, Equatable {
         var booksUploaded: Int = 0
         var positionsPushed: Int = 0
+        var rejectedPositions: [PositionUploader.RejectedSnapshot] = []
         var highlightsPushed: Int = 0
         var conversationsPushed: Int = 0
         var messagesPushed: Int = 0
@@ -208,7 +209,9 @@ struct OutboundDrainer: Sendable {
                     result.errors.append("account switched during outbound sync")
                     return result
                 }
-                result.positionsPushed = try await positionUploader.pushPending(items: positionsBucket)
+                let positions = try await positionUploader.pushPendingWithOutcomes(items: positionsBucket)
+                result.positionsPushed = positions.acceptedCount
+                result.rejectedPositions = positions.rejected
             } catch {
                 result.errors.append("position.push: \(error)")
                 for item in positionsBucket { await queue.enqueue(item) }

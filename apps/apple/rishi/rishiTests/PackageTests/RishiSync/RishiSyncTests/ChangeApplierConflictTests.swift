@@ -7,8 +7,8 @@ import Foundation
 
 /// SYNC-04 — ChangeApplier conflict resolution policy:
 ///   - Positions: last-write-wins by `updatedAt`. Server's updatedAt is
-///     authoritative; ties favor local (server-newer overwrites only when
-///     strictly newer).
+///     authoritative for clean rows, including equal-time server winners;
+///     pending local mutations remain protected.
 ///   - Highlights: merge by ID. Same ID + diverged content → latest
 ///     `createdAt` wins. Different IDs are kept (no conflict).
 ///   - Book metadata: deleted=true cascades through bookStore.delete and
@@ -306,9 +306,22 @@ struct ChangeApplierConflictTests {
             return pending.token.bookID == bookID && pending.token.ownerID == ownerID ? pending : nil
         }
         func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? { nil }
-        func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
         func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {}
         func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws {}
+
+        // Explicit negative results for operations outside this fixture's controlled scenario.
+        func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
+        func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit? { nil }
+        func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? { nil }
+        func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome { .writeFailed }
+        func discardUnpublishedRegistration(token: BookMaterializationToken) async throws -> Bool { false }
+        func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation? { nil }
+        func retryPendingMaterialization(expected: BookImportRetryExpectation, accountPermit: AccountMutationPermit, newSource: PendingBookMaterialization, verifiedSourceSHA256: String, verifiedSourceByteCount: Int64, verifiedSourceVersion: ManagedFileVersion, retiredAttempt: RetiredBookMaterializationAttempt) async throws -> BookRegistration? { nil }
+        func pendingMaterializationsForDeletionCleanup(ownerID: UserID) async throws -> [PendingBookMaterialization] { [] }
+        func isBookPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool { false }
+        func sampleRepairFingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? { try await fingerprint(bookID: bookID, ownerID: ownerID) }
+        func recordServerAcceptance(permit: BookReadingPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
+        func recordServerAcceptance(accountPermit: AccountMutationPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
     }
 
     // MARK: - Helpers
@@ -333,18 +346,49 @@ struct ChangeApplierConflictTests {
             highlightStore: highlightStore,
             bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata,
-            currentUserId: currentUserId,
-            bookMaterialCleanup: bookMaterialCleanup,
-            bookMaterialCleanupByID: bookMaterialCleanupByID,
-            prepareBookMaterialCleanup: prepareBookMaterialCleanup,
-            withBookDeletionAdmission: withBookDeletionAdmission,
-            restoreBookAfterFailedRetirement: restoreBookAfterFailedRetirement,
-            scheduleBookRecovery: scheduleBookRecovery,
-            retireAndDrainBook: retireAndDrainBook,
-            retireAndDrainBookForGeneration: { bookID, _, generation in
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = currentUserId
+                let fixture_bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = bookMaterialCleanup
+                let fixture_bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)? = bookMaterialCleanupByID
+                let fixture_prepareBookMaterialCleanup: (@Sendable (BookID, UserID) async throws -> (@Sendable () async throws -> Void))? = prepareBookMaterialCleanup
+                let fixture_withBookDeletionAdmission: (@Sendable (UserID, @Sendable (UInt64) async throws -> Void) async throws -> Void)? = withBookDeletionAdmission
+                let fixture_restoreBookAfterFailedRetirement: (@Sendable (Book, UInt64?) async -> Bool)? = restoreBookAfterFailedRetirement
+                let fixture_scheduleBookRecovery: (@Sendable (UserID, UInt64) async -> Void)? = scheduleBookRecovery
+                let fixture_retireAndDrainBook: (@Sendable (BookID) async throws -> Void)? = retireAndDrainBook
+                let fixture_retireAndDrainBookForGeneration: (@Sendable (BookID, UserID, UInt64) async throws -> Void)? = { bookID, _, generation in
                 try await retireAndDrainBook?(bookID)
                 if withBookDeletionAdmission != nil { #expect(generation == 41) }
             }
+
+                integration.deletionAdmissionOperation = { owner, operation in
+                    if let owner, let callback = fixture_withBookDeletionAdmission {
+                        try await callback(owner) { generation in try await operation(generation) }
+                    } else { try await operation(nil) }
+                }
+                integration.retirementOperation = { id, owner, generation in
+                    if let owner, let generation, let callback = fixture_retireAndDrainBookForGeneration {
+                        try await callback(id, owner, generation)
+                        return nil
+                    }
+                    try await fixture_retireAndDrainBook?(id)
+                    return nil
+                }
+                integration.cleanupOperation = { id, owner, book in
+                    if let owner, let callback = fixture_prepareBookMaterialCleanup { return try await callback(id, owner) }
+                    if let book, let callback = fixture_bookMaterialCleanup { return { try await callback(book) } }
+                    if let callback = fixture_bookMaterialCleanupByID { return { try await callback(id) } }
+                    return nil
+                }
+                integration.restoreOperation = { book, generation in
+                    if let callback = fixture_restoreBookAfterFailedRetirement { return await callback(book, generation) }
+                    return false
+                }
+                integration.recoveryOperation = { owner, generation in
+                    await fixture_scheduleBookRecovery?(owner, generation)
+                }
+                return integration
+            }()
         )
     }
 
@@ -710,9 +754,11 @@ struct ChangeApplierConflictTests {
             highlightStore: StubHighlightStore(),
             bookmarkStore: StubBookmarkStore(),
             metadataStore: StubMetadata(),
-            currentUserId: { ownerID },
-            bookMaterializer: { _, _, _ in throw Issue269TestFailure.unexpectedMaterialization },
-            managedFingerprintLookup: { _ in
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { ownerID }
+                let fixture_bookMaterializer: (@Sendable (Book, String?, InboundBookFileMetadata?) async throws -> VerifiedDownloadedBook)? = { _, _, _ in throw Issue269TestFailure.unexpectedMaterialization }
+                let fixture_managedFingerprintLookup: (@Sendable (Book) async -> BookFileFingerprint?)? = { _ in
                 BookFileFingerprint(
                     bookID: bookID,
                     ownerID: ownerID,
@@ -720,6 +766,16 @@ struct ChangeApplierConflictTests {
                     version: ManagedFileVersion(byteCount: 12, modificationDate: Date(), fileIdentifier: "local", materializationRevision: UUID())
                 )
             }
+
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializer { return try await callback(book, key, remote) }
+                    return nil
+                }
+                integration.managedFingerprintOperation = { book in
+                    await fixture_managedFingerprintLookup?(book)
+                }
+                return integration
+            }()
         )
         let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "remote-key", fileHash: String(repeating: "b", count: 64), fileSize: 13)
         let change = SyncChange(kind: SyncEntityKind.book.rawValue, id: bookID, payload: payload, updatedAt: Date(), deleted: false)
@@ -751,8 +807,10 @@ struct ChangeApplierConflictTests {
             highlightStore: StubHighlightStore(),
             bookmarkStore: StubBookmarkStore(),
             metadataStore: StubMetadata(),
-            currentUserId: { ownerID },
-            managedFingerprintLookup: { _ in
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { ownerID }
+                let fixture_managedFingerprintLookup: (@Sendable (Book) async -> BookFileFingerprint?)? = { _ in
                 BookFileFingerprint(
                     bookID: bookID,
                     ownerID: ownerID,
@@ -760,6 +818,12 @@ struct ChangeApplierConflictTests {
                     version: ManagedFileVersion(byteCount: 9, modificationDate: Date(), fileIdentifier: "local", materializationRevision: UUID())
                 )
             }
+
+                integration.managedFingerprintOperation = { book in
+                    await fixture_managedFingerprintLookup?(book)
+                }
+                return integration
+            }()
         )
         let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: nil, fileHash: digest, fileSize: 9)
         let change = SyncChange(kind: SyncEntityKind.book.rawValue, id: bookID, payload: payload, updatedAt: Date(), deleted: false)
@@ -1223,17 +1287,29 @@ struct ChangeApplierConflictTests {
             highlightStore: StubHighlightStore(),
             bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata,
-            currentUserId: { ownerID },
-            bookMaterializer: { _, _, remoteFile in
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { ownerID }
+                let fixture_bookMaterializer: (@Sendable (Book, String?, InboundBookFileMetadata?) async throws -> VerifiedDownloadedBook)? = { _, _, remoteFile in
                 guard remoteFile?.sha256 == digest, remoteFile?.byteCount == 8 else {
                     throw SwiftDataTestFailure.invalidRemoteMetadata
                 }
                 return verified
-            },
-            bookFingerprintPersister: { _, candidate, _ in
+            }
+                let fixture_bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint, UInt64?) async -> Bool)? = { _, candidate, _ in
                 guard candidate == fingerprint else { return false }
                 return await persistence.persist()
             }
+
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializer { return try await callback(book, key, remote) }
+                    return nil
+                }
+                integration.fingerprintOperation = { fingerprint, book, generation in
+                    await fixture_bookFingerprintPersister?(book, fingerprint, generation) ?? false
+                }
+                return integration
+            }()
         )
 
         let first = await applier.apply([change], expectedUserId: ownerID)
@@ -1281,20 +1357,40 @@ struct ChangeApplierConflictTests {
             highlightStore: StubHighlightStore(),
             bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata,
-            currentUserId: { ownerID },
-            bookMaterializer: { _, _, _ in
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { ownerID }
+                let fixture_bookMaterializer: (@Sendable (Book, String?, InboundBookFileMetadata?) async throws -> VerifiedDownloadedBook)? = { _, _, _ in
                 await state.advanceGeneration()
                 return VerifiedDownloadedBook(book: managed, fingerprint: fingerprint)
-            },
-            bookFingerprintPersister: { _, candidate, capturedGeneration in
+            }
+                let fixture_bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint, UInt64?) async -> Bool)? = { _, candidate, capturedGeneration in
                 candidate == fingerprint && capturedGeneration == 1
-            },
-            bookAccountPermitLookup: { await state.permit(ownerID: ownerID) },
-            newBookServerAcceptancePersister: { permit, candidate, _ in
+            }
+                let fixture_bookAccountPermitLookup: (@Sendable () async -> AccountMutationPermit?)? = { await state.permit(ownerID: ownerID) }
+                let fixture_newBookServerAcceptancePersister: (@Sendable (AccountMutationPermit, BookFileFingerprint, BookServerAcceptance) async -> Bool)? = { permit, candidate, _ in
                 guard candidate == fingerprint else { return false }
                 let currentGeneration = await state.currentGeneration()
                 return permit.accountGeneration == currentGeneration
             }
+
+                integration.capturePermitOperation = { owner in
+                    guard let callback = fixture_bookAccountPermitLookup else { return nil }
+                    guard let permit = await callback(), permit.ownerID == owner else { throw BookSyncAccountChanged() }
+                    return permit
+                }
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializer { return try await callback(book, key, remote) }
+                    return nil
+                }
+                integration.fingerprintOperation = { fingerprint, book, generation in
+                    await fixture_bookFingerprintPersister?(book, fingerprint, generation) ?? false
+                }
+                integration.newAcceptanceOperation = { acceptance, permit, fingerprint in
+                    await fixture_newBookServerAcceptancePersister?(permit, fingerprint, acceptance) ?? true
+                }
+                return integration
+            }()
         )
 
         let result = await applier.apply([change], expectedUserId: ownerID)
@@ -1320,25 +1416,69 @@ struct ChangeApplierConflictTests {
         if existing { await books.seed(local) }
         let positions = StubPositionStore()
         let metadata = StubMetadata()
-        let applier = ChangeApplier(bookStore: books, positionStore: positions,
-            highlightStore: StubHighlightStore(), bookmarkStore: StubBookmarkStore(), metadataStore: metadata,
-            currentUserId: { owner },
-            bookMaterializerWithAuthority: { _, _, _, captured in
+        let applier = ChangeApplier(
+            bookStore: books,
+            positionStore: positions,
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { owner }
+                let fixture_bookMaterializerWithAuthority: (@Sendable (Book, String?, InboundBookFileMetadata?, AccountMutationPermit) async throws -> VerifiedDownloadedBook)? = { _, _, _, captured in
                 #expect(captured.ownerID == owner)
                 #expect(captured.accountGeneration == 1)
                 await stages.record("response-g1")
                 await account.advanceGeneration()
                 return VerifiedDownloadedBook(book: remote, fingerprint: fingerprint)
-            },
-            isCurrentAccountPermit: { captured in
+            }
+                let fixture_isCurrentAccountPermit: (@Sendable (AccountMutationPermit) async -> Bool)? = { captured in
                 let current = await account.currentGeneration()
                 return captured.ownerID == owner && captured.accountGeneration == current
-            },
-            admitAccountOperation: { _ in await stages.record("admission"); return nil },
-            bookFingerprintPersister: { _, _, _ in await stages.record("fingerprint"); return true },
-            activateBookWithAuthority: { _, _ in await stages.record("activation") },
-            bookAccountPermitLookup: { await account.permit(ownerID: owner) },
-            newBookServerAcceptancePersister: { _, _, _ in await stages.record("acceptance"); return true }
+            }
+                let fixture_admitAccountOperation: (@Sendable (AccountMutationPermit) async -> BookImportOperationLease?)? = { _ in await stages.record("admission"); return nil }
+                let fixture_bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint, UInt64?) async -> Bool)? = { _, _, _ in await stages.record("fingerprint"); return true }
+                let fixture_activateBookWithAuthority: (@Sendable (BookID, AccountMutationPermit) async -> Void)? = { _, _ in await stages.record("activation") }
+                let fixture_bookAccountPermitLookup: (@Sendable () async -> AccountMutationPermit?)? = { await account.permit(ownerID: owner) }
+                let fixture_newBookServerAcceptancePersister: (@Sendable (AccountMutationPermit, BookFileFingerprint, BookServerAcceptance) async -> Bool)? = { _, _, _ in await stages.record("acceptance"); return true }
+
+                integration.capturePermitOperation = { owner in
+                    guard let callback = fixture_bookAccountPermitLookup else { return nil }
+                    guard let permit = await callback(), permit.ownerID == owner else { throw BookSyncAccountChanged() }
+                    return permit
+                }
+                integration.validatePermitOperation = { permit in
+                    if let callback = fixture_isCurrentAccountPermit {
+                        guard let permit, await callback(permit) else { throw BookSyncAccountChanged() }
+                    }
+                }
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializerWithAuthority {
+                        guard let permit else { throw BookSyncAccountChanged() }
+                        return try await callback(book, key, remote, permit)
+                    }
+                    return nil
+                }
+                integration.admitCommitOperation = { permit in
+                    guard let callback = fixture_admitAccountOperation else { return nil }
+                    guard let permit, let lease = await callback(permit) else { throw BookSyncAccountChanged() }
+                    return lease
+                }
+                integration.fingerprintOperation = { fingerprint, book, generation in
+                    await fixture_bookFingerprintPersister?(book, fingerprint, generation) ?? false
+                }
+                integration.activationOperation = { id, permit in
+                    if let callback = fixture_activateBookWithAuthority {
+                        guard let permit else { return }
+                        await callback(id, permit)
+                        return
+                    }
+                }
+                integration.newAcceptanceOperation = { acceptance, permit, fingerprint in
+                    await fixture_newBookServerAcceptancePersister?(permit, fingerprint, acceptance) ?? true
+                }
+                return integration
+            }()
         )
         let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/remote", position: Position(bookId: remote.id, locator: "epub-v1:remote", percentComplete: 0.8), fileHash: digest, fileSize: 8)
         let result = await applier.apply([SyncChange(kind: SyncEntityKind.book.rawValue, id: remote.id, operationId: UUID(), payload: payload, updatedAt: Date(), deleted: false)], expectedUserId: owner)
@@ -1364,24 +1504,63 @@ struct ChangeApplierConflictTests {
         let books = StubBookStore()
         let positions = StubPositionStore()
         let metadata = StubMetadata()
-        let applier = ChangeApplier(bookStore: books, positionStore: positions,
-            highlightStore: StubHighlightStore(), bookmarkStore: StubBookmarkStore(), metadataStore: metadata,
-            currentUserId: { owner },
-            bookMaterializerWithAuthority: { _, _, _, captured in
+        let applier = ChangeApplier(
+            bookStore: books,
+            positionStore: positions,
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                integration.userIdProvider = { owner }
+                let fixture_bookMaterializerWithAuthority: (@Sendable (Book, String?, InboundBookFileMetadata?, AccountMutationPermit) async throws -> VerifiedDownloadedBook)? = { _, _, _, captured in
                 #expect(captured.accountGeneration == 1)
                 return VerifiedDownloadedBook(book: remote, fingerprint: fingerprint)
-            },
-            isCurrentAccountPermit: { captured in let current = await account.currentGeneration()
-                return captured.ownerID == owner && captured.accountGeneration == current },
-            bookFingerprintPersister: { _, _, generation in
+            }
+                let fixture_isCurrentAccountPermit: (@Sendable (AccountMutationPermit) async -> Bool)? = { captured in let current = await account.currentGeneration()
+                return captured.ownerID == owner && captured.accountGeneration == current }
+                let fixture_bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint, UInt64?) async -> Bool)? = { _, _, generation in
                 #expect(generation == 1)
                 await stages.record("entered-fingerprint-g1")
                 await account.advanceGeneration()
                 return true
-            },
-            activateBookWithAuthority: { _, _ in await stages.record("activation") },
-            bookAccountPermitLookup: { await account.permit(ownerID: owner) },
-            newBookServerAcceptancePersister: { _, _, _ in await stages.record("acceptance"); return true }
+            }
+                let fixture_activateBookWithAuthority: (@Sendable (BookID, AccountMutationPermit) async -> Void)? = { _, _ in await stages.record("activation") }
+                let fixture_bookAccountPermitLookup: (@Sendable () async -> AccountMutationPermit?)? = { await account.permit(ownerID: owner) }
+                let fixture_newBookServerAcceptancePersister: (@Sendable (AccountMutationPermit, BookFileFingerprint, BookServerAcceptance) async -> Bool)? = { _, _, _ in await stages.record("acceptance"); return true }
+
+                integration.capturePermitOperation = { owner in
+                    guard let callback = fixture_bookAccountPermitLookup else { return nil }
+                    guard let permit = await callback(), permit.ownerID == owner else { throw BookSyncAccountChanged() }
+                    return permit
+                }
+                integration.validatePermitOperation = { permit in
+                    if let callback = fixture_isCurrentAccountPermit {
+                        guard let permit, await callback(permit) else { throw BookSyncAccountChanged() }
+                    }
+                }
+                integration.materializeOperation = { book, key, remote, permit in
+                    if let callback = fixture_bookMaterializerWithAuthority {
+                        guard let permit else { throw BookSyncAccountChanged() }
+                        return try await callback(book, key, remote, permit)
+                    }
+                    return nil
+                }
+                integration.fingerprintOperation = { fingerprint, book, generation in
+                    await fixture_bookFingerprintPersister?(book, fingerprint, generation) ?? false
+                }
+                integration.activationOperation = { id, permit in
+                    if let callback = fixture_activateBookWithAuthority {
+                        guard let permit else { return }
+                        await callback(id, permit)
+                        return
+                    }
+                }
+                integration.newAcceptanceOperation = { acceptance, permit, fingerprint in
+                    await fixture_newBookServerAcceptancePersister?(permit, fingerprint, acceptance) ?? true
+                }
+                return integration
+            }()
         )
         let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/entered", position: Position(bookId: remote.id, locator: "epub-v1:entered", percentComplete: 0.8), fileHash: digest, fileSize: 8)
         let result = await applier.apply([SyncChange(kind: SyncEntityKind.book.rawValue, id: remote.id, operationId: UUID(), payload: payload, updatedAt: Date(), deleted: false)], expectedUserId: owner)
@@ -1497,4 +1676,53 @@ struct ChangeApplierConflictTests {
         #expect(cleaned.count == 2)
         #expect(Set(cleaned.map(\.1)) == Set([.conversation, .message]))
     }
+    @Test("Clean equal-time server winner replaces effective position UUID")
+    func cleanEqualTimeServerWins() async throws {
+        let positions = StubPositionStore(); let metadata = StubMetadata()
+        let local = Position(bookId: UUID(), locator: "local", updatedAt: Date(timeIntervalSince1970: 123))
+        let remote = Position(bookId: local.bookId, locator: "server", updatedAt: local.updatedAt)
+        await positions.seed(local)
+        let applier = makeApplier(bookStore: StubBookStore(), positionStore: positions, highlightStore: StubHighlightStore(), metadata: metadata)
+        let result = await applier.apply([try positionChange(remote, at: remote.updatedAt)])
+        #expect(result.applied == 1)
+        let row = try #require(try await positions.position(for: local.bookId))
+        #expect(row.id == local.id)
+        #expect(row.locator == "server")
+        #expect(await positions.snapshot().count == 1)
+    }
+
+    @Test("A durable unpublished position cannot be replaced by inbound projection")
+    func protectedPositionWins() async throws {
+        let positions = StubPositionStore(); let metadata = StubMetadata()
+        let local = Position(bookId: UUID(), locator: "durable", updatedAt: Date(timeIntervalSince1970: 123))
+        let remote = Position(bookId: local.bookId, locator: "server", updatedAt: local.updatedAt.addingTimeInterval(1))
+        await positions.seed(local)
+        await metadata.protectPositionPublication(local.bookId)
+        let applier = makeApplier(bookStore: StubBookStore(), positionStore: positions, highlightStore: StubHighlightStore(), metadata: metadata)
+        let result = await applier.apply([try positionChange(remote, at: remote.updatedAt)])
+        #expect(result.conflicts == 1)
+        #expect(try await positions.position(for: local.bookId) == local)
+        #expect(await metadata.cleaned().isEmpty)
+        await metadata.releasePositionPublication(local.bookId)
+    }
+
+    @Test("Embedded clean equal-time position replaces effective UUID")
+    func embeddedEqualTimeWinner() async throws {
+        let owner = UUID(); let books = StubBookStore(); let positions = StubPositionStore(); let metadata = StubMetadata()
+        let book = Book(userId: owner, title: "Existing", formatType: .epub, fileURL: "Books/existing.epub")
+        await books.seed(book)
+        let local = Position(bookId: book.id, locator: "local", updatedAt: Date(timeIntervalSince1970: 123))
+        let remote = Position(bookId: book.id, locator: "server", updatedAt: local.updatedAt)
+        await positions.seed(local)
+        let payload = try SyncPayloadCodec.encodeBook(book, r2Key: nil, position: remote)
+        let applier = makeApplier(bookStore: books, positionStore: positions, highlightStore: StubHighlightStore(), metadata: metadata, currentUserId: { owner })
+        let result = await applier.apply([.init(kind: "book", id: book.id, payload: payload, updatedAt: local.updatedAt, deleted: false)])
+        #expect(result.applied == 1)
+        #expect(result.errors.isEmpty)
+        let row = try #require(try await positions.position(for: book.id))
+        #expect(row.id == local.id)
+        #expect(row.locator == remote.locator)
+        #expect(await positions.snapshot().count == 1)
+    }
+
 }

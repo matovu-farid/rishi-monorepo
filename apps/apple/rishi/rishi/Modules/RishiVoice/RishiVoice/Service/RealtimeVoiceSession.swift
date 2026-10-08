@@ -57,6 +57,28 @@ public actor RealtimeVoiceSession {
     public typealias ChapterIndexBookContextResponderFactory = @Sendable (UUID, ChapterIndexCoordinator?, String?) -> BookContextResponder
     public typealias TerminalFailureHandler = @Sendable (VoiceSessionFailureReason) async -> Void
 
+    typealias ScopedControlSocketFactory = @Sendable (String, CredentialRequestContext, @escaping @Sendable (ControlTerminalSignal) async -> Void) throws -> any CredentialBoundControlSocketConnecting
+    private enum Authentication: Sendable {
+        case legacy
+        case scoped(SessionCredentialAuthority, CredentialRequestContext, VoiceSessionAPIClient, ScopedControlSocketFactory)
+    }
+    private let authentication: Authentication
+    private var audioModeClaimed = false
+    private var pendingAudioClaim: (id: UUID, task: Task<Bool, Never>)?
+    private var creationReceipt: VoiceSessionCreationReceipt?
+    var serverCreationReceipt: VoiceSessionCreationReceipt? { creationReceipt }
+    nonisolated var credentialLease: CredentialLease? {
+        guard case .scoped(_, .normal(let lease), _, _) = authentication else { return nil }
+        return lease
+    }
+
+    nonisolated func credentialsAreCurrent() -> Bool {
+        switch authentication {
+        case .legacy: return true
+        case .scoped(let authority, let context, _, _): return (try? authority.snapshot(for: context)) != nil
+        }
+    }
+
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let coordinator: AudioSessionCoordinator
     private let keyFetcher: any EphemeralKeyFetching
@@ -157,6 +179,122 @@ public actor RealtimeVoiceSession {
         disconnectConfirmations: Int = 3,
         confirmationInterval: Duration = .milliseconds(150)
     ) {
+        self.init(
+            coordinator: coordinator,
+            keyFetcher: keyFetcher,
+            client: client,
+            state: state,
+            dataUseConsentProvider: dataUseConsentProvider,
+            sessionCoordinator: sessionCoordinator,
+            controlSocketFactory: controlSocketFactory,
+            onTerminalFailure: onTerminalFailure,
+            responderFactory: responderFactory,
+            chapterIndexResponderFactory: chapterIndexResponderFactory,
+            chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+            chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
+            currentPageProvider: currentPageProvider,
+            readerSessionIdentity: readerSessionIdentity,
+            embedderPrewarm: embedderPrewarm,
+            backoff: backoff,
+            maxReconnects: maxReconnects,
+            disconnectConfirmations: disconnectConfirmations,
+            confirmationInterval: confirmationInterval,
+            authentication: .legacy
+        )
+    }
+
+    init(
+        coordinator: AudioSessionCoordinator,
+        keyFetcher: any EphemeralKeyFetching,
+        client: any RealtimeClientAPI,
+        state: VoiceSessionState,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+        credentialAuthority: SessionCredentialAuthority,
+        credentialContext: CredentialRequestContext,
+        sessionAPI: VoiceSessionAPIClient,
+        audioModePreflighted: Bool,
+        scopedControlSocketFactory: @escaping ScopedControlSocketFactory,
+        onTerminalFailure: TerminalFailureHandler? = nil,
+        responderFactory: BookContextResponderFactory? = nil,
+        chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (UUID) async -> String?)? = nil,
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        readerSessionIdentity: ReaderSessionIdentity? = nil,
+        embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        backoff: @escaping @Sendable (Int) -> Duration = { attempt in
+            // Spike B pattern: 1s, 2s, 4s exponential backoff.
+            switch attempt {
+            case 1:  return .seconds(1)
+            case 2:  return .seconds(2)
+            default: return .seconds(4)
+            }
+        },
+        maxReconnects: Int = 3,
+        disconnectConfirmations: Int = 3,
+        confirmationInterval: Duration = .milliseconds(150)
+    ) throws {
+        guard case .normal = credentialContext,
+              sessionAPI.isBound(to: credentialAuthority, context: credentialContext) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        self.init(
+            coordinator: coordinator,
+            keyFetcher: keyFetcher,
+            client: client,
+            state: state,
+            dataUseConsentProvider: dataUseConsentProvider,
+            sessionCoordinator: sessionAPI,
+            controlSocketFactory: nil,
+            onTerminalFailure: onTerminalFailure,
+            responderFactory: responderFactory,
+            chapterIndexResponderFactory: chapterIndexResponderFactory,
+            chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+            chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
+            currentPageProvider: currentPageProvider,
+            readerSessionIdentity: readerSessionIdentity,
+            embedderPrewarm: embedderPrewarm,
+            backoff: backoff,
+            maxReconnects: maxReconnects,
+            disconnectConfirmations: disconnectConfirmations,
+            confirmationInterval: confirmationInterval,
+            authentication: .scoped(credentialAuthority, credentialContext, sessionAPI, scopedControlSocketFactory),
+            audioModeClaimed: audioModePreflighted
+        )
+    }
+
+    private init(
+        coordinator: AudioSessionCoordinator,
+        keyFetcher: any EphemeralKeyFetching,
+        client: any RealtimeClientAPI,
+        state: VoiceSessionState,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+        sessionCoordinator: (any VoiceSessionCoordinating)? = nil,
+        controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
+        onTerminalFailure: TerminalFailureHandler? = nil,
+        responderFactory: BookContextResponderFactory? = nil,
+        chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (UUID) async -> String?)? = nil,
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        readerSessionIdentity: ReaderSessionIdentity? = nil,
+        embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        backoff: @escaping @Sendable (Int) -> Duration = { attempt in
+            // Spike B pattern: 1s, 2s, 4s exponential backoff.
+            switch attempt {
+            case 1:  return .seconds(1)
+            case 2:  return .seconds(2)
+            default: return .seconds(4)
+            }
+        },
+        maxReconnects: Int = 3,
+        disconnectConfirmations: Int = 3,
+        confirmationInterval: Duration = .milliseconds(150),
+        authentication: Authentication,
+        audioModeClaimed: Bool = false
+    ) {
+        self.authentication = authentication
+        self.audioModeClaimed = audioModeClaimed
         self.dataUseConsentProvider = dataUseConsentProvider
         self.coordinator = coordinator
         self.keyFetcher = keyFetcher
@@ -178,6 +316,40 @@ public actor RealtimeVoiceSession {
         self.confirmationInterval = confirmationInterval
     }
 
+    /// A claim can suspend inside the coordinator's outgoing-owner preemption.
+    /// End joins that one flight; its result is finalized only once, before release.
+    private func claimVoiceAudioMode() async -> Bool {
+        if case .legacy = authentication { return await coordinator.requestVoiceActiveMode() }
+        guard !isEnding, credentialsAreCurrent() else { return false }
+        let id = UUID()
+        let task = Task { [coordinator] in await coordinator.requestVoiceActiveMode() }
+        pendingAudioClaim = (id, task)
+        let claimed = await task.value
+        finishAudioClaim(id: id, claimed: claimed)
+        return claimed
+    }
+
+    private func finishAudioClaim(id: UUID, claimed: Bool) {
+        guard pendingAudioClaim?.id == id else { return }
+        pendingAudioClaim = nil
+        audioModeClaimed = claimed
+    }
+
+    private func releaseVoiceAudioMode() async {
+        if case .legacy = authentication {
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
+        if let claim = pendingAudioClaim {
+            let claimed = await claim.task.value
+            finishAudioClaim(id: claim.id, claimed: claimed)
+        }
+        guard audioModeClaimed else { return }
+        // A late create/catch cannot release a subsequent account's voice mode.
+        audioModeClaimed = false
+        await coordinator.releaseActiveMode(.voice)
+    }
+
     // MARK: - Public lifecycle
 
     /// Start a voice session. Branches into `startLegacyFlow` or
@@ -194,8 +366,14 @@ public actor RealtimeVoiceSession {
         preflighted: Bool = false,
         prewarmed: Bool = false
     ) async -> RealtimeVoiceSessionStartResult {
-        guard !Task.isCancelled else { return .cancelled }
-        await MainActor.run { state.beginLifecycle(lifecycleToken) }
+        if case .scoped = authentication {
+            guard !isEnding, !preflighted || audioModeClaimed else { return .cancelled }
+            guard !Task.isCancelled, credentialsAreCurrent() else {
+                await releaseVoiceAudioMode()
+                return .cancelled
+            }
+        } else if Task.isCancelled { return .cancelled }
+        await MainActor.run { if credentialsAreCurrent() { state.beginLifecycle(lifecycleToken) } }
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
             guard !isEnding else { return .cancelled }
             await fail(reason: .unknown("Data use consent required"))
@@ -204,7 +382,7 @@ public actor RealtimeVoiceSession {
         await update(.requestingMic)
         guard !isEnding else {
             if preflighted {
-                await coordinator.releaseActiveMode(.voice)
+                await releaseVoiceAudioMode()
             }
             return .cancelled
         }
@@ -215,17 +393,17 @@ public actor RealtimeVoiceSession {
         // that handler during connect/register and skip POST …/end on preempt.
         // Package tests that need preempt must register explicitly before start.
         if !preflighted {
-            guard await coordinator.requestVoiceActiveMode() else {
+            guard await claimVoiceAudioMode() else {
                 await fail(reason: .audioSession)
                 return .failed(.audioSession)
             }
         }
         guard !isEnding else {
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return .cancelled
         }
         guard !Task.isCancelled else {
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return .cancelled
         }
 
@@ -298,7 +476,7 @@ public actor RealtimeVoiceSession {
     ) async {
         guard !Task.isCancelled, !isEnding else {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
         await update(.fetchingKey)
@@ -308,7 +486,7 @@ public actor RealtimeVoiceSession {
             key = try await keyFetcher.fetch(language: language, bookContext: snapshot)
         } catch {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             guard !isEnding else { return }
             let failure = KeyFetchFailure.classify(error)
             await fail(reason: .keyFetch(failure), message: Self.keyFetchMessage(failure))
@@ -316,12 +494,12 @@ public actor RealtimeVoiceSession {
         }
         guard !isEnding else {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
         guard !Task.isCancelled else {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
 
@@ -335,7 +513,7 @@ public actor RealtimeVoiceSession {
             )
         } catch {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
             guard !isEnding else { return }
             await fail(reason: .connect)
@@ -345,14 +523,14 @@ public actor RealtimeVoiceSession {
         guard !Task.isCancelled else {
             prewarmTask?.cancel()
             await client.disconnect()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
 
         guard !isEnding else {
             prewarmTask?.cancel()
             await client.disconnect()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
         guard await publishLiveIfActive() else { return }
@@ -375,20 +553,28 @@ public actor RealtimeVoiceSession {
         bookId: UUID?,
         prewarmTask: Task<Void, Never>?
     ) async {
-        guard !Task.isCancelled, !isEnding else {
+        guard !Task.isCancelled, !isEnding, credentialsAreCurrent() else {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
         await update(.creatingSession)
 
         let started: StartedVoiceSession
         do {
-            started = try await sessionCoordinator.startSession(language: language, bookContext: snapshot)
+            switch authentication {
+            case .legacy:
+                started = try await sessionCoordinator.startSession(language: language, bookContext: snapshot)
+            case .scoped(_, _, let api, _):
+                let receipt = try await api.startSessionWithReceipt(language: language, bookContext: snapshot)
+                // Keep the actual transmitted-bearer capability before any lifetime check.
+                creationReceipt = receipt
+                started = receipt.started
+            }
         } catch {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
-            guard !isEnding else { return }
+            await releaseVoiceAudioMode()
+            guard !isEnding, credentialsAreCurrent() else { return }
             let failure = VoiceSessionStartFailure.classify(error)
             await fail(reason: .sessionStart(failure), message: Self.sessionStartMessage(failure))
             return
@@ -398,10 +584,10 @@ public actor RealtimeVoiceSession {
         // close the pending-registration row on the Worker.
         activeVoiceSession = started
         lastRishiSessionId = started.rishiSessionId
-        guard !isEnding else {
+        guard !isEnding, credentialsAreCurrent() else {
             do {
-                try await sessionCoordinator.endSession(rishiSessionId: started.rishiSessionId)
-                lastRishiSessionId = nil
+                try await endCreatedSession(id: started.rishiSessionId, using: sessionCoordinator)
+                acknowledgeServerEnd()
             } catch {
                 Log.event("voice.session.cancelled_start_end.failed", level: .warning, data: [
                     "rishiSessionId": started.rishiSessionId,
@@ -409,18 +595,24 @@ public actor RealtimeVoiceSession {
                 ])
             }
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             return
         }
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, credentialsAreCurrent() else {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             return
         }
         Log.event("voice.session.realtime_model", level: .info, data: ["present": "true"])
 
         await update(.connecting)
+        guard !isEnding, !Task.isCancelled, credentialsAreCurrent() else {
+            prewarmTask?.cancel()
+            await releaseVoiceAudioMode()
+            activeVoiceSession = nil
+            return
+        }
         do {
             try await client.connect(
                 ephemeralKey: started.clientSecret,
@@ -430,25 +622,32 @@ public actor RealtimeVoiceSession {
             )
         } catch {
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
-            guard !isEnding else { return }
+            guard !isEnding, credentialsAreCurrent() else { return }
             await fail(reason: .connect)
             return
         }
-        await client.setMicCaptureEnabled(true)
-        guard !Task.isCancelled else {
+        guard !isEnding, !Task.isCancelled, credentialsAreCurrent() else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             return
         }
-        guard !isEnding else {
+        await client.setMicCaptureEnabled(true)
+        guard !Task.isCancelled, credentialsAreCurrent() else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
+            activeVoiceSession = nil
+            return
+        }
+        guard !isEnding, credentialsAreCurrent() else {
+            await client.disconnect()
+            prewarmTask?.cancel()
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             return
         }
@@ -456,9 +655,9 @@ public actor RealtimeVoiceSession {
         guard let callId = await client.providerCallId else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
-            guard !isEnding else { return }
+            guard !isEnding, credentialsAreCurrent() else { return }
             await fail(
                 reason: .callRegistration(.missingCallId),
                 message: Self.registrationMessage(.missingCallId)
@@ -466,16 +665,23 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        guard !isEnding else {
+        guard !isEnding, credentialsAreCurrent() else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             return
         }
         guard await publishLiveIfActive() else { return }
+        guard openControlSocket(rishiSessionId: started.rishiSessionId) else {
+            await client.disconnect()
+            prewarmTask?.cancel()
+            await releaseVoiceAudioMode()
+            activeVoiceSession = nil
+            await fail(reason: .connect)
+            return
+        }
         spawnResponderIfNeeded(bookId: bookId)
-        openControlSocket(rishiSessionId: started.rishiSessionId)
 
         // The provider transport is ready at this point. Registration is
         // still mandatory, but it is bookkeeping on a separate HTTP request;
@@ -521,14 +727,14 @@ public actor RealtimeVoiceSession {
             guard !isEnding else { return }
 
             isEnding = true
-            await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
+            await MainActor.run { if credentialsAreCurrent() { state.beginEndingLifecycle(lifecycleToken) } }
             await reconnect?.cancel()
             controlMessageTask?.cancel(); controlMessageTask = nil
             responderTask?.cancel(); responderTask = nil
             prewarmTask?.cancel()
             await client.disconnect()
             await controlSocket?.disconnect()
-            await coordinator.releaseActiveMode(.voice)
+            await releaseVoiceAudioMode()
             activeVoiceSession = nil
             controlSocket = nil
 
@@ -542,8 +748,8 @@ public actor RealtimeVoiceSession {
                 await onTerminalFailure(.callRegistration(failure))
             } else {
                 do {
-                    try await sessionCoordinator.endSession(rishiSessionId: started.rishiSessionId)
-                    lastRishiSessionId = nil
+                    try await endCreatedSession(id: started.rishiSessionId, using: sessionCoordinator)
+                    acknowledgeServerEnd()
                 } catch {
                     Log.event("voice.session.register_call_end.failed", level: .warning, data: [
                         "rishiSessionId": started.rishiSessionId,
@@ -566,7 +772,7 @@ public actor RealtimeVoiceSession {
         // the server end if that owner failed before completing it.
         guard !isEnding else { return lastRishiSessionId }
         isEnding = true
-        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
+        await MainActor.run { if credentialsAreCurrent() { state.beginEndingLifecycle(lifecycleToken) } }
         let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
 
         await update(.ending)
@@ -581,7 +787,7 @@ public actor RealtimeVoiceSession {
         await client.cancelCurrentResponse()
         await client.disconnect()
         await controlSocket?.disconnect()
-        await coordinator.releaseActiveMode(.voice)
+        await releaseVoiceAudioMode()
         await update(.ended)
         Log.event("voice.session.ended", level: .info)
         currentBookContext = nil
@@ -603,7 +809,7 @@ public actor RealtimeVoiceSession {
 
     /// Show the reader chrome again after ``parkForBackground()``.
     public func resumeFromBackground() async {
-        guard isParked else { return }
+        guard isParked, credentialsAreCurrent(), !isEnding else { return }
         isParked = false
         await client.setMicCaptureEnabled(true)
         let connection = await client.currentStatus()
@@ -636,6 +842,18 @@ public actor RealtimeVoiceSession {
     /// Clears a retained ledger id after the server confirms hangup.
     public func acknowledgeServerEnd() {
         lastRishiSessionId = nil
+        creationReceipt = nil
+    }
+
+    private func endCreatedSession(id: String, using coordinator: any VoiceSessionCoordinating) async throws {
+        switch authentication {
+        case .legacy: try await coordinator.endSession(rishiSessionId: id)
+        case .scoped:
+            guard let receipt = creationReceipt, receipt.started.rishiSessionId == id else {
+                throw CredentialAuthenticationFailure.accountChanged
+            }
+            try await receipt.endSpecificSession()
+        }
     }
 
     // MARK: - Control WebSocket (trial-voice-session flow only)
@@ -656,20 +874,32 @@ public actor RealtimeVoiceSession {
     /// `VoiceSessionPresenter` is updated to wire it — see Task 12), the
     /// session runs without the allowance/warning UI; server-side
     /// enforcement is unaffected either way.
-    private func openControlSocket(rishiSessionId: String) {
-        guard let controlSocketFactory else { return }
-        guard let socket = controlSocketFactory(rishiSessionId, { [weak self] signal in
+    private func openControlSocket(rishiSessionId: String) -> Bool {
+        guard !isEnding, credentialsAreCurrent() else { return false }
+        let callback: @Sendable (ControlTerminalSignal) async -> Void = { [weak self] signal in
             await self?.terminateFromControlSocket(reason: signal.reason)
-        }) else { return }
+        }
+        let socket: any ControlSocketConnecting
+        switch authentication {
+        case .legacy:
+            guard let created = controlSocketFactory?(rishiSessionId, callback) else { return true }
+            socket = created
+        case .scoped(let authority, let context, _, let factory):
+            guard let created = try? factory(rishiSessionId, context, callback),
+                  created.isBound(to: authority, context: context), credentialsAreCurrent() else { return false }
+            socket = created
+        }
         controlSocket = socket
 
         controlMessageTask = Task { [weak self] in
             guard let self else { return }
+            guard await self.canConnectControlSocket() else { return }
             await socket.connect()
             for await message in socket.messages {
                 await self.handleControlMessage(message)
             }
         }
+        return true
     }
 
     /// Handles one decoded `ControlMessage`. Deliberately does NOT act on
@@ -684,6 +914,7 @@ public actor RealtimeVoiceSession {
         switch message {
         case .allowanceRemaining(_, let remainingTrialCredits, let remainingVoiceChatSeconds, let remainingIntervals):
             await MainActor.run {
+                guard credentialsAreCurrent() else { return }
                 state.applyAllowance(
                     remainingTrialCredits: remainingTrialCredits,
                     remainingVoiceChatSeconds: remainingVoiceChatSeconds,
@@ -691,7 +922,7 @@ public actor RealtimeVoiceSession {
                 )
             }
         case .sessionEnding:
-            await MainActor.run { state.applySessionEndingWarning() }
+            await MainActor.run { if credentialsAreCurrent() { state.applySessionEndingWarning() } }
         case .sessionError(_, let code, let message):
             // Not necessarily terminal (setup/reconciliation failures per
             // the spec) — surface it without tearing the session down.
@@ -699,13 +930,14 @@ public actor RealtimeVoiceSession {
                 "code": code,
                 "message": message,
             ])
-            await MainActor.run { state.recordError(message) }
+            await MainActor.run { if credentialsAreCurrent() { state.recordError(message) } }
         case .snapshot(_, _, let remainingTrialCredits, let remainingVoiceChatSeconds, let remainingIntervals, _):
             // A non-terminal snapshot (pendingRegistration/active) just
             // refreshes the allowance HUD with the authoritative current
             // value; a terminal snapshot is handled exclusively via
             // `onTerminal`, never here.
             await MainActor.run {
+                guard credentialsAreCurrent() else { return }
                 state.applyAllowance(
                     remainingTrialCredits: remainingTrialCredits,
                     remainingVoiceChatSeconds: remainingVoiceChatSeconds,
@@ -728,7 +960,7 @@ public actor RealtimeVoiceSession {
     private func terminateFromControlSocket(reason: ControlTerminalReason) async {
         guard !isEnding else { return }
         isEnding = true
-        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
+        await MainActor.run { if credentialsAreCurrent() { state.beginEndingLifecycle(lifecycleToken) } }
         Log.event("voice.session.control.terminal", level: .info, data: ["reason": String(describing: reason)])
         await reconnect?.cancel()
         registrationTask?.cancel(); registrationTask = nil
@@ -736,7 +968,7 @@ public actor RealtimeVoiceSession {
         responderTask?.cancel(); responderTask = nil
         await client.disconnect()
         await controlSocket?.disconnect()
-        await coordinator.releaseActiveMode(.voice)
+        await releaseVoiceAudioMode()
         await fail(reason: .sessionTerminated(reason: reason), message: Self.sessionTerminatedMessage(reason))
         await onTerminalFailure?(.sessionTerminated(reason: reason))
         currentBookContext = nil
@@ -793,7 +1025,7 @@ public actor RealtimeVoiceSession {
     private func reconnectKeyFetcher() -> any EphemeralKeyFetching {
         guard sessionCoordinator != nil else { return keyFetcher }
         return TrialReconnectKeyFetcher { [weak self] in
-            await self?.activeVoiceSession?.clientSecret
+            await self?.currentReconnectSecret()
         }
     }
 
@@ -804,7 +1036,14 @@ public actor RealtimeVoiceSession {
     /// explicit teardown. This probe is shared by status confirmation and
     /// every backoff-ladder attempt, preventing an in-flight reconnect from
     /// racing a background park into a fresh connection.
-    private func readIsEndingOrParked() -> Bool { isEnding || isParked }
+    private func currentReconnectSecret() -> String? {
+        guard !isEnding, !isParked, credentialsAreCurrent() else { return nil }
+        return activeVoiceSession?.clientSecret
+    }
+
+    private func readIsEndingOrParked() -> Bool { isEnding || isParked || !credentialsAreCurrent() }
+
+    private func canConnectControlSocket() -> Bool { !isEnding && credentialsAreCurrent() }
 
     private func readIsParked() -> Bool { isParked }
 
@@ -814,7 +1053,7 @@ public actor RealtimeVoiceSession {
     private func handleReconnectExhausted() async {
         guard !isEnding else { return }
         isEnding = true
-        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
+        await MainActor.run { if credentialsAreCurrent() { state.beginEndingLifecycle(lifecycleToken) } }
         await reconnect?.cancel()
         registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel()
@@ -825,8 +1064,8 @@ public actor RealtimeVoiceSession {
         let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
         if let sessionId, let sessionCoordinator {
             do {
-                try await sessionCoordinator.endSession(rishiSessionId: sessionId)
-                lastRishiSessionId = nil
+                try await endCreatedSession(id: sessionId, using: sessionCoordinator)
+                acknowledgeServerEnd()
             } catch {
                 Log.event("voice.session.end_session.failed", level: .warning, data: [
                     "rishiSessionId": sessionId,
@@ -837,7 +1076,7 @@ public actor RealtimeVoiceSession {
 
         await client.disconnect()
         await controlSocket?.disconnect()
-        await coordinator.releaseActiveMode(.voice)
+        await releaseVoiceAudioMode()
         await fail(
             reason: .networkLost,
             message: "Reconnect exhausted after \(maxReconnects) attempts"
@@ -1003,6 +1242,7 @@ public actor RealtimeVoiceSession {
 
     @MainActor
     private func push(status: VoiceSessionStatus, error: String? = nil) {
+        guard credentialsAreCurrent() else { return }
         state.apply(status: status)
         if let error { state.recordError(error) }
     }
@@ -1012,7 +1252,10 @@ public actor RealtimeVoiceSession {
     }
 
     private func publishLiveIfActive() async -> Bool {
-        await MainActor.run { state.applyLiveIfActive(lifecycleToken) }
+        await MainActor.run {
+            guard credentialsAreCurrent() else { return false }
+            return state.applyLiveIfActive(lifecycleToken)
+        }
     }
 
     private func fail(reason: VoiceSessionFailureReason, message: String? = nil) async {
@@ -1020,6 +1263,7 @@ public actor RealtimeVoiceSession {
         if let message { data["message"] = message }
         Log.event("voice.session.failed", level: .error, data: data)
         await MainActor.run {
+            guard credentialsAreCurrent() else { return }
             state.applyFailureIfActive(lifecycleToken, reason: reason, message: message)
         }
     }

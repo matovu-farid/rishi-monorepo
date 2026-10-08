@@ -23,6 +23,8 @@ public struct LibraryView: View {
     public let onToggleSelection: (Book) -> Void
     public let onShareSingle: (Book) -> Void
     public let onStartSharedReading: (Book) -> Void
+    public let onGridBookVisibilityChange: (BookID, Bool) -> Void
+    public let onReadingNowBookVisibilityChange: (BookID, Bool) -> Void
 
     public init(books: [Book],
                 readingNow: [ReadingNowEntry] = [],
@@ -36,7 +38,9 @@ public struct LibraryView: View {
                 onBeginSelection: @escaping (Book) -> Void = { _ in },
                 onToggleSelection: @escaping (Book) -> Void = { _ in },
                 onShareSingle: @escaping (Book) -> Void = { _ in },
-                onStartSharedReading: @escaping (Book) -> Void = { _ in }) {
+                onStartSharedReading: @escaping (Book) -> Void = { _ in },
+                onGridBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in },
+                onReadingNowBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in }) {
         self.books = books
         self.readingNow = readingNow
         self.libraryBookCount = libraryBookCount
@@ -50,6 +54,8 @@ public struct LibraryView: View {
         self.onToggleSelection = onToggleSelection
         self.onShareSingle = onShareSingle
         self.onStartSharedReading = onStartSharedReading
+        self.onGridBookVisibilityChange = onGridBookVisibilityChange
+        self.onReadingNowBookVisibilityChange = onReadingNowBookVisibilityChange
     }
 
     public static func shouldShowReadingNow(_ entries: [ReadingNowEntry]) -> Bool {
@@ -71,7 +77,8 @@ public struct LibraryView: View {
                             ReadingNowShelf(
                                 entries: readingNow,
                                 coverURL: coverURL,
-                                onOpen: onOpen
+                                onOpen: onOpen,
+                                onBookVisibilityChange: onReadingNowBookVisibilityChange
                             )
                         }
 
@@ -87,7 +94,8 @@ public struct LibraryView: View {
                                 onBeginSelection: onBeginSelection,
                                 onToggleSelection: onToggleSelection,
                                 onShareSingle: onShareSingle,
-                                onStartSharedReading: onStartSharedReading
+                                onStartSharedReading: onStartSharedReading,
+                                onBookVisibilityChange: onGridBookVisibilityChange
                             )
                         }
                     }

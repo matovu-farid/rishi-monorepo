@@ -44,7 +44,7 @@
 
 // MARK: - View models
 //
-// ReaderViewModel         — `EPUB/ReaderViewModel.swift`. @unchecked Sendable. Unified reader state
+// ReaderViewModel         — `EPUB/ReaderViewModel.swift`. @MainActor. Unified reader state
 //                                + actions for ReaderScreen (position, highlights, sheet).
 // PDFReaderViewModel          — `PDF/PDFReaderViewModel.swift`. @unchecked Sendable. State
 //                                + actions for PDFReaderScreen.

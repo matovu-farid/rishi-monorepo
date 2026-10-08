@@ -8,18 +8,12 @@ import StoreKit
 /// but its shared subscription group can display both iOS and macOS products.
 @available(iOS 18.4, macOS 15.4, *)
 public struct ManageSubscriptionRow: View {
-    @State private var showSubscriptions = false
-
-    public init() {}
+    private let onChange: () -> Void
+    public init(onChange: @escaping () -> Void) { self.onChange = onChange }
 
     public var body: some View {
-        Button {
-            showSubscriptions = true
-        } label: {
+        Button(action: onChange) {
             Label("Change Subscription", systemImage: "creditcard")
-        }
-        .rishiSubscriptionPresentation(isPresented: $showSubscriptions) {
-            SubscriptionsView()
         }
     }
 }
@@ -48,7 +42,7 @@ public struct AppleManageSubscriptionRow: View {
 #Preview("Granted") {
     Form {
         if #available(iOS 18.4, macOS 15.4, *) {
-            ManageSubscriptionRow()
+            ManageSubscriptionRow(onChange: {})
             AppleManageSubscriptionRow()
         }
     }

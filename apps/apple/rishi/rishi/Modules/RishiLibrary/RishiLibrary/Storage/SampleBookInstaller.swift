@@ -1,15 +1,16 @@
 import Foundation
 
-
+public enum SampleBookInstallerError: Error, Sendable, Equatable {
+    case missingResource
+    case importFailed
+    case accountChanged
+    case unreadable
+    case provenanceUnavailable
+}
 
 /// First-run installer that copies the bundled `alice.epub` sample book into
-/// the user's library. Gated on a `UserDefaults` flag so the install is
-/// strictly one-shot per device install — even if the user later deletes the
-/// sample, we do not re-create it.
-/// Marked `@unchecked Sendable` because the only stored references are
-/// `BookFileStorage` (an actor, Sendable by construction), `UserDefaults`
-/// (thread-safe by Apple's contract), and `Bundle` (immutable). No mutable
-/// state lives on this type.
+/// the user's library. The legacy flag remains available to fixture consumers;
+/// explicit sample selection is account-scoped and always checks the library.
 public final class SampleBookInstaller: @unchecked Sendable {
 
     public static let defaultsKey = "rishi.sampleBookInstalled"
@@ -25,38 +26,65 @@ public final class SampleBookInstaller: @unchecked Sendable {
                 onBookImported: (@Sendable (BookID) async -> Void)? = nil) {
         self.storage = storage
         self.defaults = defaults
-        // `AppResourceBundle.bundle` is package-internal — accept an explicit override for
-        // tests, default to the SwiftPM-generated resource bundle.
         self.bundle = bundle ?? AppResourceBundle.bundle
         self.onBookImported = onBookImported
     }
 
-    /// Copies `alice.epub` from the bundled resources into the user's library
-    /// and inserts a Book row. No-op if already installed (idempotent via
-    /// UserDefaults flag).
-    ///
-    /// - Parameter ownerId: current user id (the sample book is owned by the
-    ///   user who triggered the first-run flow).
-    /// - Returns: the inserted Book on first install; nil on subsequent runs
-    ///   or when the bundle resource is missing.
+    public func installOrFind(
+        ownerId: UserID,
+        accountGeneration: UInt64,
+        isCurrentAccount: @escaping @Sendable () async -> Bool
+    ) async throws -> Book {
+        try Task.checkCancellation()
+        guard await isCurrentAccount() else { throw SampleBookInstallerError.accountChanged }
+        try Task.checkCancellation()
+        guard let url = bundle.url(forResource: "alice", withExtension: "epub") else {
+            Log.event("library.sample.missing", level: .info, data: ["reason": "bundle_lookup_failed"])
+            throw SampleBookInstallerError.missingResource
+        }
+
+        let book: Book
+        do {
+            book = try await storage.installOrRepairSample(
+                from: url, ownerID: ownerId, accountGeneration: accountGeneration
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch BookFileStorage.StorageError.sampleProvenanceUnavailable {
+            throw SampleBookInstallerError.provenanceUnavailable
+        } catch {
+            Log.error("library.sample.install_failed", error: error)
+            throw SampleBookInstallerError.importFailed
+        }
+
+        try Task.checkCancellation()
+        guard await isCurrentAccount() else { throw SampleBookInstallerError.accountChanged }
+        try Task.checkCancellation()
+        guard book.userId == ownerId else { throw SampleBookInstallerError.unreadable }
+        let isReadable = await storage.isReadableSourceAvailable(
+            for: book, ownerID: ownerId, accountGeneration: accountGeneration
+        )
+        try Task.checkCancellation()
+        guard isReadable else { throw SampleBookInstallerError.unreadable }
+        guard await isCurrentAccount() else { throw SampleBookInstallerError.accountChanged }
+        try Task.checkCancellation()
+        if let onBookImported { await onBookImported(book.id) }
+        try Task.checkCancellation()
+        guard await isCurrentAccount() else { throw SampleBookInstallerError.accountChanged }
+        try Task.checkCancellation()
+        Log.event("library.sample.installed", level: .info, data: ["bookId": book.id.uuidString])
+        return book
+    }
+
+    /// Compatibility entry point for existing device-wide fixture consumers.
     @discardableResult
     public func installIfNeeded(ownerId: UserID) async -> Book? {
-        if defaults.bool(forKey: Self.defaultsKey) {
-            return nil
-        }
-        guard let url = bundle.url(forResource: "alice", withExtension: "epub") else {
-            Log.event("library.sample.missing", level: .info,
-                      data: ["reason": "bundle_lookup_failed"])
-            return nil
-        }
+        guard !defaults.bool(forKey: Self.defaultsKey) else { return nil }
         do {
+            guard let url = bundle.url(forResource: "alice", withExtension: "epub") else { return nil }
             let book = try await storage.importBook(from: url, ownerId: ownerId)
-            if let onBookImported {
-                await onBookImported(book.id)
-            }
+            if let onBookImported { await onBookImported(book.id) }
             defaults.set(true, forKey: Self.defaultsKey)
-            Log.event("library.sample.installed", level: .info,
-                      data: ["bookId": book.id.uuidString])
             return book
         } catch {
             Log.error("library.sample.install_failed", error: error)
@@ -64,23 +92,17 @@ public final class SampleBookInstaller: @unchecked Sendable {
         }
     }
 
-    public func sampleBook() async throws ->Book?{
+    public func sampleBook() async throws -> Book? {
         guard let url = bundle.url(forResource: "alice", withExtension: "epub") else {
-            Log.event("library.sample.missing", level: .info,
-                      data: ["reason": "bundle_lookup_failed"])
+            Log.event("library.sample.missing", level: .info, data: ["reason": "bundle_lookup_failed"])
             return nil
         }
-        let book = try? await storage.importBook(from: url, ownerId: UUID())
-        if let book, let onBookImported {
-            await onBookImported(book.id)
-        }
+        let book = try await storage.importBook(from: url, ownerId: UUID())
+        if let onBookImported { await onBookImported(book.id) }
         return book
     }
-    /// Test seam: reset the install flag.
+
     public func resetForTesting() {
         defaults.removeObject(forKey: Self.defaultsKey)
     }
 }
-
-
- 

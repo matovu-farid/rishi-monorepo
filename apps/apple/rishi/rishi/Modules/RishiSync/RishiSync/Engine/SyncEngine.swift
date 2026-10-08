@@ -201,6 +201,13 @@ public actor SyncEngine {
     private var syncRequestPending = false
     private var waveWaiterCounts: [UUID: Int] = [:]
     private var activeDirtyMarkCount = 0
+    private struct DeferredPosition: Sendable {
+        let position: Position
+        let authority: ReaderPositionPublicationAuthority
+        let generation: Int
+    }
+    private var deferredPositions: [BookID: DeferredPosition] = [:]
+
 
     public init(
         config: SyncEngineConfig = .init(),
@@ -282,6 +289,103 @@ public actor SyncEngine {
             await holder.engine?.commitPositionDirty(bookId)
         }
         holder.engine = self
+    }
+
+    /// The same metadata-owned gate is used by inbound replacement and outbound
+    /// capture, closing the locally-saved-but-not-yet-dirty race.
+    public func commitReaderPosition(
+        _ position: Position, authority: ReaderPositionPublicationAuthority,
+        persist: @escaping @MainActor @Sendable () async throws -> Void
+    ) async throws -> PositionCommitResult {
+        let generation = accountGeneration
+        guard !resetInProgress, position.bookId == authority.permit.bookID,
+              await currentUserId() == authority.permit.ownerID else { throw BookScopedMutationError.unauthorized }
+        activeDirtyMarkCount += 1
+        defer { activeDirtyMarkCount -= 1 }
+        return try await metadataStore.withLiveBookIdentity(position.bookId) { [self] in
+            try await self.commitReaderPositionAdmitted(position, authority: authority, generation: generation, persist: persist)
+        }
+    }
+
+    private func commitReaderPositionAdmitted(
+        _ position: Position, authority: ReaderPositionPublicationAuthority, generation: Int,
+        persist: @MainActor @Sendable () async throws -> Void
+    ) async throws -> PositionCommitResult {
+        try await requirePublicationAccount(authority, generation: generation)
+        let admission = try await authority.admitMetadata()
+        defer { admission.release() }
+        try await requirePublicationAccount(authority, generation: generation)
+        try await persist()
+        do {
+            try await publishPosition(position, authority: authority, generation: generation)
+            deferredPositions[position.bookId] = nil
+            await metadataStore.releasePositionPublication(position.bookId)
+            return .committed
+        } catch {
+            // Save already succeeded: protect it before the finite gate/admissions
+            // release. The engine becomes the retry owner without retaining the VM.
+            deferredPositions[position.bookId] = DeferredPosition(position: position, authority: authority, generation: generation)
+            await metadataStore.protectPositionPublication(position.bookId)
+            return .publicationDeferred
+        }
+    }
+
+    private func requirePublicationAccount(_ authority: ReaderPositionPublicationAuthority, generation: Int) async throws {
+        guard !resetInProgress, generation == accountGeneration,
+              await currentUserId() == authority.permit.ownerID else { throw BookScopedMutationError.unauthorized }
+    }
+
+    private func publishPosition(_ position: Position, authority: ReaderPositionPublicationAuthority, generation: Int) async throws {
+        try await requirePublicationAccount(authority, generation: generation)
+        try await metadataStore.markDirty(entityId: position.bookId, kind: .position)
+        try await requirePublicationAccount(authority, generation: generation)
+        await queue.enqueue(SyncQueueItem(entityId: position.bookId, kind: .position))
+        try await requirePublicationAccount(authority, generation: generation)
+    }
+
+    private func retryDeferredPositions() async {
+        for (bookID, record) in deferredPositions {
+            do {
+                try await metadataStore.withLiveBookIdentity(bookID) { [self] in
+                    try await self.retryDeferredPosition(record, bookID: bookID)
+                }
+            } catch {
+                let revoked: Bool
+                switch error {
+                case BookScopedMutationError.unauthorized, BookSourceAccessError.revoked,
+                     BookSourceAccessError.unknownSource, SyncMetadataError.bookIdentityClosed: revoked = true
+                default: revoked = false
+                }
+                if revoked {
+                    // The failed retry released its gate. Re-enter before
+                    // dropping protection so newer reader movement cannot lose
+                    // its own handoff during an old revocation response.
+                    do {
+                        try await metadataStore.withLiveBookIdentity(bookID) { [self] in
+                            await self.discardDeferredPosition(record, bookID: bookID)
+                        }
+                    } catch SyncMetadataError.bookIdentityClosed {
+                        await discardDeferredPosition(record, bookID: bookID)
+                    } catch {}
+                }
+            }
+        }
+    }
+
+    private func discardDeferredPosition(_ record: DeferredPosition, bookID: BookID) async {
+        guard deferredPositions[bookID]?.position == record.position else { return }
+        deferredPositions[bookID] = nil
+        await metadataStore.releasePositionPublication(bookID)
+    }
+
+    private func retryDeferredPosition(_ record: DeferredPosition, bookID: BookID) async throws {
+        guard deferredPositions[bookID]?.position == record.position else { return }
+        try await requirePublicationAccount(record.authority, generation: record.generation)
+        let admission = try await record.authority.admitMetadata()
+        defer { admission.release() }
+        try await publishPosition(record.position, authority: record.authority, generation: record.generation)
+        deferredPositions[bookID] = nil
+        await metadataStore.releasePositionPublication(bookID)
     }
 
     /// Late-bound back-reference so `PositionDebouncer.commit` can call back
@@ -468,14 +572,24 @@ public actor SyncEngine {
     fileprivate func commitPositionDirty(_ bookId: BookID) async {
         let generation = accountGeneration
         guard !resetInProgress else { return }
+        activeDirtyMarkCount += 1
+        defer { activeDirtyMarkCount -= 1 }
         do {
-            try await metadataStore.markDirty(entityId: bookId, kind: .position)
-            guard generation == accountGeneration, !resetInProgress else { return }
-            await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .position))
+            try await metadataStore.withLiveBookIdentity(bookId) { [self] in
+                try await self.commitLegacyPositionDirty(bookId, generation: generation)
+            }
             await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.commitPositionDirty.failed", error: error)
         }
+    }
+
+    private func commitLegacyPositionDirty(_ bookID: BookID, generation: Int) async throws {
+        guard generation == accountGeneration, !resetInProgress,
+              !(await metadataStore.hasProtectedPositionPublication(bookID)) else { return }
+        try await metadataStore.markDirty(entityId: bookID, kind: .position)
+        guard generation == accountGeneration, !resetInProgress else { return }
+        await queue.enqueue(SyncQueueItem(entityId: bookID, kind: .position))
     }
 
     // MARK: - Sync wave
@@ -489,11 +603,11 @@ public actor SyncEngine {
     }
 
     @discardableResult
-    public func runOnce(onWaveID: @escaping @MainActor @Sendable (UUID) -> Void) async -> Wave {
+    public func runOnce(onWaveID: @escaping @MainActor @Sendable (UUID) async -> Void) async -> Wave {
         await runOnce(onWaveID: Optional(onWaveID))
     }
 
-    private func runOnce(onWaveID: (@MainActor @Sendable (UUID) -> Void)?) async -> Wave {
+    private func runOnce(onWaveID: (@MainActor @Sendable (UUID) async -> Void)?) async -> Wave {
         guard !resetInProgress else { return Wave() }
 
         let task: Task<Wave, Never>
@@ -717,6 +831,7 @@ public actor SyncEngine {
         activeWaveCount += 1
         defer { activeWaveCount -= 1 }
         var wave = Wave()
+        await retryDeferredPositions()
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
             await statusReporter.snapshotStatus(error: "Sync requires data-use consent", on: status, completedAt: nil)
             return wave
@@ -873,6 +988,33 @@ public actor SyncEngine {
         wave.bookmarksPushed = drain.bookmarksPushed
         wave.chapterIndexesPushed = drain.chapterIndexesPushed
         wave.errors.append(contentsOf: drain.errors)
+        if !drain.rejectedPositions.isEmpty {
+            do {
+                guard await isCurrent(generation: waveGeneration, userId: waveUserId) else { throw CancellationError() }
+                // Preparation is durable before retirement; a retained cursor
+                // must not skip a rejected book earlier in the projection.
+                try await metadataStore.saveRecoveryState(.init(reason: .rejectedPosition, accountGeneration: waveGeneration))
+                guard await isCurrent(generation: waveGeneration, userId: waveUserId) else { throw CancellationError() }
+                try await metadataStore.clearCursorState(for: .recovery)
+                for rejected in drain.rejectedPositions {
+                    try await metadataStore.withLiveBookIdentity(rejected.bookID) { [self] in
+                        guard await self.isCurrent(generation: waveGeneration, userId: waveUserId),
+                              !(await self.metadataStore.hasProtectedPositionPublication(rejected.bookID)),
+                              try await self.positionUploader.positionMatches(rejected) else { return }
+                        _ = try await self.metadataStore.retireRejectedPosition(entityId: rejected.bookID,
+                            expectedDirtyAt: rejected.dirtyAt, expectedOperationId: rejected.operationID,
+                            previousLastSyncedAt: rejected.previousLastSyncedAt)
+                    }
+                }
+                let replay = try await consumePages(scope: .recovery, generation: waveGeneration, userId: waveUserId)
+                merge(replay, into: &wave)
+                if replay.readyForOutbound, replay.reachedTerminalPage, replay.terminalPageComplete,
+                   await isCurrent(generation: waveGeneration, userId: waveUserId) {
+                    try await metadataStore.clearRecoveryState(accountGeneration: waveGeneration)
+                    try await metadataStore.clearCursorState(for: .incremental, accountGeneration: waveGeneration)
+                }
+            } catch { wave.errors.append("position.recovery: \(error)") }
+        }
 
         // Final read-back is advisory. It never changes operational success;
         // upload/fetch/apply failures above remain the only wave errors.
@@ -1007,6 +1149,8 @@ public actor SyncEngine {
         while activeWaveCount > 0 {
             await Task.yield()
         }
+        for id in deferredPositions.keys { await metadataStore.releasePositionPublication(id) }
+        deferredPositions.removeAll()
         await queue.clear()
         do {
             try await metadataStore.resetAll()

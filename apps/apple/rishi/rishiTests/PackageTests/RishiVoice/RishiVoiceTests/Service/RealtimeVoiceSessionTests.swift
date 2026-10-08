@@ -83,13 +83,35 @@ struct RealtimeVoiceSessionTests {
 
     // MARK: - Failure paths
 
-    @Test("Mic denied → .failed(.micDenied); coordinator never invoked")
-    func micDeniedFails() async {
-        let fakes = makeSession(micDecision: .denied)
-        await fakes.session.start()
-        #expect(fakes.state.status == .failed(reason: .micDenied))
-        #expect(fakes.client.connectCalls.isEmpty)
-        #expect(await fakes.coordinator.currentMode == .idle)
+    @Test("Presenter mic denial fails before lifecycle construction or audio admission")
+    func micDeniedFails() async throws {
+        let name = "RealtimeVoiceMicDenial.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let transport = URLSession(configuration: .ephemeral)
+        defer { defaults.removePersistentDomain(forName: name); transport.invalidateAndCancel() }
+        let owner = UUID()
+        let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
+        let client = FakeRealtimeClient()
+        let gate = FakeMicPermissionGate(decision: .denied)
+        let registry = VoiceSessionRegistry(defaults: defaults, currentUserIDProvider: { owner }, endServerSession: { _ in })
+        let url = URL(string: "https://voice-mic-denial.example.invalid")!
+        let worker = WorkerClient(baseURL: url, session: transport, tokenProvider: StaticTokenProvider(nil))
+        var clientFactoryCalls = 0
+        var sessionFactoryCalls = 0
+        let presenter = VoiceSessionPresenter(coordinator: coordinator, workerClient: worker, baseURL: url,
+            messageStore: InMemoryMessageStore(), conversationLookup: ConversationLookup(store: InMemoryConversationStore()),
+            userIdProvider: { owner }, dirtyHook: RealtimeMicDenialDirtyHook(), micGate: gate,
+            clientFactory: { clientFactoryCalls += 1; return client },
+            keyFetcherFactory: { CapturingEphemeralKeyFetcher(result: .success(.init(secret: "fixture", sessionId: "fixture"))) },
+            sessionCoordinatorFactory: { sessionFactoryCalls += 1; return nil },
+            controlSocketFactory: { _, _ in nil }, sessionRegistry: registry)
+        _ = await presenter.start(bookId: nil)
+        #expect(presenter.state.status == .failed(reason: .micDenied))
+        #expect(client.connectCalls.isEmpty)
+        #expect(await coordinator.currentMode == .idle)
+        #expect(gate.requestCount == 1)
+        #expect(clientFactoryCalls == 0)
+        #expect(sessionFactoryCalls == 0)
     }
 
     @Test(
@@ -201,8 +223,8 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.client.connectCalls.count == 1)
         #expect(fakes.state.status == .live)
         #expect(fakes.client.cancelCurrentResponseCalls == 1)
-        #expect(fakes.client.micCaptureEnabledCalls == [false])
-        #expect(fakes.client.assistantOutputEnabledCalls == [false])
+        #expect(fakes.client.micCaptureEnabledCalls == [true, false])
+        #expect(fakes.client.assistantOutputEnabledCalls.isEmpty)
     }
 
     @Test("resumeFromBackground restores live when transport is connected")
@@ -215,8 +237,8 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.state.status == .live)
         #expect(fakes.state.activityPhase == .listening)
         #expect(fakes.client.connectCalls.count == 1)
-        #expect(fakes.client.micCaptureEnabledCalls == [false, true])
-        #expect(fakes.client.assistantOutputEnabledCalls == [false, true])
+        #expect(fakes.client.micCaptureEnabledCalls == [true, false, true])
+        #expect(fakes.client.assistantOutputEnabledCalls.isEmpty)
     }
 
     @Test("Reconnect: 3 consecutive failures → .failed(.networkLost); audio mode released")
@@ -343,6 +365,11 @@ struct RealtimeVoiceSessionTests {
             micGate: micGate
         )
     }
+}
+
+private struct RealtimeMicDenialDirtyHook: VoiceTranscriptDirtyHook {
+    func conversationDidUpdate(_ id: ConversationID) async {}
+    func messageDidUpdate(_ id: MessageID) async {}
 }
 
 private actor DelayedTrialRegistrationGate {

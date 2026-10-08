@@ -43,7 +43,7 @@ struct OnboardingUITests {
         let dictionary = try #require(propertyList as? [String: Any])
         let modes = try #require(dictionary["UIBackgroundModes"] as? [String])
 
-        #expect(Set(modes) == Set(["audio", "processing"]))
+        #expect(Set(modes) == Set(["audio", "processing", "remote-notification"]))
     }
 
     @Test("Onboarding CTA stays full width in compact layouts")
@@ -70,7 +70,7 @@ struct OnboardingUITests {
 
     @Test("FirstReaderHint constructs")
     func hintConstructs() {
-        _ = FirstReaderHint(onGotIt: {}).body
+        _ = FirstReaderHint(onBack: {}, onGotIt: {}).body
     }
 
     @Test("SampleOrImportScreen constructs")
@@ -79,6 +79,35 @@ struct OnboardingUITests {
             onUseSample: {},
             onImport: {},
             onSkip: {}
+        ).body
+    }
+
+    @Test("SampleOrImportScreen constructs its busy, retry, and recovery states")
+    func sampleOrImportRecoveryStatesConstruct() {
+        let onUseSample = {}
+        let onImport = {}
+        let onSkip = {}
+
+        _ = SampleOrImportScreen(
+            onUseSample: onUseSample,
+            onImport: onImport,
+            onSkip: onSkip,
+            isSamplePreparing: true
+        ).body
+
+        _ = SampleOrImportScreen(
+            onUseSample: onUseSample,
+            onImport: onImport,
+            onSkip: onSkip,
+            isSampleRetryable: true,
+            sampleFailureMessage: "Try the sample again or import a book."
+        ).body
+
+        _ = SampleOrImportScreen(
+            onUseSample: onUseSample,
+            onImport: onImport,
+            onSkip: onSkip,
+            recoveryMessage: "Your book is still being prepared."
         ).body
     }
 
@@ -105,7 +134,8 @@ struct OnboardingUITests {
             encoding: .utf8
         )
 
-        #expect(source.contains(".id(startReaderTour)"))
+        #expect(source.contains(".id(readerDestinationIdentity)"))
+        #expect(source.contains(#"return "\(startReaderTour)-\(sharedSessionID)""#))
     }
 
     @Test("Prompt-originated multi-import chooses the first eligible reading format")
@@ -133,59 +163,11 @@ struct OnboardingUITests {
         #expect(endIndex < signOutIndex)
     }
 
-    @Test("Trial intro serializes and checks fresh entitlement before presenting")
-    func trialIntroChecksEntitlementBeforePresenting() throws {
-        let source = try String(
-            contentsOf: Self.rishiRoot().appendingPathComponent("rishi/RootView.swift"),
-            encoding: .utf8
-        )
-
-        let inFlightGuard = try #require(
-            source.range(of: "guard !noCardTrialIntroCheckInFlight else { return }")?.lowerBound
-        )
-        let refresh = try #require(
-            source.range(of: "let refreshResult = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn")?.lowerBound
-        )
-        let postRefreshIdentityCheck = try #require(
-            source.range(of: "currentUser.id == user.id")?.lowerBound
-        )
-        let eligibility = try #require(
-            source.range(of: "NoCardTrialIntroEligibility.shouldPresent(for: refreshResult)")?.lowerBound
-        )
-        let seen = try #require(
-            source.range(of: "await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(true, userId: user.id)")?.lowerBound
-        )
-        let postWriteAccountCheck = try #require(
-            source.range(of: "guard case .signedIn(let presentedUser) = currentUserBox.state")?.lowerBound
-        )
-        let postWriteIdentityCheck = try #require(
-            source.range(of: "presentedUser.id == user.id")?.lowerBound
-        )
-        let presentation = try #require(
-            source.range(of: "showNoCardTrialIntro = true")?.lowerBound
-        )
-
-        #expect(inFlightGuard < refresh)
-        #expect(refresh < postRefreshIdentityCheck)
-        #expect(postRefreshIdentityCheck < eligibility)
-        #expect(refresh < eligibility)
-        #expect(eligibility < seen)
-        #expect(seen < postWriteAccountCheck)
-        #expect(postWriteAccountCheck < postWriteIdentityCheck)
-        #expect(postWriteIdentityCheck < presentation)
-        #expect(postWriteAccountCheck < presentation)
-        #expect(seen < presentation)
-        #expect(eligibility < presentation)
-        #expect(source.contains("@State private var noCardTrialIntroCheckInFlight = false"))
-        #expect(source.contains("@MainActor\n    private func presentNoCardTrialIntroIfNeeded"))
-        #expect(source.contains("defer { noCardTrialIntroCheckInFlight = false }"))
-        #expect(source.contains("await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(false, userId: user.id)"))
-    }
-
     @Test("VoiceLanguagePrimer constructs")
     func voiceLanguageConstructs() {
         _ = VoiceLanguagePrimer(
             selection: .constant("en"),
+            onBack: {},
             onContinue: {},
             onSkip: {}
         ).body

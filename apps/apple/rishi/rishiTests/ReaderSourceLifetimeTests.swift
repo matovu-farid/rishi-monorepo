@@ -6,80 +6,156 @@ import Testing
 @Suite("Reader source ownership and attachment teardown")
 @MainActor
 struct ReaderSourceLifetimeTests {
-    @Test("a binding releases its real reader and managed lease while its poll wait is entered")
-    func bindingDropsWithoutStop() async throws {
-        let fixture = try await ReaderDeletionFixture.make()
-        let wait = ReaderLifetimeGate()
-        var lease: BookSourceLease? = try await fixture.registry.acquireReadableSource(for: fixture.book)
-        var reader: ReaderViewModel? = fixture.makeReader(lease: try #require(lease))
-        reader?.didChangeLocation(try ReaderDeletionFixture.locator(), isProgrammatic: true)
-        await reader?.flush()
-        var marked: [BookID] = []
-        var binding: ReaderPositionSyncBinding? = ReaderPositionSyncBinding(
-            viewModel: try #require(reader), sourceLease: try #require(lease),
-            markDirty: { marked.append($0) }, pollWait: { await wait.wait() }
-        )
-        weak var weakBinding = binding
-        weak var weakReader = reader
-        weak var weakLease = lease
-        let entered = await readerLifetimeEventually { wait.entered > 0 }
-        if !entered { binding?.stop(); wait.open() }
-        #expect(entered)
-        #expect(marked == [fixture.book.id])
-        binding = nil
-        reader = nil
-        lease = nil
-        let released = await readerLifetimeEventually { weakBinding == nil && weakReader == nil && weakLease == nil }
-        if !released { weakBinding?.stop() }
-        wait.open()
-        #expect(released)
+    /// Observes real registry admissions without invoking its destructive
+    /// close/drain operations while the reader still needs authority.
+    private final class TrackingSourceEffects: BookSourceEffectAdmitting, @unchecked Sendable {
+        private let base: any BookSourceEffectAdmitting
+        private let lock = NSLock()
+        private var count = 0
+        var activeCount: Int { lock.withLock { count } }
+        init(base: any BookSourceEffectAdmitting) { self.base = base }
+        func admit(_ permit: BookSourceAccessPermit) throws -> SourceEffectAdmission {
+            let admitted = try base.admit(permit)
+            lock.withLock { count += 1 }
+            return SourceEffectAdmission { [self] in
+                admitted.release()
+                lock.withLock { count -= 1 }
+            }
+        }
+        func closeAdmission(_ permit: BookSourceAccessPermit) { base.closeAdmission(permit) }
+        func drain(_ permit: BookSourceAccessPermit) async { await base.drain(permit) }
     }
 
-    @Test("stop is idempotent and an already admitted dirty mark drains before owner release")
-    func admittedMarkSurvivesStop() async throws {
+    @Test("dropping a binding clears only its callback and releases the managed lease")
+    func bindingDropsWithoutStop() async throws {
         let fixture = try await ReaderDeletionFixture.make()
-        let mark = ReaderLifetimeGate()
-        let wait = ReaderLifetimeGate()
         var lease: BookSourceLease? = try await fixture.registry.acquireReadableSource(for: fixture.book)
         var reader: ReaderViewModel? = fixture.makeReader(lease: try #require(lease))
-        reader?.didChangeLocation(try ReaderDeletionFixture.locator(), isProgrammatic: true)
-        await reader?.flush()
-        var marks = 0
+        var commits = 0
         var binding: ReaderPositionSyncBinding? = ReaderPositionSyncBinding(
-            viewModel: try #require(reader), sourceLease: try #require(lease),
-            markDirty: { _ in marks += 1; await mark.wait(cancellationAware: false) },
-            pollWait: { await wait.wait() }
-        )
+            viewModel: try #require(reader), sourceLease: try #require(lease)
+        ) { _, persist in
+            try await persist()
+            commits += 1
+            return .committed
+        }
         weak var weakBinding = binding
         weak var weakReader = reader
         weak var weakLease = lease
-        let entered = await readerLifetimeEventually { mark.entered > 0 }
-        if !entered { mark.open(); binding?.stop() }
-        #expect(entered)
-        let authority = try #require(lease).effectAuthority
-        let permit = try #require(lease).sourceAccessPermit
-        binding?.stop()
-        binding?.stop()
-        reader?.didChangeLocation(try ReaderDeletionFixture.locator(0.7), isProgrammatic: true)
+        reader?.didChangeLocation(try ReaderDeletionFixture.locator())
         await reader?.flush()
-        var drainStarted = false
-        var drained = false
-        let drain = Task { drainStarted = true; await authority.drain(permit); drained = true }
-        #expect(await readerLifetimeEventually { drainStarted })
-        #expect(!drained)
+        #expect(commits == 1)
         binding = nil
         reader = nil
         lease = nil
-        #expect(weakBinding != nil)
-        #expect(weakReader != nil)
-        #expect(weakLease != nil)
-        mark.open()
-        wait.open()
-        let completed = await readerLifetimeEventually { drained && weakBinding == nil && weakReader == nil && weakLease == nil }
-        if !completed { drain.cancel() }
-        #expect(completed)
-        #expect(marks == 1)
-        #expect(wait.entered == 0)
+        #expect(await readerLifetimeEventually { weakBinding == nil && weakReader == nil && weakLease == nil })
+    }
+
+    @Test("stop is idempotent while a finite admitted commit completes")
+    func admittedMarkSurvivesStop() async throws {
+        let fixture = try await ReaderDeletionFixture.make()
+        let gate = ReaderLifetimeGate()
+        let lease = try await fixture.registry.acquireReadableSource(for: fixture.book)
+        let reader = fixture.makeReader(lease: lease)
+        var commits = 0
+        let binding = ReaderPositionSyncBinding(viewModel: reader, sourceLease: lease) { _, persist in
+            try await persist()
+            commits += 1
+            await gate.wait(cancellationAware: false)
+            return .committed
+        }
+        reader.didChangeLocation(try ReaderDeletionFixture.locator())
+        let flush = Task { await reader.flush() }
+        #expect(await readerLifetimeEventually { gate.entered > 0 })
+        binding.stop()
+        binding.stop()
+        var drained = false
+        let drain = Task { await lease.effectAuthority.drain(lease.sourceAccessPermit); drained = true }
+        await Task.yield()
+        #expect(!drained)
+        gate.open()
+        #expect(await flush.value == .committed)
+        await drain.value
+        #expect(drained)
+        #expect(commits == 1)
+    }
+
+    @Test("suspended playback stop publishes its final narration cursor before attachment disposal")
+    func terminalNarrationCommitBeforeDisposal() async throws {
+        let fixture = try await ReaderDeletionFixture.make()
+        let environment = ReaderLifetimeEnvironment(fixture: fixture)
+        let registeredLease = try await fixture.registry.acquireReadableSource(for: fixture.book)
+        let effects = TrackingSourceEffects(base: registeredLease.effectAuthority)
+        // Preserve the actual registered permit and physical managed borrower,
+        // while observing this reader's admissions without closing them.
+        let owner = try BookSourceOwner(
+            url: registeredLease.url, access: registeredLease.access,
+            sourceAccessPermit: registeredLease.sourceAccessPermit, effectAuthority: effects,
+            invalidation: registeredLease.owner.invalidation,
+            onRelease: { withExtendedLifetime(registeredLease) {} }
+        )
+        let lease = BookSourceLease(owner: owner, cachePolicy: registeredLease.cachePolicy)
+        let reader = fixture.makeReader(lease: lease)
+        let gate = ReaderLifetimeGate()
+        let cleanup = ReaderSourceInvalidationCleanup()
+        let lifecycle = ReaderPositionLifecycleDrain(beginExecution: { _ in {} })
+        var published: [Position] = []
+        let attachment = ReaderSourceAttachment(
+            viewModel: reader, sourceLease: lease, syncEngine: fixture.sync,
+            playbackOwner: environment.playback, voiceEntry: environment.voice,
+            cleanup: cleanup, scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db),
+            commit: { position, persist in
+                try await persist()
+                published.append(position)
+                return .committed
+            }
+        )
+        var terminalCallbackSawLiveAttachment = false
+        let controller = environment.playback.makeController(
+            userId: fixture.owner, bookFileStorage: nil,
+            onPersistReadAloudPosition: { locator in
+                terminalCallbackSawLiveAttachment = !attachment.isDisposed
+                reader.didChangeReadAloudLocation(locator)
+                await reader.flush()
+            }
+        )
+        controller.setReadAloudPositionForTests(try ReaderDeletionFixture.locator(0.8))
+        reader.didChangeLocation(try ReaderDeletionFixture.locator(0.2))
+        var stopCalls = 0
+        let close = Task {
+            await attachment.close(using: lifecycle, stop: {
+                stopCalls += 1
+                await gate.wait(cancellationAware: false)
+                await controller.stop()
+            })
+        }
+        #expect(await readerLifetimeEventually { gate.entered > 0 })
+        #expect(!attachment.isDisposed)
+        #expect(published.count == 1)
+        #expect(published.first?.percentComplete == 0.2)
+        // The binding remains installed, but its initial finite source
+        // admission has ended before audio teardown waits.
+        #expect(effects.activeCount == 0)
+        // drain() is an irreversible revocation boundary, not an observation:
+        // use a read-only counter and prove the original permit remains open.
+        let probe = try registeredLease.effectAuthority.admit(registeredLease.sourceAccessPermit)
+        probe.release()
+        let overlap = Task { await attachment.close(using: lifecycle, stop: { stopCalls += 1 }) }
+        await Task.yield()
+        gate.open()
+        #expect(await close.value == .committed)
+        #expect(await overlap.value == .committed)
+        #expect(stopCalls == 1)
+        #expect(terminalCallbackSawLiveAttachment)
+        #expect(attachment.isDisposed)
+        #expect(effects.activeCount == 0)
+        #expect(published.count == 2)
+        #expect(published.last?.percentComplete == 0.8)
+        let saved = try #require(try await fixture.positions.position(for: fixture.book.id))
+        #expect(saved == published.last)
+        #expect(try ReaderPositionLocator.decode(jsonString: saved.locator).source == .readAloud)
+        controller.dispose()
+        cleanup.dispose()
     }
 
     @Test("ordinary disposal wakes a cleanup awaiting its first registration")
@@ -168,12 +244,12 @@ struct ReaderSourceLifetimeTests {
         let poll = ReaderLifetimeGate()
         let old = ReaderSourceAttachment(viewModel: reader, sourceLease: lease, syncEngine: fixture.sync,
                                          playbackOwner: environment.playback, voiceEntry: environment.voice,
-                                         cleanup: cleanup, pollWait: { await poll.wait() })
+                                         cleanup: cleanup, scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db))
         await old.registerCleanup()
         #expect(old.installIfCurrent(old, navigation: environment.navigation))
         let replacement = ReaderSourceAttachment(viewModel: reader, sourceLease: lease, syncEngine: fixture.sync,
                                                  playbackOwner: environment.playback, voiceEntry: environment.voice,
-                                                 cleanup: cleanup, pollWait: { await poll.wait() })
+                                                 cleanup: cleanup, scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db))
         await replacement.registerCleanup()
         #expect(replacement.installIfCurrent(replacement, navigation: environment.navigation))
         old.dispose()
@@ -224,7 +300,7 @@ struct ReaderSourceLifetimeTests {
         let poll = ReaderLifetimeGate()
         let attachment = ReaderSourceAttachment(viewModel: reader, sourceLease: lease, syncEngine: fixture.sync,
                                                 playbackOwner: environment.playback, voiceEntry: environment.voice,
-                                                cleanup: cleanup, pollWait: { await poll.wait() })
+                                                cleanup: cleanup, scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db))
         var installed = true
         var completed = false
         let setup = Task {
@@ -262,7 +338,7 @@ struct ReaderSourceLifetimeTests {
         if !didComplete { cleanup.dispose(); action.cancel() }
         #expect(didComplete)
         let attachment = ReaderSourceAttachment(viewModel: reader, sourceLease: lease, syncEngine: fixture.sync,
-                                                playbackOwner: environment.playback, voiceEntry: environment.voice, cleanup: cleanup)
+                                                playbackOwner: environment.playback, voiceEntry: environment.voice, cleanup: cleanup, scopedMutationStore: BookScopedMutationStore(dbStore: fixture.db))
         await attachment.registerCleanup()
         #expect(attachment.isDisposed)
         #expect(!attachment.installIfCurrent(attachment, navigation: environment.navigation))

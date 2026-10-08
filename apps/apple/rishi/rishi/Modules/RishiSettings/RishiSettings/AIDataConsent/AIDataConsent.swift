@@ -46,3 +46,13 @@ public protocol DataUseConsentStore: Sendable {
     func clearCurrentUser() async
     func isCurrent(for userID: String) async -> Bool
 }
+
+/// Required captured-owner operations for authority-injected stores. Legacy
+/// composition stays on DataUseConsentStore until the atomic app cutover.
+protocol CredentialDataUseConsentStore: DataUseConsentStore {
+    func bind(to lease: CredentialLease) async -> Bool
+    func record(for lease: CredentialLease) async -> ConsentRecord?
+    func grant(for lease: CredentialLease) async -> Bool
+    func revoke(for lease: CredentialLease) async -> Bool
+    func clear(for transition: CredentialTransition) async -> Bool
+}

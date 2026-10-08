@@ -39,15 +39,14 @@ struct RishiVoice_PackageSmokeTests {
 
     @Test("RealtimeAPI product is linked (Session type reachable)")
     func realtimeAPIIsLinked() {
-        // Type-only reachability proof; we never instantiate Session here.
+        // Type-only reachability proof; we never instantiate a session here.
         // swift-realtime-openai's `RealtimeAPI` library re-exports the `Core`,
-        // `UI`, and `WebRTC` submodules (see RealtimeAPI.swift: `@_exported
-        // import Core` etc.). We probe `Session` (from `Core`) because the
+        // `UI`, and `WebRTC` submodules. We probe `RealtimeSession` because the
         // user-facing `Conversation` type collides with `RishiCore.Conversation`
-        // and would force ambiguity. `Session` has no such collision and is a
-        // public top-level type from `Core` that proves the dep chain links.
-        let typeName = String(describing: Core.Session.self)
-        #expect(typeName.contains("Session"))
+        // and would force ambiguity. `RealtimeSession` has no such collision
+        // and proves the dependency chain links.
+        let typeName = String(describing: RealtimeSession.self)
+        #expect(typeName.contains("RealtimeSession"))
     }
 
     @Test("VOICE-08: package contains no CallKit references")

@@ -15,6 +15,20 @@ struct PositionUploaderTests {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
         var forgetCalls: [(UUID, SyncEntityKind)] = []
         var conditionalAcknowledgementResult = true
+        var operations: [UUID: UUID] = [:]
+        var dirtyTime = Date(timeIntervalSince1970: 1_800_000_000)
+        func operationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID? { operations[entityId] }
+        func ensureOperationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID {
+            if let value = operations[entityId] { return value }
+            let value = UUID(); operations[entityId] = value; return value
+        }
+        func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? { dirtyTime }
+        func markCleanIfCurrent(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, expectedOperationId: UUID, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+            guard operations[entityId] == expectedOperationId, expectedDirtyAt == dirtyTime else { return false }
+            return try await markCleanIfUnchanged(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag)
+        }
+        func moveRevision(_ id: UUID) { operations[id] = UUID(); dirtyTime = dirtyTime.addingTimeInterval(1) }
+
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -43,11 +57,17 @@ struct PositionUploaderTests {
 
     private actor StubPositionStore: PositionStore {
         private var rows: [BookID: Position] = [:]
+        private var readGate: ReadGate?
+        func suspendReads(_ gate: ReadGate) { readGate = gate }
 
         func seed(_ rows: [Position]) {
             for r in rows { self.rows[r.bookId] = r }
         }
-        func position(for bookId: BookID) async throws -> Position? { rows[bookId] }
+        func position(for bookId: BookID) async throws -> Position? {
+            let row = rows[bookId]
+            if let gate = readGate { readGate = nil; await gate.enter() }
+            return row
+        }
         func upsert(_ position: Position) async throws { rows[position.bookId] = position }
         func delete(_ id: PositionID) async throws {
             if let key = rows.first(where: { $0.value.id == id })?.key {
@@ -75,7 +95,8 @@ struct PositionUploaderTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 
@@ -217,4 +238,193 @@ struct PositionUploaderTests {
         let cleaned = await metadata.cleanedIds()
         #expect(cleaned == [missingBookId])
     }
+    private func body(_ request: URLRequest) throws -> [String: Any] {
+        let data: Data
+        if let direct = request.httpBody { data = direct }
+        else if let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                bytes.append(contentsOf: buffer.prefix(count))
+            }
+            data = bytes
+        } else { throw URLError(.badServerResponse) }
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @Test("Operation outcomes acknowledge only applied/duplicate; missing and contradictory outcomes stay pending",
+          arguments: ["applied", "duplicate", "rejected", "unknown", "missing", "contradictory", "legacy-rejected", "legacy"])
+    func outcomes(_ status: String) async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata()
+        let positions = StubPositionStore()
+        let position = Position(bookId: UUID(), locator: "saved", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        await positions.seed([position])
+        let op = try await metadata.ensureOperationId(entityId: position.bookId, kind: .position)
+        PositionUploaderMockURLProtocol.handler = { request in
+            let parsed = try body(request)
+            let changes = try #require(parsed["changes"] as? [[String: Any]])
+            #expect(changes.first?["operation_id"] as? String == op.uuidString)
+            #expect(changes.first?["updated_at"] as? Double == position.updatedAt.timeIntervalSinceReferenceDate)
+            let outcomes: String
+            if status == "missing" { outcomes = "[{\"operation_id\":\"other\",\"status\":\"applied\"}]" }
+            else if status == "contradictory" {
+                outcomes = "[{\"operation_id\":\"\(op)\",\"status\":\"applied\"},{\"operation_id\":\"\(op)\",\"status\":\"rejected\"}]"
+            } else if status.hasPrefix("legacy") { outcomes = "[]" }
+            else { outcomes = "[{\"operation_id\":\"\(op)\",\"status\":\"\(status)\"}]" }
+            let accepted = status == "legacy-rejected" ? ",\"accepted\":false" : ""
+            return (200, Data("{\"accepted_at\":123,\"outcomes\":\(outcomes)\(accepted)}".utf8), nil)
+        }
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata)
+        let result = try await uploader.pushPendingWithOutcomes(items: [.init(entityId: position.bookId, kind: .position)])
+        #expect(result.acceptedCount == (["applied", "duplicate", "legacy"].contains(status) ? 1 : 0))
+        #expect(result.rejected.count == (["rejected", "legacy-rejected"].contains(status) ? 1 : 0))
+        if let rejected = result.rejected.first {
+            #expect(rejected.position == position)
+            #expect(rejected.operationID == op)
+            #expect(rejected.dirtyAt == Date(timeIntervalSince1970: 1_800_000_000))
+        }
+    }
+
+    @Test("Network retry preserves operation ID and saved timestamp")
+    func stableRetry() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let position = Position(bookId: UUID(), locator: "saved", updatedAt: Date(timeIntervalSince1970: 10))
+        await positions.seed([position])
+        let operation = try await metadata.ensureOperationId(entityId: position.bookId, kind: .position)
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata)
+        let items = [SyncQueueItem(entityId: position.bookId, kind: .position)]
+        PositionUploaderMockURLProtocol.handler = { request in
+            let changes = try #require(try body(request)["changes"] as? [[String: Any]])
+            #expect(changes.first?["operation_id"] as? String == operation.uuidString)
+            throw URLError(.cannotConnectToHost)
+        }
+        await #expect(throws: (any Error).self) { try await uploader.pushPending(items: items) }
+        #expect(await metadata.cleanCount() == 0)
+        PositionUploaderMockURLProtocol.handler = { request in
+            let changes = try #require(try body(request)["changes"] as? [[String: Any]])
+            #expect(changes.first?["operation_id"] as? String == operation.uuidString)
+            #expect(changes.first?["updated_at"] as? Double == position.updatedAt.timeIntervalSinceReferenceDate)
+            return (200, Data("{\"accepted_at\":123}".utf8), nil)
+        }
+        #expect(try await uploader.pushPending(items: items) == 1)
+    }
+
+    @Test("A protected durable save cannot upload an older pending operation")
+    func protectedSaveDoesNotUpload() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let position = Position(bookId: UUID(), locator: "durable-unpublished")
+        await positions.seed([position])
+        await metadata.protectPositionPublication(position.bookId)
+        defer { Task { await metadata.releasePositionPublication(position.bookId) } }
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata)
+        #expect(try await uploader.pushPending(items: [.init(entityId: position.bookId, kind: .position)]) == 0)
+        #expect(PositionUploaderMockURLProtocol.capturedSnapshot().isEmpty)
+    }
+
+    @Test("An older upload response cannot acknowledge concurrent movement")
+    func oldResponseKeepsNewDirty() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let position = Position(bookId: UUID(), locator: "old")
+        await positions.seed([position])
+        let entered = DispatchSemaphore(value: 0); let resume = DispatchSemaphore(value: 0)
+        PositionUploaderMockURLProtocol.handler = { _ in
+            entered.signal(); resume.wait()
+            return (200, Data("{\"accepted_at\":123}".utf8), nil)
+        }
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata)
+        let task = Task { try await uploader.pushPending(items: [.init(entityId: position.bookId, kind: .position)]) }
+        await Task.detached { entered.wait() }.value
+        await metadata.moveRevision(position.bookId)
+        try await positions.upsert(Position(id: position.id, bookId: position.bookId, locator: "new", updatedAt: position.updatedAt.addingTimeInterval(1)))
+        resume.signal()
+        #expect(try await task.value == 0)
+        #expect(await metadata.cleanCount() == 0)
+    }
+
+    @Test("Mixed batch counts applied and duplicate while returning rejected snapshot")
+    func mixedBatch() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore()
+        let rows = (0..<3).map { Position(bookId: UUID(), locator: "saved-\($0)") }
+        await positions.seed(rows)
+        var operations: [UUID] = []
+        for row in rows { operations.append(try await metadata.ensureOperationId(entityId: row.bookId, kind: .position)) }
+        let response = "{\"accepted_at\":123,\"accepted\":false,\"outcomes\":[{\"operation_id\":\"\(operations[0])\",\"status\":\"applied\"},{\"operation_id\":\"\(operations[1])\",\"status\":\"duplicate\"},{\"operation_id\":\"\(operations[2])\",\"status\":\"rejected\"}]}"
+        PositionUploaderMockURLProtocol.handler = { _ in (200, Data(response.utf8), nil) }
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata)
+        let result = try await uploader.pushPendingWithOutcomes(items: rows.map { .init(entityId: $0.bookId, kind: .position) })
+        #expect(result.acceptedCount == 2)
+        #expect(result.rejected.map(\.position) == [rows[2]])
+        #expect(await metadata.cleanCount() == 2)
+    }
+
+    private actor Owner {
+        var value: UserID
+        init(_ value: UserID) { self.value = value }
+        func set(_ value: UserID) { self.value = value }
+    }
+    private actor ReadGate {
+        var entered = false
+        var arrivals: [CheckedContinuation<Void, Never>] = []
+        var waiter: CheckedContinuation<Void, Never>?
+        func enter() async {
+            entered = true; arrivals.forEach { $0.resume() }; arrivals.removeAll()
+            await withCheckedContinuation { waiter = $0 }
+        }
+        func waitForEntry() async {
+            if entered { return }
+            await withCheckedContinuation { arrivals.append($0) }
+        }
+        func resume() { waiter?.resume(); waiter = nil }
+    }
+
+    @Test("Account replacement during snapshot capture sends no stale request")
+    func ownerSwitchDuringCapture() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore(); let owner = Owner(UUID())
+        let position = Position(bookId: UUID(), locator: "old-account")
+        await positions.seed([position])
+        let gate = ReadGate(); await positions.suspendReads(gate)
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata, currentUserId: { await owner.value })
+        let pending = Task { try await uploader.pushPending(items: [.init(entityId: position.bookId, kind: .position)]) }
+        await gate.waitForEntry()
+        await owner.set(UUID())
+        await gate.resume()
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(PositionUploaderMockURLProtocol.capturedSnapshot().isEmpty)
+        #expect(await metadata.cleanCount() == 0)
+    }
+
+    @Test("Account replacement during network suspension cannot acknowledge old response")
+    func ownerSwitchDuringNetwork() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let metadata = StubMetadata(); let positions = StubPositionStore(); let owner = Owner(UUID())
+        let position = Position(bookId: UUID(), locator: "old-account")
+        await positions.seed([position])
+        let entered = DispatchSemaphore(value: 0); let resume = DispatchSemaphore(value: 0)
+        PositionUploaderMockURLProtocol.handler = { _ in
+            entered.signal(); resume.wait()
+            return (200, Data("{\"accepted_at\":123}".utf8), nil)
+        }
+        let uploader = PositionUploader(workerClient: makeWorkerClient(session: makeSession()), positionStore: positions,
+            bookStore: StubBookStore(), metadataStore: metadata, currentUserId: { await owner.value })
+        let pending = Task { try await uploader.pushPending(items: [.init(entityId: position.bookId, kind: .position)]) }
+        await Task.detached { entered.wait() }.value
+        await owner.set(UUID()); resume.signal()
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(await metadata.cleanCount() == 0)
+    }
+
 }

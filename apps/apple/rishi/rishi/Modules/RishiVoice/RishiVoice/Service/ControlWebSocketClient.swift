@@ -38,7 +38,11 @@ public struct ControlTerminalSignal: Sendable, Equatable {
 ///    client itself did not already detect (e.g. the user manually leaves
 ///    the voice screen). Safe to call even after `onTerminal` already
 ///    fired (no-op).
-public actor ControlWebSocketClient: ControlSocketConnecting {
+protocol CredentialBoundControlSocketConnecting: ControlSocketConnecting {
+    func isBound(to authority: SessionCredentialAuthority, context: CredentialRequestContext) -> Bool
+}
+
+public actor ControlWebSocketClient: ControlSocketConnecting, CredentialBoundControlSocketConnecting {
 
     // MARK: - Reconnect tuning
 
@@ -57,7 +61,11 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     private static let clientActivityJSON = #"{"type":"client_activity"}"#
 
     private let baseURL: URL
-    private let tokenProvider: any TokenProvider
+    private enum Authentication: Sendable {
+        case legacy(any TokenProvider)
+        case scoped(SessionCredentialAuthority, CredentialRequestContext)
+    }
+    private let authentication: Authentication
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let rishiSessionId: String
     private let urlSession: URLSession
@@ -96,7 +104,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
         onTerminal: @escaping @Sendable (ControlTerminalSignal) async -> Void
     ) {
         self.baseURL = baseURL
-        self.tokenProvider = tokenProvider
+        self.authentication = .legacy(tokenProvider)
         self.dataUseConsentProvider = dataUseConsentProvider
         self.rishiSessionId = rishiSessionId
         self.urlSession = urlSession
@@ -106,6 +114,29 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
         var continuation: AsyncStream<ControlMessage>.Continuation!
         self.messages = AsyncStream { continuation = $0 }
         self.continuation = continuation
+    }
+
+    init(baseURL: URL, credentialAuthority: SessionCredentialAuthority, credentialContext: CredentialRequestContext,
+         dataUseConsentProvider: any WorkerDataUseConsentProvider, rishiSessionId: String,
+         urlSession: URLSession, backoff: @escaping @Sendable (Int) -> Duration = ControlWebSocketClient.defaultBackoff,
+         onTerminal: @escaping @Sendable (ControlTerminalSignal) async -> Void) throws {
+        guard case .normal = credentialContext else { throw CredentialAuthenticationFailure.accountChanged }
+        self.baseURL = baseURL
+        self.authentication = .scoped(credentialAuthority, credentialContext)
+        self.dataUseConsentProvider = dataUseConsentProvider
+        self.rishiSessionId = rishiSessionId
+        self.urlSession = urlSession
+        self.backoff = backoff
+        self.onTerminal = onTerminal
+        var continuation: AsyncStream<ControlMessage>.Continuation!
+        self.messages = AsyncStream { continuation = $0 }
+        self.continuation = continuation
+    }
+
+    nonisolated func isBound(to authority: SessionCredentialAuthority, context: CredentialRequestContext) -> Bool {
+        guard case .scoped(let actualAuthority, let actualContext) = authentication,
+              case .normal(let actual) = actualContext, case .normal(let expected) = context else { return false }
+        return actualAuthority === authority && actual == expected
     }
 
     // MARK: - Public API
@@ -141,6 +172,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     /// already fired.
     public func disconnect() async {
         isIntentionalClose = true
+        generation += 1
         reconnectTask?.cancel()
         reconnectTask = nil
         if let currentTask {
@@ -172,15 +204,21 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     // MARK: - Connection
 
     private func attemptConnect() async {
-        guard !isTerminal else { return }
+        guard !isTerminal, !isIntentionalClose else { return }
+        generation += 1
+        let myGeneration = generation
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
             Log.event("voice.control.connect_blocked_without_consent", level: .info)
             return
         }
-        generation += 1
-        let myGeneration = generation
-
-        let request = await buildControlRequest()
+        guard generation == myGeneration, !isTerminal, !isIntentionalClose, !Task.isCancelled else { return }
+        let request: URLRequest
+        do { request = try await buildControlRequest() }
+        catch { return }
+        guard generation == myGeneration, !isTerminal, !isIntentionalClose, !Task.isCancelled else { return }
+        if case .scoped(let authority, let context) = authentication {
+            guard (try? authority.snapshot(for: context)) != nil else { return }
+        }
 
         Log.event("voice.control.connecting", level: .info, data: [
             "rishi_session_id": rishiSessionId,
@@ -197,13 +235,23 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
         }
     }
 
-    func buildControlRequest() async -> URLRequest {
+    func buildControlRequest() async throws -> URLRequest {
         var request = URLRequest(url: controlURL())
         request.httpShouldHandleCookies = false
-        if let token = await tokenProvider.token() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let hasConsent: Bool
+        switch authentication {
+        case .legacy(let provider):
+            if let token = await provider.token() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            hasConsent = await dataUseConsentProvider.hasCurrentDataUseConsent()
+        case .scoped(let authority, let context):
+            _ = try authority.snapshot(for: context)
+            hasConsent = await dataUseConsentProvider.hasCurrentDataUseConsent()
+            try Task.checkCancellation()
+            let snapshot = try authority.snapshot(for: context)
+            guard hasConsent else { throw WorkerDataUseConsentRequiredError() }
+            request.setValue("Bearer \(snapshot.session.token)", forHTTPHeaderField: "Authorization")
         }
-        if await dataUseConsentProvider.hasCurrentDataUseConsent() {
+        if hasConsent {
             request.setValue(
                 WorkerDataUseConsent.currentVersion,
                 forHTTPHeaderField: WorkerDataUseConsent.headerField

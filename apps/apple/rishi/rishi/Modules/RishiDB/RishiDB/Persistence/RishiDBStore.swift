@@ -74,7 +74,6 @@ public actor RishiDBStore {
         } catch {
             throw error
         }
-        defer { admissions.forEach { $0.release() } }
         try await persistBookActivation(permit: permit)
     }
 
@@ -178,6 +177,7 @@ public actor RishiDBStore {
     ) async throws -> T {
         let accountPermit = AccountMutationPermit(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration)
         var admissions: [SourceEffectAdmission] = []
+        defer { admissions.forEach { $0.release() } }
         do {
             admissions.append(try mutationAdmissionBarrier.admit(accountPermit))
             admissions.append(try mutationAdmissionBarrier.admit(permit))
@@ -187,6 +187,33 @@ public actor RishiDBStore {
             admissions.forEach { $0.release() }
             throw error
         }
+    }
+
+    /// Metadata publication remains valid after ordinary source close. The
+    /// original account/book fences still prevent deletion, replacement and revocation.
+    public nonisolated func admitReadingPublication(permit: BookReadingPermit) async throws -> SourceEffectAdmission {
+        let account = AccountMutationPermit(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration)
+        var admissions: [SourceEffectAdmission] = []
+        do {
+            admissions.append(try mutationAdmissionBarrier.admit(account))
+            admissions.append(try mutationAdmissionBarrier.admit(permit))
+            try await validateReadingPublication(permit: permit)
+            let retained = admissions
+            return SourceEffectAdmission { retained.forEach { $0.release() } }
+        } catch {
+            admissions.forEach { $0.release() }
+            throw error
+        }
+    }
+
+    private func validateReadingPublication(permit: BookReadingPermit) throws {
+        try Self.requireAccount(context, permit: AccountMutationPermit(ownerID: permit.ownerID, accountGeneration: permit.accountGeneration))
+        guard let book = try Self.book(context, id: permit.bookID), book.userId == permit.ownerID,
+              let authorization = try Self.readingAuthorization(context, bookID: permit.bookID),
+              authorization.ownerID == permit.ownerID,
+              UInt64(bitPattern: authorization.accountGenerationBits) == permit.accountGeneration,
+              authorization.contentRevision == permit.contentRevision,
+              !authorization.revoked, !authorization.tombstoned else { throw BookScopedMutationError.unauthorized }
     }
 
     private func acquireReadingEffectSourceAdmission(

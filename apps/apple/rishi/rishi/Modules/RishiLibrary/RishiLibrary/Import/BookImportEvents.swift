@@ -65,6 +65,15 @@ public actor BookImportEvents {
         }
     }
 
+    @discardableResult
+    public func publishIfNotCancelled(_ event: BookImportEvent) -> Bool {
+        guard !Task.isCancelled, event.isConsistent else { return false }
+        for continuation in subscribers.values {
+            continuation.yield(event)
+        }
+        return true
+    }
+
     private func removeSubscriber(_ id: UUID) {
         subscribers[id] = nil
     }

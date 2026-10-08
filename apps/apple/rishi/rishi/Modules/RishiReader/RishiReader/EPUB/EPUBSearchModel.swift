@@ -10,11 +10,9 @@ import Observation
 ///
 /// `@Observable @MainActor`: SwiftUI reads `resultRows` / `isSearching` /
 /// `query` directly from the shared search sheet, so all published state lives
-/// on the main actor. The heavy work — paging Readium's `SearchIterator` — runs
-/// inside a `Task` whose `await` points hop off-main; every write back to
-/// `results` happens after the `await` resumes on the MainActor (the class is
-/// `@MainActor`, so the continuation is main-isolated), keeping result writes
-/// main-safe under Swift 6 strict concurrency.
+/// on the main actor. Paging Readium's `SearchIterator` can suspend; each
+/// continuation and result write remains MainActor-isolated. An await alone
+/// does not guarantee that the iterator's work executes off-main.
 ///
 /// Search uses Readium 3.9's default-installed `ContentSearchService` (EPUBParser
 /// registers it automatically) — we just call `publication.search`. No custom

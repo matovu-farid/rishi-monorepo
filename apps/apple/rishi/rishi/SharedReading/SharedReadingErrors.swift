@@ -4,6 +4,8 @@ enum SharedReadingErrorCode: String, Codable, Sendable, Equatable {
     case authRequired = "AUTH_REQUIRED"
     case accountDeleted = "ACCOUNT_DELETED"
     case accountDeletionInProgress = "ACCOUNT_DELETION_IN_PROGRESS"
+    /// Local admission failure; never a reason to refresh under another account.
+    case accountChanged = "ACCOUNT_CHANGED"
     case onboardingRequired = "ONBOARDING_REQUIRED"
     case sessionLinkInvalid = "SESSION_LINK_INVALID"
     case sessionEnded = "SESSION_ENDED"
@@ -54,7 +56,7 @@ enum SharedReadingReconnectDecision: Sendable, Equatable {
         switch code {
         case .authRequired:
             .refreshBearer
-        case .accountDeleted, .accountDeletionInProgress:
+        case .accountDeleted, .accountDeletionInProgress, .accountChanged:
             .stop(code)
         case .admissionRequired, .admissionTicketExpired, .admissionTicketMismatch,
                 .admissionTicketStale, .invalidAdmission:
@@ -126,6 +128,7 @@ struct SharedReadingError: Error, Codable, Sendable, Equatable, LocalizedError {
         case .authRequired: return .init(code: code, message: message ?? "Sign in to join this reading session.", retryable: false, action: .signIn)
         case .accountDeleted: return .init(code: code, message: message ?? "This account is no longer available.", retryable: false, action: .dismiss)
         case .accountDeletionInProgress: return .init(code: code, message: message ?? "This account is being deleted and cannot join a reading session.", retryable: false, action: .dismiss)
+        case .accountChanged: return .init(code: code, message: message ?? "The signed-in account changed. Open this session again.", retryable: false, action: .dismiss)
         case .onboardingRequired: return .init(code: code, message: message ?? "Finish setup before joining this reading session.", retryable: false, action: .finishOnboarding)
         case .roomFull: return .init(code: code, message: message ?? "This reading room is full.", retryable: true, action: .manualRetry)
         case .forbidden: return .init(code: code, message: message ?? "You are not allowed to perform that session action.", retryable: false, action: .dismiss)
@@ -204,6 +207,7 @@ extension SharedReadingError {
         case .authRequired: "Sign in to join this reading session."
         case .accountDeleted: "This account is no longer available."
         case .accountDeletionInProgress: "This account is being deleted and cannot join a reading session."
+        case .accountChanged: "The signed-in account changed. Open this session again."
         case .onboardingRequired: "Finish setup before joining this reading session."
         case .sessionLinkInvalid: "This reading-session link is not valid."
         case .sessionEnded: "This reading session has ended."

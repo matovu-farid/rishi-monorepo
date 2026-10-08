@@ -21,10 +21,13 @@ final class ReaderSourceAttachment {
     private let cleanup: ReaderSourceInvalidationCleanup
     private let playbackOwner: ReadAloudPlaybackOwner
     private let voiceEntry: ReaderVoiceEntry
-    private let markDirty: ReaderPositionSyncBinding.DirtyMark
-    private let pollWait: ReaderPositionSyncBinding.PollWait
+    private let commit: ReaderPositionSyncBinding.Commit?
+    private let syncEngine: SyncEngine
+    private let scopedMutationStore: BookScopedMutationStore
     private var cleanupToken: ReaderSourceInvalidationCleanup.Token?
     private var binding: ReaderPositionSyncBinding?
+    private var closingTask: Task<ReaderPositionFlushResult, Never>?
+    private var closedResult: ReaderPositionFlushResult?
     private(set) var isDisposed = false
 
     init(
@@ -34,18 +37,18 @@ final class ReaderSourceAttachment {
         playbackOwner: ReadAloudPlaybackOwner,
         voiceEntry: ReaderVoiceEntry,
         cleanup: ReaderSourceInvalidationCleanup,
-        markDirty: ReaderPositionSyncBinding.DirtyMark? = nil,
-        pollWait: @escaping ReaderPositionSyncBinding.PollWait = {
-            try await Task.sleep(nanoseconds: 250_000_000)
-        }
+        scopedMutationStore: BookScopedMutationStore,
+        commit: ReaderPositionSyncBinding.Commit? = nil
     ) {
         self.viewModel = viewModel
         self.sourceLease = sourceLease
         self.playbackOwner = playbackOwner
         self.voiceEntry = voiceEntry
         self.cleanup = cleanup
-        self.markDirty = markDirty ?? { await syncEngine.markPositionDirty($0) }
-        self.pollWait = pollWait
+        self.syncEngine = syncEngine
+        self.scopedMutationStore = scopedMutationStore
+        self.commit = commit
+        installPositionBinding()
     }
 
     /// Register before attachment setup can suspend (notably PDF backfill).
@@ -67,18 +70,14 @@ final class ReaderSourceAttachment {
     }
 
     /// Called after setup awaits. A departed, invalidated or replaced host
-    /// cannot resurrect its poll or navigation callback group.
+    /// cannot resurrect its binding or navigation callback group.
     @discardableResult
     func installIfCurrent(_ current: ReaderSourceAttachment?, navigation: NavigationState) -> Bool {
         guard current === self, !isDisposed, !Task.isCancelled,
               let admission = try? sourceLease.effectAuthority.admit(sourceLease.sourceAccessPermit)
         else { return false }
         defer { admission.release() }
-        binding?.stop()
-        binding = ReaderPositionSyncBinding(
-            viewModel: viewModel, sourceLease: sourceLease,
-            markDirty: markDirty, pollWait: pollWait
-        )
+        if binding == nil { installPositionBinding() }
         viewModel.installNavigationCallbacks(
             owner: id,
             onUserNavigation: { [weak self, weak viewModel] locator in
@@ -137,6 +136,50 @@ final class ReaderSourceAttachment {
             }
         )
         return true
+    }
+
+    private func installPositionBinding() {
+        if let commit {
+            binding = ReaderPositionSyncBinding(viewModel: viewModel, sourceLease: sourceLease, commit: commit)
+        } else {
+            binding = ReaderPositionSyncBinding(
+                viewModel: viewModel, syncEngine: syncEngine,
+                sourceLease: sourceLease, scopedMutationStore: scopedMutationStore
+            )
+        }
+    }
+
+    @discardableResult
+    func flush() async -> ReaderPositionFlushResult {
+        guard !isDisposed else { return .revoked }
+        return await viewModel.flush()
+    }
+
+    /// Save the viewport promptly, retain the commit binding while playback
+    /// teardown emits its terminal narration cursor, then drain that cursor.
+    /// Native window close and SwiftUI disappearance share the same boundary.
+    @discardableResult
+    func close(
+        using drain: ReaderPositionLifecycleDrain,
+        stop: @escaping @MainActor () async -> Void,
+        reportFailure: @escaping @MainActor (ReaderPositionFlushResult) -> Void = { _ in }
+    ) async -> ReaderPositionFlushResult {
+        if let closingTask { return await closingTask.value }
+        guard !isDisposed else { return closedResult ?? .revoked }
+        let task = Task { @MainActor [self] in
+            let initial = await drain.flush { await self.flush() }
+            reportFailure(initial)
+            await stop()
+            let final = await drain.flush { await self.flush() }
+            reportFailure(final)
+            dispose()
+            return final
+        }
+        closingTask = task
+        let result = await task.value
+        closedResult = result
+        closingTask = nil
+        return result
     }
 
     func dispose() {

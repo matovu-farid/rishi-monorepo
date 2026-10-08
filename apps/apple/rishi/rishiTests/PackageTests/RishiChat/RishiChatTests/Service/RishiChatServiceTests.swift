@@ -85,7 +85,8 @@ struct RishiChatServiceTests {
         let client = WorkerClient(
             baseURL: base,
             session: session,
-            tokenProvider: StaticTokenProvider(token)
+            tokenProvider: StaticTokenProvider(token),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
         return (client, base)
     }

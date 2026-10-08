@@ -50,6 +50,81 @@ struct ReadAloudControllerTests {
         )
     }
 
+    private final class ResumePreflightGate {
+        var entered = false
+        private var continuation: CheckedContinuation<Void, Never>?
+        func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
+        func open() { continuation?.resume(); continuation = nil }
+    }
+
+    private func loadedEPUBReader() async throws -> ReaderViewModel {
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "alice", withExtension: "epub"))
+        let reader = ReaderViewModel(
+            book: Book(userId: UUID(), title: "Alice", formatType: .epub, fileURL: "alice.epub"),
+            userId: UUID(), documentURL: url, positionStore: ControllerNoopPositionStore()
+        )
+        await reader.load()
+        try #require(reader.publication != nil)
+        return reader
+    }
+
+    @Test("cancellation during EPUB preflight installs no synthesizer or playback session")
+    func cancelledEPUBPreflight() async throws {
+        let reader = try await loadedEPUBReader()
+        let controller = makeController()
+        let gate = ResumePreflightGate()
+        controller.epubResumePlannerForTests = { _, _ in await gate.wait(); return nil }
+        let location = Locator(href: try #require(RelativeURL(path: "chapter.xhtml")), mediaType: .xhtml, text: .init(highlight: "Selected"))
+        let start = Task { await controller.startReader(vm: reader, from: location) }
+        while !gate.entered { await Task.yield() }
+        start.cancel()
+        gate.open()
+        await start.value
+        #expect(controller.readiumSynthesizer == nil)
+        #expect(!controller.showControls)
+        controller.dispose()
+    }
+
+    @Test("superseded generation and revoked start admission are rechecked after EPUB preflight")
+    func supersededEPUBPreflight() async throws {
+        let reader = try await loadedEPUBReader()
+        let controller = makeController()
+        let gate = ResumePreflightGate()
+        let admission = ReadAloudStartAdmission()
+        controller.epubResumePlannerForTests = { _, _ in await gate.wait(); return nil }
+        let location = Locator(href: try #require(RelativeURL(path: "chapter.xhtml")), mediaType: .xhtml, text: .init(highlight: "Selected"))
+        let start = Task { await controller.startReader(vm: reader, from: location, admission: admission) }
+        while !gate.entered { await Task.yield() }
+        admission.revoke()
+        await controller.stop()
+        gate.open()
+        await start.value
+        #expect(controller.readiumSynthesizer == nil)
+        #expect(!controller.showControls)
+        controller.dispose()
+    }
+
+    @Test("source revocation during EPUB preflight refuses synthesizer installation")
+    func sourceRevokedDuringEPUBPreflight() async throws {
+        let fixture = try await ReaderDeletionFixture.make()
+        let lease = try await fixture.registry.acquireReadableSource(for: fixture.book)
+        let reader = fixture.makeReader(lease: lease)
+        await reader.load()
+        try #require(reader.publication != nil)
+        let controller = makeController()
+        let gate = ResumePreflightGate()
+        controller.epubResumePlannerForTests = { _, _ in await gate.wait(); return nil }
+        let location = try ReaderDeletionFixture.locator()
+        let start = Task { await controller.startReader(vm: reader, from: location) }
+        while !gate.entered { await Task.yield() }
+        lease.effectAuthority.closeAdmission(lease.sourceAccessPermit)
+        gate.open()
+        await start.value
+        #expect(controller.readiumSynthesizer == nil)
+        #expect(!controller.showControls)
+        controller.dispose()
+    }
+
     @Test("controller exposes the Now Playing playback control surface")
     func conformsToTTSPlaybackControlling() async {
         let controller = makeController()

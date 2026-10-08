@@ -1,105 +1,102 @@
 import Foundation
 
-
-
-
-/// Pushes pending positions to /api/sync/push.
-///
-/// SYNC-03: Position changes debounce-upload during reading.
-/// Debounce lives in SyncEngine (07-04) — this uploader is a single-shot batch writer.
-///
-/// PositionStore is bookId-indexed in v1 (`position(for bookId:)` returns the
-/// single Position row for a book), so `SyncQueueItem.entityId` for a pending
-/// position carries the BOOK id, not the Position UUID. The metadata row's
-/// entity_id thus matches the book id — markClean must use the same id.
+/// Captures one immutable local operation under the shared book gate. Network
+/// activity happens after release; acknowledgements compare the original revision.
 public final class PositionUploader: Sendable {
+    public enum UploadError: Error, Sendable { case encodingFailed(String) }
 
-    public enum UploadError: Error, Sendable {
-        case encodingFailed(String)
+    public struct RejectedSnapshot: Sendable, Equatable {
+        public let bookID: BookID
+        public let position: Position
+        public let dirtyAt: Date?
+        public let operationID: UUID
+        public let previousLastSyncedAt: Date?
     }
-
+    public struct PushResult: Sendable, Equatable {
+        public var acceptedCount = 0
+        public var rejected: [RejectedSnapshot] = []
+        public init() {}
+    }
     private let workerClient: WorkerClient
     private let positionStore: any PositionStore
-    private let bookStore: any BookStore
     private let metadataStore: any SyncMetadataStore
+    private let currentUserId: @Sendable () async -> UserID?
 
-    public init(
-        workerClient: WorkerClient,
-        positionStore: any PositionStore,
-        bookStore: any BookStore,
-        metadataStore: any SyncMetadataStore
-    ) {
+    public init(workerClient: WorkerClient, positionStore: any PositionStore,
+                bookStore: any BookStore, metadataStore: any SyncMetadataStore,
+                currentUserId: @escaping @Sendable () async -> UserID? = { nil }) {
         self.workerClient = workerClient
         self.positionStore = positionStore
-        self.bookStore = bookStore
         self.metadataStore = metadataStore
+        self.currentUserId = currentUserId
     }
 
-    /// Push the given items in a single batch. Returns the count of items
-    /// the worker accepted (live rows; stale-drain entries are not counted).
-    ///
-    /// Items whose local row has been deleted are silently markClean'd
-    /// against the current time so the queue drains them on the next refresh.
+    /// Caller holds the shared book gate through this check and retirement.
+    func positionMatches(_ snapshot: RejectedSnapshot) async throws -> Bool {
+        try await positionStore.position(for: snapshot.bookID) == snapshot.position
+    }
+
     @discardableResult
     public func pushPending(items: [SyncQueueItem]) async throws -> Int {
-        guard !items.isEmpty else { return 0 }
+        try await pushPendingWithOutcomes(items: items).acceptedCount
+    }
 
-        var changes: [SyncChange] = []
-        var resolvedIds: [UUID] = []
-        var droppedIds: [UUID] = []
-        var expectedDirtyAt: [UUID: Date] = [:]
-
+    public func pushPendingWithOutcomes(items: [SyncQueueItem]) async throws -> PushResult {
+        var result = PushResult()
+        let owner = await currentUserId()
+        var snapshots: [RejectedSnapshot] = []
         for item in items where item.kind == .position {
-            let capturedDirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .position)
-            expectedDirtyAt[item.entityId] = capturedDirtyAt
-            guard let position = try await positionStore.position(for: item.entityId) else {
-                droppedIds.append(item.entityId)
-                continue
+            try Task.checkCancellation()
+            let snapshot = try await metadataStore.withLiveBookIdentity(item.entityId) { [self] () async throws -> RejectedSnapshot? in
+                guard !(await metadataStore.hasProtectedPositionPublication(item.entityId)) else { return nil }
+                let dirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .position)
+                guard let position = try await positionStore.position(for: item.entityId) else {
+                    _ = try await metadataStore.markCleanIfUnchanged(entityId: item.entityId, kind: .position, expectedDirtyAt: dirtyAt, lastSyncedAt: Date(), remoteEtag: nil)
+                    return nil
+                }
+                let operationID = try await metadataStore.ensureOperationId(entityId: item.entityId, kind: .position)
+                return RejectedSnapshot(bookID: item.entityId, position: position, dirtyAt: dirtyAt,
+                                        operationID: operationID,
+                                        previousLastSyncedAt: try await metadataStore.lastSyncedAt(entityId: item.entityId, kind: .position))
             }
-            do {
-                let payload = try SyncPayloadCodec.encodePosition(position)
-                changes.append(SyncChange(
-                    kind: SyncEntityKind.position.rawValue,
-                    id: position.id,
-                    payload: payload,
-                    updatedAt: capturedDirtyAt ?? position.updatedAt,
-                    deleted: false
-                ))
-                resolvedIds.append(item.entityId)
-            } catch {
-                throw UploadError.encodingFailed(String(describing: error))
-            }
+            if let snapshot { snapshots.append(snapshot) }
         }
-
-        // Drain stale (deleted-locally) items so the queue stops surfacing them.
-        let now = Date()
-        for id in droppedIds {
-            _ = try await metadataStore.markCleanIfUnchanged(
-                entityId: id,
-                kind: .position,
-                expectedDirtyAt: expectedDirtyAt[id],
-                lastSyncedAt: now,
-                remoteEtag: nil
-            )
+        guard !snapshots.isEmpty else { return result }
+        let changes = try snapshots.map { snapshot in
+            SyncChange(kind: SyncEntityKind.position.rawValue, id: snapshot.position.id,
+                       operationId: snapshot.operationID.uuidString, payload: try SyncPayloadCodec.encodePosition(snapshot.position),
+                       updatedAt: snapshot.position.updatedAt, deleted: false)
         }
-
-        guard !changes.isEmpty else { return 0 }
-
+        try Task.checkCancellation()
+        guard await currentUserId() == owner else { throw CancellationError() }
         let response = try await workerClient.send(SyncPushEndpoint(body: .init(changes: changes)))
-        Log.event("sync.position.push.completed", level: .info, data: [
-            "count": String(resolvedIds.count),
-        ])
-        var pushedCount = 0
-        for id in resolvedIds {
-            let acknowledged = try await metadataStore.markCleanIfUnchanged(
-                entityId: id,
-                kind: .position,
-                expectedDirtyAt: expectedDirtyAt[id],
-                lastSyncedAt: response.acceptedAt,
-                remoteEtag: nil
-            )
-            if acknowledged { pushedCount += 1 }
+        try Task.checkCancellation()
+        guard await currentUserId() == owner else { throw CancellationError() }
+        for snapshot in snapshots {
+            let matching = response.outcomes.filter { UUID(uuidString: $0.operationId) == snapshot.operationID }
+            let accepted: Bool
+            if response.outcomes.isEmpty {
+                if response.accepted == false { result.rejected.append(snapshot); continue }
+                accepted = true // older Workers return only accepted_at
+            } else if matching.count == 1 {
+                switch matching[0].status {
+                case "applied", "duplicate": accepted = true
+                case "rejected": result.rejected.append(snapshot); continue
+                default: continue
+                }
+            } else { continue } // Missing or contradictory outcomes remain pending.
+            guard accepted else { continue }
+            let acknowledged = try await metadataStore.withLiveBookIdentity(snapshot.bookID) { [self] in
+                try Task.checkCancellation()
+                guard await currentUserId() == owner,
+                      !(await metadataStore.hasProtectedPositionPublication(snapshot.bookID)),
+                      try await positionStore.position(for: snapshot.bookID) == snapshot.position else { return false }
+                return try await metadataStore.markCleanIfCurrent(entityId: snapshot.bookID, kind: .position,
+                    expectedDirtyAt: snapshot.dirtyAt, expectedOperationId: snapshot.operationID,
+                    lastSyncedAt: response.acceptedAt, remoteEtag: nil)
+            }
+            if acknowledged { result.acceptedCount += 1 }
         }
-        return pushedCount
+        return result
     }
 }

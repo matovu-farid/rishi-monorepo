@@ -4,9 +4,8 @@
 //
 //  Swift Testing coverage for `ParagraphChunker.chunk(_:maxChars:)`.
 //
-//  Ported verbatim from apps/apple/rishi/rishiTests/Audio/ParagraphChunkerTests.swift
-//  with the import swapped from `@testable import rishi` to `import RishiCore`
-//  now that the chunker lives in the package. Behavior coverage is unchanged.
+//  Ported verbatim from apps/apple/rishi/rishiTests/Audio/ParagraphChunkerTests.swift.
+//  ParagraphChunker is compiled into the app module, which this test imports.
 //
 //  Covers (per Phase 24 D3 + plan must_haves):
 //    - empty / whitespace-only inputs return []
@@ -25,6 +24,7 @@
 
 import Testing
 import Foundation
+@testable import rishi
 
 
 struct ParagraphChunkerTests {

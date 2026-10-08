@@ -11,7 +11,7 @@ struct BookFingerprintService: Sendable {
 
     private let rootURL: URL
     private let bookStore: any BookStore
-    private let persistence: (any BookImportPersistence)?
+    private let persistence: (any BookFingerprintPersistence)?
     private let versionInspector: any ManagedFileVersionInspecting
     private let isTombstoned: (@Sendable (BookID) async -> Bool)?
     private let currentGeneration: @Sendable () async -> UInt64?
@@ -23,7 +23,7 @@ struct BookFingerprintService: Sendable {
     init(
         rootURL: URL,
         bookStore: any BookStore,
-        persistence: (any BookImportPersistence)? = nil,
+        persistence: (any BookFingerprintPersistence)? = nil,
         versionInspector: any ManagedFileVersionInspecting = FileManagedFileVersionInspector(),
         isTombstoned: (@Sendable (BookID) async -> Bool)? = nil,
         currentGeneration: @escaping @Sendable () async -> UInt64? = { nil },

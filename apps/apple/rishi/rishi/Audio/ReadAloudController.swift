@@ -24,34 +24,6 @@ private struct ExplicitReadAloudForwardIntent {
     let utteranceEpoch: UInt64
 }
 
-private struct PDFUtteranceCursor: Equatable, Sendable {
-    let page: Int
-    let ordinal: Int
-}
-
-private struct PDFUtteranceSkipStep {
-    let delta: Int
-    let playbackToken: UUID
-    let playbackGeneration: UInt64
-    let lease: RemoteCommandLease?
-}
-
-private struct PDFUtteranceTarget: Sendable {
-    let page: Int
-    let ordinal: Int
-    let paragraphStart: Int?
-    let locator: Locator
-}
-
-/// Readium `Publication` is used from multiple async content iterators and is
-/// internally synchronized. This box confines the detached PDF skip lookup's
-/// access to its own operation without transferring the publication value
-/// directly from the main actor.
-private final class PDFPublicationSendableBox: @unchecked Sendable {
-    let publication: Publication
-    init(_ publication: Publication) { self.publication = publication }
-}
-
 /// A room's playback speed is temporary. Readium loads settings for every
 /// utterance, so override reads here without modifying the user's preference.
 private actor SharedSessionTTSSettingsStore: TTSSettingsStore {
@@ -134,7 +106,8 @@ private func makeReadiumTokenizerFactory(
     selectionStartPage: Int? = nil,
     selectionStartUTF16Offset: Int? = nil,
     pdfParagraphMap: PDFNarrationParagraphMap? = nil,
-    pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor? = nil
+    pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor? = nil,
+    epubResumePlan: EPUBNarrationResumePlan? = nil
 ) -> PublicationSpeechSynthesizer.TokenizerFactory {
     if granularity == .sentence, let pdfParagraphMap {
         let selectionGate = pdfCursor == nil && selectionText != nil
@@ -151,29 +124,9 @@ private func makeReadiumTokenizerFactory(
             )
         }
     }
-    var didTrimSelection = false
+    let selectionGate = EPUBNarrationSelectionGate(plan: epubResumePlan, fallbackSelection: selectionText)
     return { language in
-        let tokenizer = CustomTTSTokenizer.tokenize(
-            defaultLanguage: language,
-            granularity: granularity
-        )
-        return { content in
-            if !didTrimSelection, let selectionText {
-                if let trimmed = CustomTTSTokenizer.trimming(
-                    content,
-                    before: selectionText
-                ) {
-                    didTrimSelection = true
-                    return try tokenizer(trimmed)
-                }
-                // Do not consume the one-shot trim while Readium is still
-                // yielding a non-text element before the selected passage.
-                if content is TextualContentElement {
-                    didTrimSelection = true
-                }
-            }
-            return try tokenizer(content)
-        }
+        selectionGate.tokenizer(defaultLanguage: language, granularity: granularity)
     }
 }
 
@@ -197,6 +150,10 @@ final class ReadAloudController {
     private var typedFailureObserverID: UUID?
     private var typedFailureObserverGeneration: UInt64 = 0
     private var isDisposed = false
+    private var terminalPlaybackTeardownTask: Task<Void, Never>?
+    private var terminalPlaybackTeardownIdentity: (session: UUID, generation: UInt64, id: UUID)?
+    private(set) var requiresPlaybackRestart = false
+    private var terminalFailureSessionToken: UUID?
 
     private(set) var bridge: ReaderTTSBridge? = nil
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
@@ -207,14 +164,31 @@ final class ReadAloudController {
     /// from the current audio position.
     private var isReadiumPlaybackPaused = false
     private var readiumPublication: Publication?
+    #if DEBUG
+    var epubResumePlannerForTests: (@MainActor (Publication, Locator) async throws -> EPUBNarrationResumePlan?)?
+    #endif
     private var readiumSynthesizerBuilder: (@MainActor (CustomTTSTokenizer.PDFNarrationTokenizationCursor?) -> PublicationSpeechSynthesizer?)?
     private var readiumRestartTarget: (page: Int, paragraphStart: Int?, utteranceOrdinal: Int?)?
     private var readiumRestartEpoch: UInt64 = 0
-    private var pdfSkipSteps: [PDFUtteranceSkipStep] = []
-    private var pdfSkipDrainTask: Task<Void, Never>?
-    private var pdfSkipDrainID: UUID?
-    private var pdfSkipExpectedSynthesizer: PublicationSpeechSynthesizer?
-    private var pdfSkipLogicalCursor: PDFUtteranceCursor?
+    @ObservationIgnored
+    private lazy var pdfNarrationSequencer = PDFNarrationSequencer(
+        isCurrent: { [weak self] request, expectedID in
+            guard let self, let synthesizer = self.readiumSynthesizer else { return false }
+            return (request.lease?.isValid ?? true)
+                && request.playbackToken == self.playbackSessionToken
+                && self.isCurrentPlaybackGeneration(request.playbackGeneration)
+                && ObjectIdentifier(synthesizer) == expectedID
+        },
+        resolve: { [weak self] cursor, delta in
+            await self?.resolvePDFUtteranceTarget(from: cursor, delta: delta)
+        },
+        apply: { [weak self] target, expectedID in
+            self?.applyPDFUtteranceTarget(target, expectedSynthesizerID: expectedID)
+        },
+        stopAtEnd: { [weak self] lease in
+            await self?.stop(preservingPosition: true, lease: lease)
+        }
+    )
     private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
     private var hasStartedReadAloudSession = false
     private var isPageEntryPrefetchEligible = false
@@ -334,10 +308,17 @@ final class ReadAloudController {
         await startReader(vm: vm, startLocator: startLocator)
     }
 
+    func startReader(vm: ReaderViewModel, from startLocator: Locator?, admission: ReadAloudStartAdmission) async {
+        await startReader(vm: vm, startLocator: startLocator, admission: admission)
+    }
+
     private func startReader(
         vm: ReaderViewModel,
-        startLocator explicitStartLocator: Locator?
+        startLocator explicitStartLocator: Locator?,
+        admission: ReadAloudStartAdmission? = nil
     ) async {
+        func canStart() -> Bool { !Task.isCancelled && (admission?.isValid ?? true) }
+        guard canStart() else { return }
         readerViewModel = vm
         sharedFollowerResumeAnchor = nil
         isDisposed = false
@@ -347,6 +328,11 @@ final class ReadAloudController {
             return
         }
         let generation = beginPlaybackGeneration()
+        await drainTerminalPlaybackTeardown()
+        guard isCurrentPlaybackGeneration(generation), canStart() else { return }
+        if let terminalFailureSessionToken {
+            ttsState.clearPreservedFailure(ifCurrent: terminalFailureSessionToken)
+        }
         acceptsReadAloudPositionUpdates = true
 
         // Invalidate page-entry prefetch immediately while the new playback
@@ -354,18 +340,45 @@ final class ReadAloudController {
         // stopped session eligible during this transition.
         isPageEntryPrefetchEligible = false
         await stopCurrentPlayback()
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        guard isCurrentPlaybackGeneration(generation), canStart() else { return }
         let sessionToken = UUID()
 
         let settings = await sharedSessionSettingsStore.load(userId: userId)
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        guard isCurrentPlaybackGeneration(generation), canStart() else { return }
         pickerInitial = settings
         let startLocator = await vm.readAloudStartLocator(explicit: explicitStartLocator)
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        guard isCurrentPlaybackGeneration(generation), canStart() else { return }
         let tokenizerGranularity: CustomTTSTokenizer.Granularity =
             vm.book.formatType == .pdf || publication.manifest.conforms(to: .pdf)
             ? .sentence
             : .paragraph
+        let epubResumePlan: EPUBNarrationResumePlan?
+        if tokenizerGranularity == .paragraph, let startLocator {
+            let sourceAdmission: SourceEffectAdmission?
+            do {
+                sourceAdmission = try admitReaderSource(vm)
+            } catch { return }
+            defer { sourceAdmission?.release() }
+            do {
+                #if DEBUG
+                if let planner = epubResumePlannerForTests {
+                    epubResumePlan = try await planner(publication, startLocator)
+                } else {
+                    epubResumePlan = try await EPUBNarrationResumePlanner.prepare(publication: publication, from: startLocator)
+                }
+                #else
+                epubResumePlan = try await EPUBNarrationResumePlanner.prepare(publication: publication, from: startLocator)
+                #endif
+            } catch { return }
+        } else {
+            epubResumePlan = nil
+        }
+        guard isCurrentPlaybackGeneration(generation), canStart() else { return }
+        // Preflight may suspend while the source/account is revoked. Re-admit
+        // before publishing any synthesizer or playback state.
+        let installAdmission: SourceEffectAdmission?
+        do { installAdmission = try admitReaderSource(vm) } catch { return }
+        defer { installAdmission?.release() }
         let synthesizerBuilder: @MainActor (CustomTTSTokenizer.PDFNarrationTokenizationCursor?) -> PublicationSpeechSynthesizer? = { [weak self, weak vm] cursor in
             guard let self, let vm else { return nil }
             return self.makeReadiumSynthesizer(
@@ -383,7 +396,8 @@ final class ReadAloudController {
                 selectionStartUTF16Offset: startLocator?.locations.otherLocations[
                     CustomTTSTokenizer.PDFLocatorMetadata.selectionStartUTF16
                 ]?.integer,
-                pdfCursor: cursor
+                pdfCursor: cursor,
+                epubResumePlan: epubResumePlan
             )
         }
         readiumSynthesizerBuilder = synthesizerBuilder
@@ -404,6 +418,7 @@ final class ReadAloudController {
         readiumRestartTarget = nil
         readiumRestartEpoch &+= 1
         ttsState.claimPlaybackSession(sessionToken)
+        requiresPlaybackRestart = false
         readiumSynthesizer = synthesizer
         readiumSynthesizerGeneration = generation
         didNotifyFirstUtterance = false
@@ -429,7 +444,7 @@ final class ReadAloudController {
         showControls = true
 
         await registerTTSPreemption(ownerID: sessionToken)
-        guard isCurrentPlaybackGeneration(generation) else {
+        guard isCurrentPlaybackGeneration(generation), canStart() else {
             await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
             return
         }
@@ -441,7 +456,7 @@ final class ReadAloudController {
             model: settings.model,
             speed: settings.speed
         )
-        guard isCurrentPlaybackGeneration(generation) else {
+        guard isCurrentPlaybackGeneration(generation), canStart() else {
             await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
             return
         }
@@ -450,7 +465,7 @@ final class ReadAloudController {
         // above keeps EPUB utterances paragraph-scoped and uses sentence
         // utterances for PDF playback.
         guard await activateAudioSessionForReadiumStart() else {
-            guard isCurrentPlaybackGeneration(generation) else {
+            guard isCurrentPlaybackGeneration(generation), canStart() else {
                 await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
                 return
             }
@@ -460,7 +475,7 @@ final class ReadAloudController {
             showControls = false
             return
         }
-        guard isCurrentPlaybackGeneration(generation) else {
+        guard isCurrentPlaybackGeneration(generation), canStart() else {
             await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
             return
         }
@@ -476,6 +491,14 @@ final class ReadAloudController {
         synthesizer.start(from: startLocator)
     }
 
+    private func admitReaderSource(_ vm: ReaderViewModel) throws -> SourceEffectAdmission? {
+        switch (vm.sourceEffects, vm.sourceAccessPermit) {
+        case (nil, nil): return nil
+        case let (.some(effects), .some(permit)): return try effects.admit(permit)
+        default: throw BookSourceAccessError.unknownSource
+        }
+    }
+
     private func makeReadiumSynthesizer(
         publication: Publication,
         settings: TTSSettings,
@@ -486,7 +509,8 @@ final class ReadAloudController {
         selectionText: Locator.Text?,
         selectionStartPage: Int?,
         selectionStartUTF16Offset: Int?,
-        pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor?
+        pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor?,
+        epubResumePlan: EPUBNarrationResumePlan?
     ) -> PublicationSpeechSynthesizer? {
         let engineFactory = makeReadiumEngineFactory(
             player: ttsEngine,
@@ -514,7 +538,8 @@ final class ReadAloudController {
             selectionStartPage: selectionStartPage,
             selectionStartUTF16Offset: selectionStartUTF16Offset,
             pdfParagraphMap: paragraphMap,
-            pdfCursor: pdfCursor
+            pdfCursor: pdfCursor,
+            epubResumePlan: epubResumePlan
         )
         return PublicationSpeechSynthesizer(
             publication: publication,
@@ -569,45 +594,37 @@ final class ReadAloudController {
         let stoppingGeneration = playbackGeneration
         let stoppingSessionToken = playbackSessionToken
         let resumeLocator = preservingPosition ? currentLocator : nil
-        let ownsSessionBeforeStop: Bool
-        if let stoppingSessionToken {
-            ownsSessionBeforeStop = ttsState.ownsPlaybackSession(stoppingSessionToken)
-        } else {
-            ownsSessionBeforeStop = ttsState.playbackSessionToken == nil
-        }
+        let ownsSessionBeforeStop = stoppingSessionToken.map {
+            ttsState.ownsPlaybackSession($0)
+        } ?? (ttsState.playbackSessionToken == nil)
         invalidatePlaybackGeneration()
-        if !preservingPosition {
-            acceptsReadAloudPositionUpdates = false
-        }
+        if !preservingPosition { acceptsReadAloudPositionUpdates = false }
         isPageEntryPrefetchEligible = true
         followCreditRemaining = 0
         #if DEBUG
         testSpeakingOverride = false
         #endif
-        guard playbackGeneration == stoppingGeneration &+ 1,
-              ownsSessionBeforeStop
-        else { return }
-        if let resumeLocator {
-            await onPersistReadAloudPosition?(resumeLocator)
+        await drainTerminalPlaybackTeardown()
+        guard lease?.isValid ?? true,
+              playbackGeneration == stoppingGeneration &+ 1,
+              ownsSessionBeforeStop else { return }
+        if let resumeLocator { await onPersistReadAloudPosition?(resumeLocator) }
+        guard lease?.isValid ?? true,
+              playbackGeneration == stoppingGeneration &+ 1 else { return }
+        if let stoppingSessionToken,
+           ttsState.ownsPlaybackSession(stoppingSessionToken) {
+            await stopCurrentPlayback(lease: lease)
+        } else if ttsState.playbackSessionToken != nil {
+            return
         }
-        let ownsStoppingSession: Bool
-        if let stoppingSessionToken {
-            ownsStoppingSession = ttsState.ownsPlaybackSession(stoppingSessionToken)
-        } else {
-            ownsStoppingSession = ttsState.playbackSessionToken == nil
+        guard lease?.isValid ?? true,
+              playbackGeneration == stoppingGeneration &+ 1,
+              ttsState.playbackSessionToken == nil else { return }
+        if let failureToken = stoppingSessionToken ?? terminalFailureSessionToken {
+            ttsState.clearPreservedFailure(ifCurrent: failureToken)
         }
-        guard playbackGeneration == stoppingGeneration &+ 1,
-              ownsStoppingSession
-        else { return }
-        await stopCurrentPlayback(lease: lease)
-        guard lease?.isValid ?? true else { return }
-        // teardownPlaybackSession may have suspended while a replacement
-        // session claimed the shared state. Never end that replacement's
-        // presence from the older stop path.
-        guard playbackGeneration == stoppingGeneration &+ 1,
-              ttsState.playbackSessionToken == nil
-        else { return }
         await ttsPresence.endSession()
+        guard playbackGeneration == stoppingGeneration &+ 1 else { return }
         showControls = false
         showPicker = false
         paragraphs = []
@@ -736,7 +753,17 @@ final class ReadAloudController {
             return nil
         }
         let effectiveSnapshot: ReadAloudUserNavigationSnapshot
-        if snapshot.utteranceEpoch == readiumUtteranceEpoch {
+        let liveParagraph = readiumObservedText ?? currentParagraph
+        let extractionContainsOriginalParagraph = ReadAloudUserNavigationIntent.containsWholeParagraph(
+            snapshot.spokenParagraph, in: destinationParagraphs
+        )
+        let extractionContainsLiveParagraph = ReadAloudUserNavigationIntent.containsWholeParagraph(
+            liveParagraph, in: destinationParagraphs
+        )
+        if snapshot.utteranceEpoch == readiumUtteranceEpoch
+            || (extractionContainsOriginalParagraph && !extractionContainsLiveParagraph) {
+            // An old whole paragraph can also be a fragment of the next
+            // utterance. Continuing that extraction spends only its old credit.
             effectiveSnapshot = snapshot
         } else {
             // Extraction may take long enough for the same session to advance.
@@ -959,164 +986,52 @@ final class ReadAloudController {
               lease?.isValid ?? true,
               let token = playbackSessionToken,
               let synthesizer = readiumSynthesizer else { return }
-        if pdfSkipDrainTask == nil {
-            guard let locator = currentLocator,
-                  let page = locator.locations.page,
-                  let ordinal = locator.locations.otherLocations[
-                    CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
-                  ]?.integer else { return }
-            pdfSkipLogicalCursor = PDFUtteranceCursor(page: page, ordinal: ordinal)
-            pdfSkipExpectedSynthesizer = synthesizer
-            let drainID = UUID()
-            pdfSkipDrainID = drainID
-            pdfSkipDrainTask = Task { [weak self] in
-                await self?.drainPDFUtteranceSkips(ownerID: drainID)
-            }
-        }
-        pdfSkipSteps.append(PDFUtteranceSkipStep(
-            delta: delta,
-            playbackToken: token,
-            playbackGeneration: playbackGeneration,
-            lease: lease
-        ))
+        let initialCursor: PDFNarrationCursor?
+        if let locator = currentLocator,
+           let page = locator.locations.page,
+           let ordinal = locator.locations.otherLocations[
+               CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
+           ]?.integer {
+            initialCursor = PDFNarrationCursor(page: page, ordinal: ordinal)
+        } else { initialCursor = nil }
+        pdfNarrationSequencer.enqueue(
+            PDFNarrationSkipRequest(delta: delta, playbackToken: token, playbackGeneration: playbackGeneration, lease: lease),
+            initialCursor: initialCursor, synthesizerID: ObjectIdentifier(synthesizer)
+        )
     }
 
-    private func drainPDFUtteranceSkips(ownerID: UUID) async {
-        defer {
-            if pdfSkipDrainID == ownerID {
-                pdfSkipDrainTask = nil
-                pdfSkipDrainID = nil
-                pdfSkipExpectedSynthesizer = nil
-                pdfSkipLogicalCursor = nil
-            }
-        }
-        while !Task.isCancelled,
-              pdfSkipDrainID == ownerID,
-              !pdfSkipSteps.isEmpty {
-            let step = pdfSkipSteps.removeFirst()
-            guard step.lease?.isValid ?? true,
-                  step.playbackToken == playbackSessionToken,
-                  isCurrentPlaybackGeneration(step.playbackGeneration),
-                  let expectedSynthesizer = pdfSkipExpectedSynthesizer,
-                  readiumSynthesizer === expectedSynthesizer,
-                  let logicalCursor = pdfSkipLogicalCursor else { continue }
-
-            let target = await resolvePDFUtteranceTarget(from: logicalCursor, delta: step.delta)
-            guard !Task.isCancelled,
-                  pdfSkipDrainID == ownerID,
-                  step.lease?.isValid ?? true,
-                  step.playbackToken == playbackSessionToken,
-                  isCurrentPlaybackGeneration(step.playbackGeneration),
-                  readiumSynthesizer === expectedSynthesizer else { return }
-
-            guard let target else {
-                if step.delta > 0 {
-                    await stop(preservingPosition: true, lease: step.lease)
-                }
-                return
-            }
-            pdfSkipLogicalCursor = PDFUtteranceCursor(page: target.page, ordinal: target.ordinal)
-            clearReadAloudRestartFenceForSkip()
-            let cursor = CustomTTSTokenizer.PDFNarrationTokenizationCursor(
-                targetPage: target.page,
-                utteranceOrdinal: target.ordinal
-            )
-            guard replacePDFSynthesizer(
-                old: expectedSynthesizer,
-                cursor: cursor,
-                startLocator: target.locator,
-                targetPage: target.page,
-                targetParagraphStart: target.paragraphStart,
-                targetOrdinal: target.ordinal
-            ) else { return }
-            pdfSkipExpectedSynthesizer = readiumSynthesizer
-        }
+    private func applyPDFUtteranceTarget(_ target: PDFNarrationTarget, expectedSynthesizerID: ObjectIdentifier) -> ObjectIdentifier? {
+        guard let synthesizer = readiumSynthesizer,
+              ObjectIdentifier(synthesizer) == expectedSynthesizerID else { return nil }
+        clearReadAloudRestartFenceForSkip()
+        let cursor = CustomTTSTokenizer.PDFNarrationTokenizationCursor(targetPage: target.page, utteranceOrdinal: target.ordinal)
+        guard replacePDFSynthesizer(
+            old: synthesizer, cursor: cursor, startLocator: target.locator,
+            targetPage: target.page, targetParagraphStart: target.paragraphStart, targetOrdinal: target.ordinal
+        ), let replacement = readiumSynthesizer else { return nil }
+        return ObjectIdentifier(replacement)
     }
 
     private func resolvePDFUtteranceTarget(
-        from cursor: PDFUtteranceCursor,
+        from cursor: PDFNarrationCursor,
         delta: Int
-    ) async -> PDFUtteranceTarget? {
+    ) async -> PDFNarrationTarget? {
         guard let publication = readiumPublication,
               let base = currentLocator,
               let readerViewModel else { return nil }
-        let documentURL = readerViewModel.documentURL
-        let sourceLifetime = readerViewModel.sourceLifetime
-        let publicationBox = PDFPublicationSendableBox(publication)
-        return await Task.detached(priority: .userInitiated) {
-            let publication = publicationBox.publication
-            let paragraphMap = PDFNarrationParagraphMap(
-                documentURL: documentURL,
-                sourceLifetime: sourceLifetime,
-                sourceEffects: readerViewModel.sourceEffects,
-                sourceAccessPermit: readerViewModel.sourceAccessPermit
-            )
-            let tokenizer = CustomTTSTokenizer.tokenizePDF(
-                defaultLanguage: publication.metadata.language,
-                paragraphMap: paragraphMap
-            )
-            let pageLocator = base.copy(locations: {
-                $0.fragments = ["page=\(cursor.page)"]
-            })
-            guard let content = publication.content(from: pageLocator) else { return nil }
-            let iterator = content.iterator()
-            guard let currentPageContent = try? await iterator.next(),
-                  let tokenized = try? tokenizer(currentPageContent),
-                  let currentText = tokenized.first as? TextContentElement else { return nil }
-            let segments = currentText.segments
-            let index = segments.firstIndex {
-                $0.locator.locations.otherLocations[CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal]?.integer == cursor.ordinal
-            }
-            if let index {
-                let adjacentIndex = index + delta
-                if segments.indices.contains(adjacentIndex) {
-                    let segment = segments[adjacentIndex]
-                    let ordinal = segment.locator.locations.otherLocations[
-                        CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
-                    ]?.integer ?? adjacentIndex
-                    return PDFUtteranceTarget(
-                        page: cursor.page,
-                        ordinal: ordinal,
-                        paragraphStart: segment.locator.locations.otherLocations[
-                            CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16
-                        ]?.integer,
-                        locator: segment.locator
-                    )
-                }
-            }
-
-            while true {
-                let adjacentPage = delta > 0
-                    ? try? await iterator.next()
-                    : try? await iterator.previous()
-                guard let adjacentPage,
-                      let adjacentElements = try? tokenizer(adjacentPage),
-                      let adjacentText = adjacentElements.first as? TextContentElement else { return nil }
-                guard !adjacentText.segments.isEmpty else { continue }
-                let segment = delta > 0 ? adjacentText.segments[0] : adjacentText.segments[adjacentText.segments.count - 1]
-                let page = segment.locator.locations.page ?? (cursor.page + delta)
-                let ordinal = segment.locator.locations.otherLocations[
-                    CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
-                ]?.integer ?? 0
-                return PDFUtteranceTarget(
-                    page: page,
-                    ordinal: ordinal,
-                    paragraphStart: segment.locator.locations.otherLocations[
-                        CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16
-                    ]?.integer,
-                    locator: segment.locator
-                )
-            }
-        }.value
+        let input = PDFNarrationLookupInput(
+            publication: publication,
+            documentURL: readerViewModel.documentURL,
+            baseLocator: base,
+            sourceLifetime: readerViewModel.sourceLifetime,
+            sourceEffects: readerViewModel.sourceEffects,
+            sourceAccessPermit: readerViewModel.sourceAccessPermit
+        )
+        return await PDFNarrationTargetResolver.resolve(input: input, cursor: cursor, delta: delta)
     }
 
     private func clearPDFUtteranceSkipQueue() {
-        pdfSkipSteps.removeAll()
-        pdfSkipDrainTask?.cancel()
-        pdfSkipDrainTask = nil
-        pdfSkipDrainID = nil
-        pdfSkipExpectedSynthesizer = nil
-        pdfSkipLogicalCursor = nil
+        pdfNarrationSequencer.cancel()
     }
 
     private func clearReadAloudRestartFenceForSkip() {
@@ -1423,6 +1338,11 @@ final class ReadAloudController {
         installTypedFailureObserver()
         guard !paragraphs.isEmpty else { return }
         let generation = beginPlaybackGeneration()
+        await drainTerminalPlaybackTeardown()
+        guard isCurrentPlaybackGeneration(generation) else { return }
+        if let terminalFailureSessionToken {
+            ttsState.clearPreservedFailure(ifCurrent: terminalFailureSessionToken)
+        }
         acceptsReadAloudPositionUpdates = true
 
         isPageEntryPrefetchEligible = false
@@ -1476,6 +1396,7 @@ final class ReadAloudController {
         )
         bridge = newBridge
         ttsState.claimPlaybackSession(sessionToken)
+        requiresPlaybackRestart = false
         hasStartedReadAloudSession = true
         self.paragraphs = paragraphs
         currentParagraph = nil
@@ -1575,56 +1496,126 @@ final class ReadAloudController {
         currentParagraph = paragraphs[index]
     }
 
+    /// Both failure callbacks synchronously reserve the same cleanup handle.
+    /// Starts and explicit stops drain it before changing playback ownership.
+    private func enqueueTerminalPlaybackTeardown(
+        sessionToken: UUID,
+        playbackGeneration: UInt64,
+        preservingFailure: Bool
+    ) -> Task<Void, Never> {
+        requiresPlaybackRestart = true
+        terminalFailureSessionToken = sessionToken
+        if let identity = terminalPlaybackTeardownIdentity,
+           identity.session == sessionToken,
+           identity.generation == playbackGeneration,
+           let task = terminalPlaybackTeardownTask {
+            return task
+        }
+        let id = UUID()
+        let previous = terminalPlaybackTeardownTask
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, self.playbackSessionToken == sessionToken else { return }
+            await self.teardownPlaybackSession(preservingFailure: preservingFailure)
+            if self.terminalPlaybackTeardownIdentity?.id == id {
+                self.terminalPlaybackTeardownTask = nil
+                self.terminalPlaybackTeardownIdentity = nil
+            }
+        }
+        terminalPlaybackTeardownIdentity = (sessionToken, playbackGeneration, id)
+        terminalPlaybackTeardownTask = task
+        return task
+    }
+
+    #if DEBUG
+    var playbackGenerationForRecoveryTests: UInt64 { playbackGeneration }
+
+    @discardableResult
+    func enqueuePlaybackFailureForTests() -> Task<Void, Never>? {
+        guard let sessionToken = playbackSessionToken else { return nil }
+        if ttsState.typedFailure == nil { ttsState.recordUserFacingFailure(.audioPlayback) }
+        return enqueueTerminalPlaybackTeardown(
+            sessionToken: sessionToken,
+            playbackGeneration: playbackGeneration,
+            preservingFailure: true
+        )
+    }
+    #endif
+
+    func drainTerminalPlaybackTeardown() async {
+        while let task = terminalPlaybackTeardownTask {
+            let id = terminalPlaybackTeardownIdentity?.id
+            await task.value
+            if terminalPlaybackTeardownIdentity?.id == id {
+                terminalPlaybackTeardownTask = nil
+                terminalPlaybackTeardownIdentity = nil
+            }
+        }
+    }
+
     private func teardownPlaybackSession(
         preservingFailure: Bool = false,
         lease: RemoteCommandLease? = nil
     ) async {
         guard lease?.isValid ?? true else { return }
+        // Capture the old resources before keyboard/prefetch cleanup suspends.
+        let ownedSessionToken = playbackSessionToken
+        let capturedBridge = bridge
+        let capturedSynthesizer = readiumSynthesizer
+        let capturedPrefetcher = readiumPrefetcher
+        let capturedRequestTokens = ttsState.activeTokenSnapshot
+        let generation = playbackGeneration
+        func stillCurrent() -> Bool {
+            playbackSessionToken == ownedSessionToken && playbackGeneration == generation
+        }
         clearPDFUtteranceSkipQueue()
         explicitReadAloudForwardIntent = nil
         readiumRestartTarget = nil
         readiumRestartEpoch &+= 1
         playbackTeardownDepth += 1
         defer { playbackTeardownDepth -= 1 }
-
         let inFlightKeyboardNavigation = keyboardParagraphNavigationTask
         keyboardParagraphNavigationGeneration &+= 1
         keyboardParagraphNavigationTask?.cancel()
         keyboardParagraphNavigationTask = nil
-        // A bridge navigation can be suspended inside the engine. Wait for it
-        // to return before stopping the bridge so an old request cannot resume
-        // and publish `.playing` after this teardown or a replacement session.
         await inFlightKeyboardNavigation?.value
-        guard lease?.isValid ?? true else { return }
-
-        let ownedSessionToken = playbackSessionToken
-        let ownsSharedSession = ownedSessionToken.map {
-            ttsState.ownsPlaybackSession($0)
-        } ?? false
-        if ownsSharedSession {
-            nowPlayingController?.detach()
-        }
+        guard lease?.isValid ?? true,
+              playbackSessionToken == ownedSessionToken else { return }
+        let ownsSharedSession = ownedSessionToken.map { ttsState.ownsPlaybackSession($0) } ?? false
+        if ownsSharedSession { nowPlayingController?.detach() }
         Log.event("tts.nav.stop", data: [
-            "hadSynthesizer": readiumSynthesizer != nil ? "1" : "0",
+            "hadSynthesizer": capturedSynthesizer != nil ? "1" : "0",
             "lastSeq": String(max(0, utteranceSeq - 1)),
             "lastPrefix": lastLoggedUtteranceText.map { String($0.prefix(60)) } ?? "",
         ])
-        await readiumPrefetcher?.stop()
-        readiumPrefetcher = nil
+        await capturedPrefetcher?.stop()
+        guard lease?.isValid ?? true,
+              playbackSessionToken == ownedSessionToken else { return }
+        if let capturedBridge { await capturedBridge.stop(lease: lease) }
+        guard lease?.isValid ?? true,
+              playbackSessionToken == ownedSessionToken else { return }
+        // A stop can invalidate this generation while it drains this task;
+        // its replacement cannot start until the same handle has completed.
+        guard stillCurrent() || terminalPlaybackTeardownIdentity?.session == ownedSessionToken else { return }
+        if bridge === capturedBridge { bridge = nil }
+        if readiumPrefetcher === capturedPrefetcher { readiumPrefetcher = nil }
+        if readiumSynthesizer === capturedSynthesizer { readiumSynthesizer = nil }
         readiumPublication = nil
         readiumSynthesizerBuilder = nil
         isReadiumPlaybackPaused = false
         lastPlayingLocator = nil
         lastPlayingUtteranceText = nil
-        if let bridge {
-            await bridge.stop(lease: lease)
-            self.bridge = nil
+        if let ownedSessionToken, ttsState.ownsPlaybackSession(ownedSessionToken) {
+            capturedSynthesizer?.stop()
+            // Readium cancellation starts engine stop asynchronously. Drain
+            // the tokened player too so this handle includes audio teardown.
+            if capturedSynthesizer != nil,
+               let capturedRequestTokens,
+               capturedRequestTokens.sessionToken == ownedSessionToken {
+                await ttsEngine.stop(ifCurrent: capturedRequestTokens, lease: lease ?? TTSAlwaysValidLease())
+                guard playbackSessionToken == ownedSessionToken else { return }
+            }
         }
-        guard lease?.isValid ?? true else { return }
-        if ownsSharedSession {
-            readiumSynthesizer?.stop()
-        }
-        readiumSynthesizer = nil
         readiumState = .stopped
         playbackSessionToken = nil
         readiumEpochLocator = nil
@@ -1636,13 +1627,9 @@ final class ReadAloudController {
         #if DEBUG
         testSpeakingOverride = false
         #endif
-        guard ownsSharedSession, let ownedSessionToken else { return }
-        guard ttsState.endSession(
-            preservingFailure: preservingFailure,
-            ifCurrent: ownedSessionToken
-        ) else { return }
-        // The controller owns the Readium lifecycle, so it releases the
-        // coordinator only when a session actually stops—not between passages.
+        guard let ownedSessionToken,
+              ttsState.endSession(preservingFailure: preservingFailure, ifCurrent: ownedSessionToken)
+        else { return }
         await coordinator.releaseActiveMode(.tts)
         await coordinator.unregisterHandlers(for: .tts, ownerID: ownedSessionToken)
     }
@@ -1655,22 +1642,10 @@ final class ReadAloudController {
         _ failure: WorkerAllowanceError,
         tokens: TTSPlaybackTokenSnapshot,
         playbackGeneration: UInt64,
-        observerGeneration: UInt64
+        observerGeneration: UInt64,
+        teardownTask: Task<Void, Never>
     ) async {
-        guard isValidTypedFailure(
-            tokens: tokens,
-            playbackGeneration: playbackGeneration,
-            observerGeneration: observerGeneration
-        ) else { return }
-
-        // Keep the typed failure alive while the controller tears down the
-        // Readium session. This prevents the generic alert from racing the
-        // upgrade sheet and ensures the observer's signal survives teardown.
-        await teardownPlaybackSession(preservingFailure: true)
-
-        // Teardown yields to the engine. A replacement start or disposal may
-        // have happened while it was suspended, so never show the prompt for
-        // the session that the user has already moved away from.
+        await teardownTask.value
         guard isValidTypedFailure(
             tokens: tokens,
             playbackGeneration: playbackGeneration,
@@ -1692,21 +1667,22 @@ final class ReadAloudController {
                 playbackGeneration: playbackGeneration,
                 observerGeneration: observerGeneration
             ) else { return }
+            let teardownTask = self.enqueueTerminalPlaybackTeardown(
+                sessionToken: tokens.sessionToken,
+                playbackGeneration: playbackGeneration,
+                preservingFailure: true
+            )
             Task { @MainActor [weak self] in
-                guard let self,
-                      self.isValidTypedFailure(
-                          tokens: tokens,
-                          playbackGeneration: playbackGeneration,
-                          observerGeneration: observerGeneration
-                      )
-                else { return }
+                guard let self else { return }
                 await self.handleTypedAllowanceFailure(
                     failure,
                     tokens: tokens,
                     playbackGeneration: playbackGeneration,
-                    observerGeneration: observerGeneration
+                    observerGeneration: observerGeneration,
+                    teardownTask: teardownTask
                 )
             }
+
         }
     }
 
@@ -1747,10 +1723,6 @@ final class ReadAloudController {
     private func invalidatePlaybackGeneration() {
         playbackGeneration &+= 1
     }
-
-    #if DEBUG
-    var playbackGenerationForRecoveryTests: UInt64 { playbackGeneration }
-    #endif
 
     private func isCurrentPlaybackGeneration(_ generation: UInt64) -> Bool {
         playbackGeneration == generation
@@ -1960,15 +1932,11 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
             }
         }
         let preservingFailure = ttsState.typedFailure != nil || ttsState.userFacingFailure != nil
-        Task { @MainActor [weak self] in
-            guard let self,
-                  self.readiumSynthesizer === synthesizer,
-                  self.readiumSynthesizerGeneration == generation,
-                  self.playbackSessionToken == sessionToken,
-                  self.ttsState.ownsPlaybackSession(sessionToken)
-            else { return }
-            await self.teardownPlaybackSession(preservingFailure: preservingFailure)
-        }
+        _ = enqueueTerminalPlaybackTeardown(
+            sessionToken: sessionToken,
+            playbackGeneration: generation,
+            preservingFailure: preservingFailure
+        )
     }
 }
 

@@ -15,14 +15,14 @@ struct CatalystReaderPaywallRoutingTests {
     func readerPaywallRequestsPresentPlans() {
         let state = CatalystReaderSubscriptionPresentationState()
 
-        state.handlePaywallRequest("narration_exhausted")
+        state.handlePaywallRequest(.narrationExhausted, serverPaidActive: true)
 
         #expect(state.isPresented)
         #expect(!state.pendingConfirmation)
         #expect(!state.showConfirmation)
 
         state.isPresented = false
-        state.handlePaywallRequest("voice_chat_exhausted")
+        state.handlePaywallRequest(.voiceChatExhausted, serverPaidActive: true)
 
         #expect(state.isPresented)
     }
@@ -31,12 +31,12 @@ struct CatalystReaderPaywallRoutingTests {
     func readerPromptHandoffForwardsQueuedRequestsOnce() {
         let handoff = ReaderPaywallRequestHandoff()
 
-        handoff.queue("narration_exhausted")
-        #expect(handoff.takeAfterPromptDismissal() == "narration_exhausted")
+        handoff.queue(.narrationExhausted)
+        #expect(handoff.takeAfterPromptDismissal() == .narrationExhausted)
         #expect(handoff.takeAfterPromptDismissal() == nil)
 
-        handoff.queue("voice_chat_exhausted")
-        #expect(handoff.takeAfterPromptDismissal() == "voice_chat_exhausted")
+        handoff.queue(.voiceChatExhausted)
+        #expect(handoff.takeAfterPromptDismissal() == .voiceChatExhausted)
     }
 
     @Test("ordinary prompt dismissal does not request plans")

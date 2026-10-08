@@ -100,7 +100,28 @@ public struct BookImportRetryExpectation: Sendable, Equatable {
     }
 }
 
-public protocol BookImportPersistence: Sendable {
+/// Digest lookup and generation-bound caching used by fingerprint verification.
+public protocol BookFingerprintPersistence: Sendable {
+    func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint?
+    func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization?
+    /// Persists a digest only while the same owned Book path, authorization,
+    /// and managed-file version are still current.
+    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool
+}
+
+/// Canonical read authorization and source transitions used by the source registry.
+public protocol BookReadingSourcePersistence: BookFingerprintPersistence {
+    func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool
+    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool
+    /// Returns the canonical reading authority only for the currently admitted
+    /// account generation. Adapters without persisted authorization fail closed.
+    func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit?
+    /// Returns the canonical authority only while this exact managed fingerprint
+    /// and Book path remain current in the same persistence read.
+    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit?
+}
+
+public protocol BookImportPersistence: BookReadingSourcePersistence {
     func reserveSampleRepair(_ request: SampleRepairReservationRequest) async throws -> SampleRepairReservation
     func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome
     func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration
@@ -109,7 +130,6 @@ public protocol BookImportPersistence: Sendable {
     func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration?
     func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation?
     func retryPendingMaterialization(expected: BookImportRetryExpectation, accountPermit: AccountMutationPermit, newSource: PendingBookMaterialization, verifiedSourceSHA256: String, verifiedSourceByteCount: Int64, verifiedSourceVersion: ManagedFileVersion, retiredAttempt: RetiredBookMaterializationAttempt) async throws -> BookRegistration?
-    func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool
     func recordPrepared(token: BookMaterializationToken, artifacts: VerifiedBookArtifacts) async throws -> Bool
     func claimPromotion(token: BookMaterializationToken, preparedFileIdentifier: String, promotionRevision: UUID) async throws -> Bool
     func recordPromoted(token: BookMaterializationToken, preparedFileIdentifier: String, destinationFileIdentifier: String, promotionRevision: UUID) async throws -> Bool
@@ -119,8 +139,6 @@ public protocol BookImportPersistence: Sendable {
     func quarantineRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID) async throws -> BookMaterializationToken?
     func reauthorizeWaitingRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64) async throws -> BookMaterializationToken?
     func refreshSourceBookmark(token: BookMaterializationToken, refreshedData: Data) async throws -> Bool
-    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool
-    func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization?
     /// Cleanup-only lookup remains available after the Book row and reading
     /// authorization have been deleted. The caller must already hold the
     /// admitted account deletion operation and validate the captured path.
@@ -129,17 +147,7 @@ public protocol BookImportPersistence: Sendable {
     func isBookPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool
     func deletePendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID, expectedToken: BookMaterializationToken) async throws -> Bool
     func pendingMaterializationForRecovery(bookID: BookID, ownerID: UserID, currentGeneration: UInt64) async throws -> PendingBookMaterialization?
-    func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint?
-    /// Returns the canonical reading authority only for the currently admitted
-    /// account generation. Adapters without persisted authorization fail closed.
-    func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit?
-    /// Returns the canonical authority only while this exact managed fingerprint
-    /// and Book path remain current in the same persistence read.
-    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit?
     func sampleRepairFingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint?
-    /// Persists a digest only while the same owned Book path, authorization,
-    /// and managed-file version are still current.
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool
     func recordServerAcceptance(permit: BookReadingPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool
     /// Temporary inbound bridge for a newly verified row that had no reading
     /// permit before its download began. Existing rows must use the book permit.
@@ -149,41 +157,12 @@ public protocol BookImportPersistence: Sendable {
 }
 
 public extension BookImportPersistence {
-    func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?, excludedBookIDs: Set<BookID>) async throws -> BookRegistration {
-        try await reserveRegistration(book: book, job: job, candidate: candidate.flatMap { excludedBookIDs.contains($0.bookID) ? nil : $0 })
-    }
-    func pendingMaterializationsForDeletionCleanup(ownerID: UserID) async throws -> [PendingBookMaterialization] { [] }
-    func isBookPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool { false }
-    func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome { .writeFailed }
-    func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation? { nil }
-    func retryPendingMaterialization(expected: BookImportRetryExpectation, accountPermit: AccountMutationPermit, newSource: PendingBookMaterialization, verifiedSourceSHA256: String, verifiedSourceByteCount: Int64, verifiedSourceVersion: ManagedFileVersion, retiredAttempt: RetiredBookMaterializationAttempt) async throws -> BookRegistration? { nil }
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
     func reserveSampleRepair(_ request: SampleRepairReservationRequest) async throws -> SampleRepairReservation {
         throw BookImportPersistenceError.sampleRepairUnsupported
     }
-    func discardUnpublishedRegistration(token: BookMaterializationToken) async throws -> Bool { false }
-    func sampleRepairFingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? {
-        try await fingerprint(bookID: bookID, ownerID: ownerID)
-    }
-    func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
-    func pendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? {
-        try await pendingMaterialization(bookID: bookID, ownerID: ownerID)
-    }
-    func deletePendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID, expectedToken: BookMaterializationToken) async throws -> Bool { false }
-    func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit? { nil }
-    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? { nil }
-    func recordServerAcceptance(permit: BookReadingPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
-    func recordServerAcceptance(accountPermit: AccountMutationPermit, expectedFingerprint: BookFileFingerprint, acceptance: BookServerAcceptance) async throws -> Bool { false }
-    func recordPrepared(token: BookMaterializationToken, artifacts: VerifiedBookArtifacts) async throws -> Bool { false }
-    func claimPromotion(token: BookMaterializationToken, preparedFileIdentifier: String, promotionRevision: UUID) async throws -> Bool { false }
-    func recordPromoted(token: BookMaterializationToken, preparedFileIdentifier: String, destinationFileIdentifier: String, promotionRevision: UUID) async throws -> Bool { false }
-    func refreshSourceBookmark(token: BookMaterializationToken, refreshedData: Data) async throws -> Bool { false }
-    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool { false }
-    func quarantineRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID) async throws -> BookMaterializationToken? { nil }
-    func reauthorizeWaitingRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64) async throws -> BookMaterializationToken? { nil }
 
-    func pendingMaterializationForRecovery(bookID: BookID, ownerID: UserID, currentGeneration: UInt64) async throws -> PendingBookMaterialization? {
-        try await pendingMaterialization(bookID: bookID, ownerID: ownerID)
+    func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?, excludedBookIDs: Set<BookID>) async throws -> BookRegistration {
+        try await reserveRegistration(book: book, job: job, candidate: candidate.flatMap { excludedBookIDs.contains($0.bookID) ? nil : $0 })
     }
 
     func reserveRegistration(book: Book, job: PendingBookMaterialization) async throws -> BookRegistration {

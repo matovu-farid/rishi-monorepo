@@ -137,7 +137,7 @@ struct CustomTTSEngineTests {
     func recordsTypedAllowanceFailureTokens() async {
         let state = TTSPlaybackState()
         let sessionToken = UUID()
-        let player = AllowanceFailingTTSPlayer()
+        let player = AllowanceFailingTTSPlayer(state: state)
         let engine = CustomTTSEngine(
             player: player,
             state: state,
@@ -408,10 +408,16 @@ private actor FinishWithoutPlayPlayer: TTSPlaying {
 }
 
 private actor AllowanceFailingTTSPlayer: TTSPlaying {
+    private let state: TTSPlaybackState
     private(set) var request: TTSStreamRequest?
+
+    init(state: TTSPlaybackState) { self.state = state }
 
     func start(request: TTSStreamRequest) async {
         self.request = request
+        // Production engines activate the request before playback/failure.
+        // The fake must supply the same ownership evidence for sticky errors.
+        await MainActor.run { state.activate(tokens: request.tokenSnapshot) }
     }
 
     func waitUntilFinished() async throws {

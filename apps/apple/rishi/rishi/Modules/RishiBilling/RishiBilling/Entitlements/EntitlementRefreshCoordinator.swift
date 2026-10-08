@@ -12,12 +12,22 @@ public actor EntitlementRefreshCoordinator {
         case aiFeatureTap
     }
 
+    private let credentialAuthority: SessionCredentialAuthority?
+    nonisolated func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        credentialAuthority === authority
+    }
+
     private let entitlementService: EntitlementService
-    private let launchRefresh: any EntitlementLaunchRefresh
-    private let signedInUserIdProvider: @Sendable () -> String?
+    private let launchRefresh: @Sendable (RefreshOwner) async -> Void
+    private enum RefreshOwner: Equatable, Sendable {
+        case legacy(String)
+        case credential(CredentialLease)
+
+    }
+    private let signedInOwnerProvider: @Sendable () -> RefreshOwner?
     private struct InFlightRefresh {
         let id: UUID
-        let userId: String
+        let owner: RefreshOwner
         let includesLaunchRefresh: Bool
         let task: Task<Result<EntitlementSnapshot, Error>, Never>
     }
@@ -28,7 +38,7 @@ public actor EntitlementRefreshCoordinator {
     }
     private struct EarlyLaunchGeneration {
         let id: UUID
-        let userId: String
+        let owner: RefreshOwner
         let task: Task<Result<EntitlementSnapshot, Error>, Never>
     }
 
@@ -43,9 +53,28 @@ public actor EntitlementRefreshCoordinator {
         launchRefresh: any EntitlementLaunchRefresh,
         signedInUserIdProvider: @escaping @Sendable () -> String?
     ) {
+        self.credentialAuthority = nil
         self.entitlementService = entitlementService
-        self.launchRefresh = launchRefresh
-        self.signedInUserIdProvider = signedInUserIdProvider
+        self.launchRefresh = { _ in await launchRefresh.refreshOnDeviceEntitlementAtLaunch() }
+        self.signedInOwnerProvider = { signedInUserIdProvider().map(RefreshOwner.legacy) }
+    }
+
+    init(
+        entitlementService: EntitlementService,
+        launchRefresh: any CredentialBoundEntitlementLaunchRefresh,
+        credentialAuthority: SessionCredentialAuthority
+    ) throws {
+        guard launchRefresh.usesCredentialAuthority(credentialAuthority),
+              entitlementService.usesCredentialAuthority(credentialAuthority) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        self.credentialAuthority = credentialAuthority
+        self.entitlementService = entitlementService
+        self.launchRefresh = { owner in
+            guard case .credential(let lease) = owner else { return }
+            await launchRefresh.refreshOnDeviceEntitlementAtLaunch(credentialContext: .normal(lease))
+        }
+        signedInOwnerProvider = { (try? credentialAuthority.snapshot()).map { .credential($0.lease) } }
     }
 
     /// Refresh snapshot and on-device entitlement when a user is signed in.
@@ -53,33 +82,48 @@ public actor EntitlementRefreshCoordinator {
         reason: RefreshReason = .foreground,
         force: Bool = false
     ) async -> Result<EntitlementSnapshot, Error>? {
-        // Force requests still coalesce with same-account work. The force
-        // flag is retained for source compatibility and caller intent, while
-        // Task 2 requires one shared in-flight refresh per account.
-        _ = force
-        guard let requestedUserId = signedInUserIdProvider() else { return nil }
+        guard let requestedOwner = signedInOwnerProvider() else { return nil }
+        return await refresh(reason: reason, force: force, requestedOwner: requestedOwner)
+    }
 
+    /// Explicit account admission is validated after the actor hop. A delayed
+    /// completion cannot refresh the account that replaced its original owner.
+    func refreshIfSignedIn(reason: RefreshReason = .foreground, force: Bool = false,
+                           credentialContext: CredentialRequestContext) async -> Result<EntitlementSnapshot, Error>? {
+        guard case .normal(let lease) = credentialContext,
+              let credentialAuthority, credentialAuthority.isCurrent(lease),
+              signedInOwnerProvider() == .credential(lease) else {
+            return .failure(EntitlementRefreshError.accountChanged)
+        }
+        return await refresh(reason: reason, force: force, requestedOwner: .credential(lease))
+    }
+
+    private func refresh(reason: RefreshReason, force: Bool,
+                         requestedOwner: RefreshOwner) async -> Result<EntitlementSnapshot, Error>? {
+        // Forced work still coalesces for the same original account.
+        _ = force
         while true {
-            guard signedInUserIdProvider() == requestedUserId else {
+            guard signedInOwnerProvider() == requestedOwner else {
                 return await accountChangedResult(
-                    expectedUserId: requestedUserId,
+                    expectedOwner: requestedOwner,
                     reason: reason
                 )
             }
 
             if reason == .launch,
                let early = earlyLaunchGeneration,
-               early.userId == requestedUserId {
+               early.owner == requestedOwner {
                 let result = await early.task.value
-                return revalidate(result, expectedUserId: requestedUserId)
+                return revalidate(result, expectedOwner: requestedOwner)
             }
 
             if let current = inFlightRefresh {
-                if current.userId != requestedUserId {
-                    let result = await current.task.value
-                    guard signedInUserIdProvider() == requestedUserId else {
+                if current.owner != requestedOwner {
+                    _ = await current.task.value
+                    clearInFlightIfMatching(current.id)
+                    guard signedInOwnerProvider() == requestedOwner else {
                         return await accountChangedResult(
-                            expectedUserId: requestedUserId,
+                            expectedOwner: requestedOwner,
                             reason: reason
                         )
                     }
@@ -89,35 +133,35 @@ public actor EntitlementRefreshCoordinator {
                 if reason == .launch && !current.includesLaunchRefresh {
                     let result = await launchPromotionResult(
                         source: current,
-                        expectedUserId: requestedUserId
+                        expectedOwner: requestedOwner
                     )
-                    return revalidate(result, expectedUserId: requestedUserId)
+                    return revalidate(result, expectedOwner: requestedOwner)
                 }
 
                 let result = await current.task.value
-                guard signedInUserIdProvider() == requestedUserId else {
+                guard signedInOwnerProvider() == requestedOwner else {
                     return .failure(EntitlementRefreshError.accountChanged)
                 }
-                return revalidate(result, expectedUserId: requestedUserId)
+                return revalidate(result, expectedOwner: requestedOwner)
             }
 
             let created = makeInFlightRefresh(
-                userId: requestedUserId,
+                owner: requestedOwner,
                 reason: reason
             )
             inFlightRefresh = created
             let result = await created.task.value
             clearInFlightIfMatching(created.id)
-            guard signedInUserIdProvider() == requestedUserId else {
+            guard signedInOwnerProvider() == requestedOwner else {
                 return .failure(EntitlementRefreshError.accountChanged)
             }
-            return revalidate(result, expectedUserId: requestedUserId)
+            return revalidate(result, expectedOwner: requestedOwner)
         }
     }
 
     private func launchPromotionResult(
         source: InFlightRefresh,
-        expectedUserId: String
+        expectedOwner: RefreshOwner
     ) async -> Result<EntitlementSnapshot, Error> {
         if let existing = launchPromotions[source.id] {
             return await existing.task.value
@@ -128,7 +172,7 @@ public actor EntitlementRefreshCoordinator {
             [self] in
             let result = await self.performLaunchPromotion(
                 source: source,
-                expectedUserId: expectedUserId
+                expectedOwner: expectedOwner
             )
             await self.clearLaunchPromotionIfMatching(
                 sourceID: source.id,
@@ -146,21 +190,21 @@ public actor EntitlementRefreshCoordinator {
 
     private func performLaunchPromotion(
         source: InFlightRefresh,
-        expectedUserId: String
+        expectedOwner: RefreshOwner
     ) async -> Result<EntitlementSnapshot, Error> {
         _ = await source.task.value
 
         while true {
-            guard signedInUserIdProvider() == expectedUserId else {
+            guard signedInOwnerProvider() == expectedOwner else {
                 return await accountChangedResult(
-                    expectedUserId: expectedUserId,
+                    expectedOwner: expectedOwner,
                     reason: .launch
                 )
             }
 
             guard let current = inFlightRefresh else {
                 let created = makeInFlightRefresh(
-                    userId: expectedUserId,
+                    owner: expectedOwner,
                     reason: .launch
                 )
                 inFlightRefresh = created
@@ -169,7 +213,7 @@ public actor EntitlementRefreshCoordinator {
                 return result
             }
 
-            if current.userId != expectedUserId {
+            if current.owner != expectedOwner {
                 _ = await current.task.value
                 await Task.yield()
                 continue
@@ -177,7 +221,7 @@ public actor EntitlementRefreshCoordinator {
 
             if current.id == source.id {
                 let promoted = makeInFlightRefresh(
-                    userId: expectedUserId,
+                    owner: expectedOwner,
                     reason: .launch
                 )
                 inFlightRefresh = promoted
@@ -204,7 +248,7 @@ public actor EntitlementRefreshCoordinator {
     }
 
     private func accountChangedResult(
-        expectedUserId: String,
+        expectedOwner: RefreshOwner,
         reason: RefreshReason
     ) async -> Result<EntitlementSnapshot, Error> {
         guard reason == .launch else {
@@ -212,54 +256,63 @@ public actor EntitlementRefreshCoordinator {
         }
 
         if let existing = earlyLaunchGeneration,
-           existing.userId == expectedUserId {
+           existing.owner == expectedOwner {
             return await existing.task.value
         }
 
         let reconciliationID = UUID()
         let task: Task<Result<EntitlementSnapshot, Error>, Never> = Task {
             [launchRefresh, self] in
-            await launchRefresh.refreshOnDeviceEntitlementAtLaunch()
+            await launchRefresh(expectedOwner)
             await self.clearEarlyLaunchGenerationIfMatching(reconciliationID)
             return .failure(EntitlementRefreshError.accountChanged)
         }
         earlyLaunchGeneration = EarlyLaunchGeneration(
             id: reconciliationID,
-            userId: expectedUserId,
+            owner: expectedOwner,
             task: task
         )
         return await task.value
     }
 
     private func makeInFlightRefresh(
-        userId: String,
+        owner: RefreshOwner,
         reason: RefreshReason
     ) -> InFlightRefresh {
         let id = UUID()
         let includesLaunchRefresh = reason == .launch
-        let userIdProvider = signedInUserIdProvider
+        let ownerProvider = signedInOwnerProvider
         let task: Task<Result<EntitlementSnapshot, Error>, Never> = Task {
-            [entitlementService, launchRefresh, userIdProvider] in
+            [entitlementService, launchRefresh, ownerProvider] in
             let result: Result<EntitlementSnapshot, Error>
-            if userIdProvider() == userId {
-                await entitlementService.bindToUser(userId: userId)
-                result = await entitlementService.refreshSnapshot(
-                    expectedUserId: userId,
-                    isCurrentUser: { userIdProvider() == userId }
-                )
+            if ownerProvider() == owner {
+                switch owner {
+                case .legacy(let userId):
+                    await entitlementService.bindToUser(userId: userId)
+                    result = await entitlementService.refreshSnapshot(
+                        expectedUserId: userId,
+                        isCurrentUser: { ownerProvider() == owner }
+                    )
+                case .credential(let lease):
+                    if await entitlementService.bindToUser(userId: lease.rawUserID, lease: lease) {
+                        result = await entitlementService.refreshSnapshot(lease: lease)
+                    } else {
+                        result = .failure(EntitlementRefreshError.accountChanged)
+                    }
+                }
             } else {
                 result = .failure(EntitlementRefreshError.accountChanged)
             }
 
             if includesLaunchRefresh {
-                await launchRefresh.refreshOnDeviceEntitlementAtLaunch()
+                await launchRefresh(owner)
             }
             return result
         }
 
         return InFlightRefresh(
             id: id,
-            userId: userId,
+            owner: owner,
             includesLaunchRefresh: includesLaunchRefresh,
             task: task
         )
@@ -277,10 +330,10 @@ public actor EntitlementRefreshCoordinator {
 
     private func revalidate(
         _ result: Result<EntitlementSnapshot, Error>,
-        expectedUserId: String
+        expectedOwner: RefreshOwner
     ) -> Result<EntitlementSnapshot, Error>? {
-        guard let currentUserId = signedInUserIdProvider() else { return nil }
-        guard currentUserId == expectedUserId else {
+        guard let currentOwner = signedInOwnerProvider() else { return nil }
+        guard currentOwner == expectedOwner else {
             return .failure(EntitlementRefreshError.accountChanged)
         }
         return result
@@ -292,4 +345,11 @@ public actor EntitlementRefreshCoordinator {
 @available(iOS 18.4, macOS 15.4, *)
 public protocol EntitlementLaunchRefresh: Sendable {
     func refreshOnDeviceEntitlementAtLaunch() async
+}
+
+/// Required normal-account launch admission; no ambient fallback/default.
+@available(iOS 18.4, macOS 15.4, *)
+protocol CredentialBoundEntitlementLaunchRefresh: EntitlementLaunchRefresh {
+    func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool
+    func refreshOnDeviceEntitlementAtLaunch(credentialContext: CredentialRequestContext) async
 }

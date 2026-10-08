@@ -15,21 +15,37 @@ func fetchProductIDs()->[ProductID]{
 @available(iOS 18.4, macOS 15.4, *)
 @MainActor @Observable
 public final class Store {
-    public static let shared: Store = .init()
 
     public private(set) var products: [Product] = []
     public private(set) var loadState: StoreLoadState = .idle
 
     public private(set) var error: StoreError?
+    private var errorOwner: CredentialLease?
+
+    func clearAccountProjection(lease: CredentialLease) {
+        guard errorOwner == lease else { return }
+        error = nil
+        errorOwner = nil
+    }
+
+    private let customerEntitlements: CustomerEntitlements?
+
+    init(customerEntitlements: CustomerEntitlements,
+         productLoader: @escaping @Sendable ([String]) async throws -> [Product] = { try await Product.products(for: $0) }) {
+        self.customerEntitlements = customerEntitlements
+        self.productLoader = productLoader
+    }
+
+    /// Catalog-only callers must explicitly decline purchase processing.
+    public enum PurchaseProcessing { case unavailable }
+    public init(productLoader: @escaping @Sendable ([String]) async throws -> [Product],
+                purchaseProcessing: PurchaseProcessing) {
+        self.productLoader = productLoader
+        customerEntitlements = nil
+    }
 
     private let productLoader: @Sendable ([String]) async throws -> [Product]
     private(set) var retryID = 0
-
-    public init(productLoader: @escaping @Sendable ([String]) async throws -> [Product] = { ids in
-        try await Product.products(for: ids)
-    }) {
-        self.productLoader = productLoader
-    }
 
     public var hasCompleteCurrentPlatformCatalog: Bool {
         Self.isCompleteCatalog(
@@ -55,6 +71,7 @@ public final class Store {
         loadState = .loading
         products = []
         error = nil
+        errorOwner = nil
         retryID &+= 1
 
         let productIDs = fetchProductIDs()
@@ -83,7 +100,14 @@ public final class Store {
         }
     }
 
-    public func process(purchaseResult: sending Product.PurchaseResult) async {
+    func process(purchaseResult: sending Product.PurchaseResult, credentialContext: CredentialRequestContext) async {
+        guard let customerEntitlements, customerEntitlements.isCurrent(credentialContext),
+              !Task.isCancelled else { return }
+        await processCaptured(purchaseResult: purchaseResult, credentialContext: credentialContext)
+    }
+
+    private func processCaptured(purchaseResult: sending Product.PurchaseResult,
+                                 credentialContext: CredentialRequestContext) async {
         switch purchaseResult {
         case .success(let verificationResult):
             let unsafeTransaction = verificationResult.unsafePayloadValue
@@ -106,15 +130,13 @@ public final class Store {
                 logger.error("""
                 Transaction ID \(t.id) for \(t.productID) is unverified: \(error)
                 """)
-                updateError(.invalidTransaction)
+                updateError(.invalidTransaction, credentialContext: credentialContext)
                 return
             }
 
-            await CustomerEntitlements.shared.process(
-                transaction: transaction,
-                jws: verificationResult.jwsRepresentation,
-                origin: .purchaseCompletion
-            )
+            guard let customerEntitlements else { return }
+            await customerEntitlements.process(transaction: transaction, jws: verificationResult.jwsRepresentation,
+                                               origin: .purchaseCompletion, credentialContext: credentialContext)
         case .pending:
             logger.debug("Pending")
             return
@@ -131,8 +153,10 @@ public final class Store {
         
     }
 
-    private func updateError(_ error: StoreError) {
+    private func updateError(_ error: StoreError, credentialContext: CredentialRequestContext? = nil) {
         self.error = error
+        if case .some(.normal(let lease)) = credentialContext { errorOwner = lease }
+        else { errorOwner = nil }
     }
 }
 

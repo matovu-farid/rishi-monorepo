@@ -14,6 +14,7 @@ final class CurrentUserBox {
         case loading
         case signedIn(user: User)
         case signedOut
+        case authenticationRecovery(AuthenticationRecovery)
     }
     var state: State
     
@@ -35,14 +36,15 @@ final class CurrentUserBox {
         self.state = .signedIn(user: user)
        
     }
-    func signout(){
-        Keychain.delete(.accessToken)
-        Keychain.delete(.refreshToken)
-        Keychain.delete(.userId)
-        Task {
-            try? await KeychainSessionStore().delete()
-        }
-        self.state = .signedOut
+    func signout() {
+        // Presentation only; the app-owned account transaction owns persistence.
+        state = .signedOut
+    }
+
+    /// Called only after the app-owned canonical clear has been admitted.
+    /// Credential persistence belongs to that owner, not this UI projection.
+    func signedOutAfterCredentialClear() {
+        state = .signedOut
     }
     
     

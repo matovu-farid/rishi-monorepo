@@ -30,16 +30,41 @@ final class AppDependencies {
     @MainActor static let shared = AppDependencies()
 
     private(set) var services: BootstrappedServices?
+    private(set) var bootstrapFailure: Error?
     nonisolated private static let accountGenerationKey = "rishi.account.generation"
-    private(set) var accountGeneration: UInt64 =
-        (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
+    private(set) var accountGeneration: UInt64
     private(set) var activeAccountIdentity: LibraryAccountIdentity?
 
     private var bootstrapTask: Task<Void, Never>?
-    private var launchEntitlementRefreshTask: Task<Result<EntitlementSnapshot, Error>?, Never>?
+    private var speechCatalogRefreshCoordinator: AppSpeechCatalogRefreshCoordinator?
     private var identityRequestToken: UInt64 = 0
     var pendingAccountChange: AccountChangeTransaction?
-    private var accountDeletionCleanupTransaction: AccountChangeTransaction?
+    private enum AccountEffectReservation {
+        case transaction(AccountChangeTransaction)
+        case restore(id: UUID, lease: CredentialLease)
+
+        func owns(_ transaction: AccountChangeTransaction) -> Bool {
+            guard case .transaction(let current) = self else { return false }
+            return current === transaction
+        }
+    }
+    @ObservationIgnored private var accountEffectReservation: AccountEffectReservation?
+    @ObservationIgnored private var injectedIdentityResources: CredentialIdentityResources?
+    let credentialAuthority: SessionCredentialAuthority
+    @ObservationIgnored private let persistAccountGeneration: @Sendable (UInt64) -> Void
+    private enum Construction: Sendable {
+        case application
+        case injected(@MainActor @Sendable (AccountChangeTransaction) async throws -> Void)
+    }
+    @ObservationIgnored private let construction: Construction
+    private(set) var credentialAuthenticationAdapter: CredentialAuthenticationAdapter?
+    private struct CredentialRetirement {
+        let context: CredentialRejectionContext?
+        let transaction: AccountChangeTransaction
+        let task: Task<Void, Never>
+    }
+    @ObservationIgnored private var credentialRetirement: CredentialRetirement?
+    private(set) var credentialRetirementResult: Result<Void, Error>?
     private var synchronousAccountTransitionFences: [UUID: @MainActor () -> Void] = [:]
     private var postSharedReadingDrainHandlers: [UUID: @MainActor (UUID) async -> Void] = [:]
     private var carPlayAccountChangeObservers: [UUID: (CarPlayAccountSnapshot?) -> Void] = [:]
@@ -49,13 +74,15 @@ final class AppDependencies {
         category: "cold-launch"
     )
 
+    let readerPositionSaveFailures = ReaderPositionSaveFailurePresentation()
+
     let macCommandRouter = MacCommandRouter()
 
     let macAccountMenu = MacAccountMenuModel()
 
     var cachedUserId: UUID? { userIdBox.value }
 
-    public let userIdBox = UserIdBox()
+    public let userIdBox: UserIdBox
 
     @ObservationIgnored
     private lazy var _backgroundSyncLifecycle = BackgroundSyncLifecycle(
@@ -67,67 +94,70 @@ final class AppDependencies {
         _backgroundSyncLifecycle
     }
 
-    nonisolated init() {}
+    // Construct the one authority before bootstrap without reading credential storage.
+    nonisolated init() {
+        credentialAuthority = SessionCredentialAuthority(persistence: SecuritySessionCredentialPersistence())
+        construction = .application
+        userIdBox = UserIdBox()
+        _accountGeneration = (UserDefaults.standard.object(forKey: Self.accountGenerationKey) as? NSNumber)?.uint64Value ?? 0
+        persistAccountGeneration = { UserDefaults.standard.set($0, forKey: Self.accountGenerationKey) }
+    }
+
+    /// Inactive staging constructor: callers supply the single authority,
+    /// identity box and generation storage. It never bootstraps live services.
+    init(
+        credentialAuthority: SessionCredentialAuthority,
+        userIdBox: UserIdBox,
+        accountGeneration: UInt64,
+        persistAccountGeneration: @escaping @Sendable (UInt64) -> Void,
+        credentialCleanup: @escaping @MainActor @Sendable (AccountChangeTransaction) async throws -> Void
+    ) {
+        self.credentialAuthority = credentialAuthority
+        self.userIdBox = userIdBox
+        self.accountGeneration = accountGeneration
+        self.persistAccountGeneration = persistAccountGeneration
+        self.construction = .injected(credentialCleanup)
+        activeAccountIdentity = userIdBox.value.map { LibraryAccountIdentity(userID: $0, generation: accountGeneration) }
+    }
+    /// Identity activation requires its actual collaborators; cleanup-only fixtures
+    /// retain the existing constructor and cannot publish an unactivated owner.
+    convenience init(
+        credentialAuthority: SessionCredentialAuthority, userIdBox: UserIdBox,
+        accountGeneration: UInt64, persistAccountGeneration: @escaping @Sendable (UInt64) -> Void,
+        credentialCleanup: @escaping @MainActor @Sendable (AccountChangeTransaction) async throws -> Void,
+        identityResources: CredentialIdentityResources
+    ) {
+        self.init(credentialAuthority: credentialAuthority, userIdBox: userIdBox,
+                  accountGeneration: accountGeneration, persistAccountGeneration: persistAccountGeneration,
+                  credentialCleanup: credentialCleanup)
+        injectedIdentityResources = identityResources
+        _ = installSynchronousAccountTransitionFence { [weak self, lifecycle = identityResources.lifecycle] in
+            guard let self, let ownerID = self.userIdBox.value else { return }
+            _ = lifecycle.fenceAccount(ownerID: ownerID, generation: self.accountGeneration)
+        }
+    }
+
+    /// Required adapters must share this exact authority, not merely equal leases.
+    nonisolated func usesCredentialAuthority(_ authority: SessionCredentialAuthority) -> Bool {
+        credentialAuthority === authority
+    }
+
+    private var credentialIdentityResources: CredentialIdentityResources? {
+        if let injectedIdentityResources { return injectedIdentityResources }
+        guard let services else { return nil }
+        return CredentialIdentityResources(
+            spotlight: services.systemIntegration.spotlight,
+            materialization: services.library.bookMaterializationCoordinator,
+            lifecycle: services.library.bookImportLifecycle,
+            mutations: services.library.scopedMutationStore
+        )
+    }
+
     @discardableResult
-    func replaceUserId(
-        _ newValue: UUID?,
-        allowDeferredCleanup: Bool = false,
-        forceTransition: Bool = false,
-        skipAccountFence: Bool = false
-    ) async -> Bool {
-        guard forceTransition || userIdBox.value != newValue else { return true }
-        guard accountDeletionCleanupTransaction == nil else { return false }
-        let transaction: AccountChangeTransaction?
-        if skipAccountFence {
-            transaction = nil
-        } else {
-            transaction = try? beginAccountChange()
-            pendingAccountChange = nil
-        }
-        let requestToken = identityRequestToken
-        await transaction?.drain.value
-
-        guard let spotlight = services?.systemIntegration.spotlight else {
-            guard identityRequestToken == requestToken else { return false }
-            if let newValue, let library = services?.library {
-                do {
-                    try await library.bookMaterializationCoordinator.authorizeAccount(ownerID: newValue, generation: accountGeneration)
-                } catch {
-                    Log.error("library.import.account-authorization.failed", error: error)
-                    return false
-                }
-                guard identityRequestToken == requestToken,
-                      library.bookImportLifecycle.activateAccount(ownerID: newValue, generation: accountGeneration) else { return false }
-            }
-            userIdBox.value = newValue
-            activeAccountIdentity = newValue.map { LibraryAccountIdentity(userID: $0, generation: accountGeneration) }
-            notifyCarPlayAccountChange()
-            return true
-        }
-
-        let result = await spotlight.transitionAccount {
-            guard self.identityRequestToken == requestToken else { return false }
-            if let newValue {
-                guard (try? await RishiAppIntentRuntime.validatedPersistedIdentity()) == newValue,
-                      self.identityRequestToken == requestToken else { return false }
-                if let library = self.services?.library {
-                    do {
-                        try await library.bookMaterializationCoordinator.authorizeAccount(ownerID: newValue, generation: self.accountGeneration)
-                    } catch {
-                        Log.error("library.import.account-authorization.failed", error: error)
-                        return false
-                    }
-                    guard self.identityRequestToken == requestToken,
-                          library.bookImportLifecycle.activateAccount(ownerID: newValue, generation: self.accountGeneration) else { return false }
-                }
-            }
-            self.userIdBox.value = newValue
-            self.activeAccountIdentity = newValue.map { LibraryAccountIdentity(userID: $0, generation: self.accountGeneration) }
-            self.notifyCarPlayAccountChange()
-            return true
-        }
-        return result.identityApplied
-            && (result.cleanupComplete || allowDeferredCleanup)
+    func replaceUserId(_ newValue: UUID?, allowDeferredCleanup: Bool = false,
+                       forceTransition: Bool = false, skipAccountFence: Bool = false) async -> Bool {
+        // Compatibility callers must migrate to the captured credential operations.
+        false
     }
 
     /// Synchronizes the CarPlay scene with the persisted identity. CarPlay
@@ -142,86 +172,381 @@ final class AppDependencies {
     /// Invalidates identity work synchronously, then begins the owner drain.
     /// The returned transaction is safe to await from a later Task.
     func beginAccountChange() throws -> AccountChangeTransaction {
-        guard accountDeletionCleanupTransaction == nil else {
+        // A canonical transition requires the caller's original attempt ticket.
+        throw CredentialAuthenticationFailure.accountChanged
+    }
+
+    /// Local admission precedes the credential fence; no suspension separates
+    /// that fence from the existing identity/generation fence and owned drain.
+    func beginAccountChange(
+        expectedCredentialTicket: CredentialAttemptTicket,
+        rejection: CredentialRejectionContext? = nil
+    ) throws -> AccountChangeTransaction {
+        guard accountEffectReservation == nil else {
             throw AccountDeletionCoordinatorError.accountChangedDuringDeletion
         }
-        let outgoingAccount = userIdBox.value
+        let outgoingNormalLease = (try? credentialAuthority.snapshot())?.lease
+        let transition = try credentialAuthority.beginTransition(expected: expectedCredentialTicket, rejection: rejection)
+        return commitAccountChange(credentialTransition: transition, outgoingNormalLease: outgoingNormalLease)
+    }
+
+    private func commitAccountChange(credentialTransition: CredentialTransition?, outgoingNormalLease: CredentialLease?) -> AccountChangeTransaction {
+        let capturedLocalAccountID = userIdBox.value
+        let credentialOwner: UUID?
+        if let credentialTransition, case .loaded(let outgoing) = credentialTransition.outgoing {
+            credentialOwner = DerivedUserID.from(outgoing.lease.rawUserID)
+        } else { credentialOwner = nil }
+        let outgoingAccount = capturedLocalAccountID ?? credentialOwner
         activeAccountIdentity = nil
+        readerPositionSaveFailures.clear()
         let outgoingGeneration = accountGeneration
         let outgoingAccountMutationPermit = outgoingAccount.map {
             AccountMutationPermit(ownerID: $0, accountGeneration: outgoingGeneration)
         }
         for fence in synchronousAccountTransitionFences.values { fence() }
         if let outgoingAccountMutationPermit {
-            services?.library.scopedMutationStore.closeAdmission(for: outgoingAccountMutationPermit)
+            (services?.library.scopedMutationStore ?? injectedIdentityResources?.mutations)?.closeAdmission(for: outgoingAccountMutationPermit)
         }
         identityRequestToken &+= 1
         incrementAccountGeneration()
         let services = self.services
+        let identityResources = injectedIdentityResources
         let activationToken = outgoingAccount.map { ownerID in
-            services?.library.bookImportLifecycle.activationToken(ownerID: ownerID, generation: accountGeneration)
+            (services?.library.bookImportLifecycle ?? identityResources?.lifecycle)?.activationToken(ownerID: ownerID, generation: accountGeneration)
                 ?? BookImportActivationToken(ownerID: ownerID, generation: accountGeneration, transitionEpoch: 0)
         }
         let postSharedReadingDrainHandlers = self.postSharedReadingDrainHandlers
         let drain = Task { @MainActor in
-            guard let services else { return }
-            if let outgoingAccount {
-                await services.sharedReadingSessionRegistry.drain(accountID: outgoingAccount)
-                // The registry has completed local close and its bounded
-                // remote leave window. Only now may UI routers release their
-                // detached live contexts and memory-only invitations.
-                for handler in postSharedReadingDrainHandlers.values {
-                    await handler(outgoingAccount)
+            if let services {
+                if let outgoingAccount {
+                    await services.sharedReadingSessionRegistry.drain(accountID: outgoingAccount)
+                    // The registry has completed local close and its bounded
+                    // remote leave window. Only now may UI routers release their
+                    // detached live contexts and memory-only invitations.
+                    for handler in postSharedReadingDrainHandlers.values {
+                        await handler(outgoingAccount)
+                    }
                 }
+                await services.audio.playbackOwner.stopForAccountChange()
             }
-            await services.audio.playbackOwner.stopForAccountChange()
             if let outgoingAccountMutationPermit {
-                try? await services.library.scopedMutationStore.revoke(outgoingAccountMutationPermit)
+                try? await (services?.library.scopedMutationStore ?? identityResources?.mutations)?.revoke(outgoingAccountMutationPermit)
             }
             if let outgoingAccount {
-                await services.library.bookImportLifecycle.drainAccount(outgoingAccount, generation: outgoingGeneration)
+                await (services?.library.bookImportLifecycle ?? identityResources?.lifecycle)?.drainAccount(outgoingAccount, generation: outgoingGeneration)
             }
         }
         let transaction = AccountChangeTransaction(
             expectedAccountGeneration: accountGeneration,
             outgoingAccountID: outgoingAccount,
+            capturedLocalAccountID: capturedLocalAccountID,
+            outgoingNormalCredentialLease: outgoingNormalLease,
             outgoingAccountGeneration: outgoingGeneration,
             activationToken: activationToken,
             outgoingAccountMutationPermit: outgoingAccountMutationPermit,
+            credentialTransition: credentialTransition,
             drain: drain
         )
         pendingAccountChange = transaction
         return transaction
     }
 
+    func installCredentialSession(
+        _ session: Session, refreshToken: String?, in transaction: AccountChangeTransaction
+    ) async throws -> CredentialSnapshot {
+        let authority = credentialAuthority
+        guard let resources = credentialIdentityResources else { throw CredentialIdentityActivationError.resourcesUnavailable }
+        await transaction.drain.value
+        try Task.checkCancellation()
+        guard let transition = transaction.credentialTransition,
+              isCurrentCredentialAccountChange(transaction), beginAccountCleanup(transaction) else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        defer { endAccountCleanup(transaction) }
+        if case .application = construction, transaction.outgoingAccountID != nil {
+            try await cleanupCredentialAccount(transaction)
+        }
+        var installed: CredentialSnapshot?
+        try await activateCredentialIdentity(
+            ownerID: DerivedUserID.from(session.userId), generation: transaction.expectedAccountGeneration,
+            resources: resources, isCurrent: { self.isCurrentCredentialAccountChange(transaction) }
+        ) {
+            let snapshot = try authority.install(session: session, refreshToken: refreshToken, in: transition)
+            let userID = DerivedUserID.from(snapshot.lease.rawUserID)
+            guard authority.performIfCurrent(snapshot.lease, mutation: {
+                self.userIdBox.value = userID
+                self.activeAccountIdentity = LibraryAccountIdentity(userID: userID, generation: self.accountGeneration)
+                self.pendingAccountChange = nil
+            }) else { throw CredentialAuthenticationFailure.accountChanged }
+            installed = snapshot
+        }
+        guard let installed else { throw CredentialAuthenticationFailure.accountChanged }
+        notifyCarPlayAccountChange()
+        return installed
+    }
+
+    /// Cold restore activates the current installed owner; it never reinstalls
+    /// credentials or creates an account-transition fence.
+    func restoreCredentialIdentity(_ snapshot: CredentialSnapshot) async throws {
+        let authority = credentialAuthority
+        guard let resources = credentialIdentityResources else { throw CredentialIdentityActivationError.resourcesUnavailable }
+        try Task.checkCancellation()
+        let ownerID = DerivedUserID.from(snapshot.lease.rawUserID)
+        guard pendingAccountChange == nil,
+              accountEffectReservation == nil,
+              userIdBox.value == nil || userIdBox.value == ownerID,
+              try authority.snapshot(for: .normal(snapshot.lease)).ticket == snapshot.ticket else {
+            throw CredentialAuthenticationFailure.accountChanged
+        }
+        let id = UUID()
+        let generation = accountGeneration
+        accountEffectReservation = .restore(id: id, lease: snapshot.lease)
+        defer {
+            if case .restore(let current, _)? = accountEffectReservation, current == id { accountEffectReservation = nil }
+        }
+        do {
+            try await activateCredentialIdentity(ownerID: ownerID, generation: generation, resources: resources,
+                isCurrent: {
+                    guard case .restore(let current, let lease)? = self.accountEffectReservation,
+                          current == id, lease == snapshot.lease, self.accountGeneration == generation else { return false }
+                    return authority.isCurrent(snapshot.lease)
+                }) {
+                    guard authority.performIfCurrent(snapshot.lease, mutation: {
+                        self.userIdBox.value = ownerID
+                        self.activeAccountIdentity = LibraryAccountIdentity(userID: ownerID, generation: generation)
+                    }) else { throw CredentialAuthenticationFailure.accountChanged }
+                }
+            notifyCarPlayAccountChange()
+        } catch {
+            // An authorization closed on failure cannot be reused; retry gets
+            // a fresh local generation while the credential lease stays intact.
+            if case .restore(let current, _)? = accountEffectReservation, current == id {
+                activeAccountIdentity = nil
+                incrementAccountGeneration()
+            }
+            throw error
+        }
+    }
+
+    private func activateCredentialIdentity(
+        ownerID: UUID, generation: UInt64, resources: CredentialIdentityResources,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool,
+        commit: @escaping @MainActor @Sendable () throws -> Void
+    ) async throws {
+        let permit = AccountMutationPermit(ownerID: ownerID, accountGeneration: generation)
+        var activationFailure: Error?
+        let result = await resources.spotlight.transitionAccount {
+            do {
+                try Task.checkCancellation()
+                guard isCurrent() else { throw CredentialAuthenticationFailure.accountChanged }
+                try await resources.materialization.authorizeAccount(ownerID: ownerID, generation: generation)
+                try Task.checkCancellation()
+                guard isCurrent(), resources.lifecycle.activateAccount(ownerID: ownerID, generation: generation) else {
+                    throw CredentialAuthenticationFailure.accountChanged
+                }
+                try commit()
+                return true
+            } catch {
+                activationFailure = error
+                return false
+            }
+        }
+        guard result.identityApplied, result.cleanupComplete, activationFailure == nil else {
+            resources.mutations.closeAdmission(for: permit)
+            _ = resources.lifecycle.fenceAccount(ownerID: ownerID, generation: generation)
+            do { try await resources.mutations.revoke(permit) }
+            catch {
+                await resources.lifecycle.drainAccount(ownerID, generation: generation)
+                throw error
+            }
+            await resources.lifecycle.drainAccount(ownerID, generation: generation)
+            if let activationFailure { throw activationFailure }
+            try Task.checkCancellation()
+            throw CredentialIdentityActivationError.spotlightCleanupIncomplete
+        }
+    }
+
+    /// Actual UI/defaults mutation stays on its owner with no await after the
+    /// lease comparison. The body must not call back into the authority.
+    func performCredentialMutation(_ lease: CredentialLease, mutation: () -> Void) -> Bool {
+        return credentialAuthority.performIfCurrent(lease, mutation: mutation)
+    }
+
+    func isCurrentCredentialAccountChange(_ transaction: AccountChangeTransaction) -> Bool {
+        let authority = credentialAuthority
+        guard
+              let transition = transaction.credentialTransition else { return false }
+        return authority.isCurrent(transition)
+            && pendingAccountChange === transaction
+            && accountGeneration == transaction.expectedAccountGeneration
+            && userIdBox.value == transaction.capturedLocalAccountID
+    }
+
+    func restoreCredentialOwnerAfterDeletionFailure(_ transaction: AccountChangeTransaction) async throws {
+        let authority = credentialAuthority
+        guard
+              let transition = transaction.credentialTransition,
+              pendingAccountChange === transaction,
+              accountGeneration == transaction.expectedAccountGeneration,
+              (accountEffectReservation == nil || accountEffectReservation?.owns(transaction) == true) else { throw CredentialAuthenticationFailure.accountChanged }
+        let restored = try authority.restoreOutgoing(in: transition)
+        if let token = transaction.activationToken, let library = services?.library {
+            try await library.scopedMutationStore.activate(AccountMutationPermit(ownerID: token.ownerID, accountGeneration: token.generation))
+            guard authority.isCurrent(restored.lease), accountGeneration == transaction.expectedAccountGeneration,
+                  library.bookImportLifecycle.activateAccount(token) else { throw CredentialAuthenticationFailure.accountChanged }
+        }
+        guard authority.performIfCurrent(restored.lease, mutation: {
+            userIdBox.value = DerivedUserID.from(restored.lease.rawUserID)
+            activeAccountIdentity = userIdBox.value.map { LibraryAccountIdentity(userID: $0, generation: accountGeneration) }
+            pendingAccountChange = nil
+        }) else { throw CredentialAuthenticationFailure.accountChanged }
+    }
+
+    /// Returns admission only. An initiating network/sync task must unwind
+    /// before the owned completion joins any account cleanup work.
+    func admitCredentialRejection(
+        _ code: CredentialRejectionCode,
+        context: CredentialRejectionContext
+    ) -> CredentialRetirementAdmission {
+        _ = code
+        let authority = credentialAuthority
+        if let existing = credentialRetirement,
+           existing.context == context,
+           let transition = existing.transaction.credentialTransition,
+           authority.isCurrent(transition) {
+            return .duplicate(transition.id)
+        }
+        guard let transaction = try? beginAccountChange(expectedCredentialTicket: context.ticket, rejection: context),
+              let transition = transaction.credentialTransition else { return .stale }
+        startCredentialRetirement(transaction, context: context)
+        return .admitted(transition.id)
+    }
+
+    /// Read-only projection of the existing owned retirement. The initiating
+    /// request never joins cleanup; UI consumes this on MainActor without an await.
+    func credentialRetirementProjection(
+        for rejection: CredentialRejectionContext
+    ) -> CredentialRetirementProjection? {
+        guard let retirement = credentialRetirement, retirement.context == rejection,
+              let transition = retirement.transaction.credentialTransition else { return nil }
+        return credentialRetirementProjection(for: transition)
+    }
+
+    /// Explicit sign-out/rollback retains its original transition. Reuse the
+    /// same owned completion; never look up an ambient replacement for the UI.
+    func credentialRetirementProjection(
+        for original: CredentialTransition
+    ) -> CredentialRetirementProjection? {
+        let authority = credentialAuthority
+        guard let retirement = credentialRetirement,
+              let transition = retirement.transaction.credentialTransition,
+              transition.id == original.id, transition.ticket == original.ticket,
+              authority.isCurrent(transition),
+              accountGeneration == retirement.transaction.expectedAccountGeneration else { return nil }
+        let status: CredentialRetirementProjection.Status
+        switch credentialRetirementResult {
+        case .success?:
+            guard pendingAccountChange == nil, userIdBox.value == nil else { return nil }
+            status = .completed
+        case .failure(let error)?:
+            guard pendingAccountChange === retirement.transaction else { return nil }
+            status = .failed(error)
+        case nil:
+            guard pendingAccountChange === retirement.transaction else { return nil }
+            status = .pending
+        }
+        return CredentialRetirementProjection(transition: transition,
+            ticket: authority.attemptTicket(), status: status)
+    }
+
+    func retireCredentialAccount(_ transaction: AccountChangeTransaction) -> Task<Void, Never>? {
+        let authority = credentialAuthority
+        guard let transition = transaction.credentialTransition,
+              authority.isCurrent(transition) else { return nil }
+        if let existing = credentialRetirement, existing.transaction === transaction { return existing.task }
+        return startCredentialRetirement(transaction, context: nil)
+    }
+
+    /// Durable failure stays fenced and visible; retry reuses its transaction
+    /// and cannot retire a subsequently installed account.
+    func retryCredentialRetirement() -> Task<Void, Never>? {
+        let authority = credentialAuthority
+        guard let existing = credentialRetirement,
+              case .failure? = credentialRetirementResult,
+              let transition = existing.transaction.credentialTransition,
+              authority.isCurrent(transition) else { return nil }
+        return startCredentialRetirement(existing.transaction, context: existing.context)
+    }
+
+    @discardableResult
+    private func startCredentialRetirement(
+        _ transaction: AccountChangeTransaction,
+        context: CredentialRejectionContext?
+    ) -> Task<Void, Never> {
+        credentialRetirementResult = nil
+        let task = Task { @MainActor [weak self] in
+            await transaction.drain.value
+            guard let self, self.beginAccountCleanup(transaction) else { return }
+            defer { self.endAccountCleanup(transaction) }
+            do {
+                switch self.construction {
+                case .application: try await self.cleanupCredentialAccount(transaction)
+                case .injected(let cleanup): try await cleanup(transaction)
+                }
+                try self.clearCredentialSessionAndIdentity(in: transaction)
+                self.credentialRetirementResult = .success(())
+            } catch {
+                self.credentialRetirementResult = .failure(error)
+            }
+        }
+        credentialRetirement = CredentialRetirement(context: context, transaction: transaction, task: task)
+        return task
+    }
+
+    /// The reservation includes this final write/publication; callers release
+    /// only after it returns, never before dispatching a later sign-out Task.
+    func clearCredentialSessionAndIdentity(in transaction: AccountChangeTransaction) throws {
+        let authority = credentialAuthority
+        guard
+              let transition = transaction.credentialTransition,
+              accountEffectReservation?.owns(transaction) == true,
+              pendingAccountChange === transaction else { throw CredentialAuthenticationFailure.accountChanged }
+        switch authority.clear(in: transition) {
+        case .superseded: throw CredentialAuthenticationFailure.accountChanged
+        case .persistenceIncomplete(let failure): throw CredentialAuthenticationFailure.unavailable(failure)
+        case .cleared: break
+        }
+        guard authority.performIfCurrent(transition, mutation: {
+            userIdBox.value = nil
+            activeAccountIdentity = nil
+            pendingAccountChange = nil
+        }) else { throw CredentialAuthenticationFailure.accountChanged }
+        notifyCarPlayAccountChange()
+    }
+
     /// A failed server deletion leaves the local identity signed in. Reopen
     /// its active generation and discard only the completed transition token
     /// that deletion just drained.
-    func restoreOwnerAfterDeletionFailure(_ token: BookImportActivationToken) async {
-        guard userIdBox.value == token.ownerID, accountGeneration == token.generation else { return }
-        if let mutations = services?.library.scopedMutationStore {
-            do {
-                try await mutations.activate(AccountMutationPermit(ownerID: token.ownerID, accountGeneration: token.generation))
-            } catch {
-                Log.error("account.mutation-authorization.restore.failed", error: error)
-                return
-            }
-        }
-        if let lifecycle = services?.library.bookImportLifecycle, !lifecycle.activateAccount(token) { return }
-        activeAccountIdentity = LibraryAccountIdentity(userID: token.ownerID, generation: token.generation)
-        if pendingAccountChange?.activationToken == token {
-            pendingAccountChange = nil
-        }
-    }
+    func restoreOwnerAfterDeletionFailure(_ token: BookImportActivationToken) async {}
 
     /// Reserves global account cleanup after the server deletion succeeds.
     /// Identity transitions stay closed while purge operations suspend.
     func beginAccountDeletionCleanup(_ transaction: AccountChangeTransaction) -> Bool {
-        guard accountDeletionCleanupTransaction == nil,
+        beginAccountCleanup(transaction)
+    }
+
+    func beginAccountCleanup(_ transaction: AccountChangeTransaction) -> Bool {
+        guard let transition = transaction.credentialTransition,
+              credentialAuthority.isCurrent(transition) else { return false }
+        return claimAccountCleanup(transaction)
+    }
+
+    private func claimAccountCleanup(_ transaction: AccountChangeTransaction) -> Bool {
+        guard accountEffectReservation == nil,
               accountGeneration == transaction.expectedAccountGeneration,
-              userIdBox.value == transaction.outgoingAccountID,
+              userIdBox.value == transaction.capturedLocalAccountID,
               pendingAccountChange === transaction else { return false }
-        accountDeletionCleanupTransaction = transaction
+        accountEffectReservation = .transaction(transaction)
         return true
     }
 
@@ -229,8 +554,12 @@ final class AppDependencies {
     /// on MainActor, so no other transition can interleave between release and
     /// the sign-out closure's start.
     func endAccountDeletionCleanup(_ transaction: AccountChangeTransaction) {
-        guard accountDeletionCleanupTransaction === transaction else { return }
-        accountDeletionCleanupTransaction = nil
+        endAccountCleanup(transaction)
+    }
+
+    func endAccountCleanup(_ transaction: AccountChangeTransaction) {
+        guard accountEffectReservation?.owns(transaction) == true else { return }
+        accountEffectReservation = nil
     }
 
     @discardableResult
@@ -295,7 +624,7 @@ final class AppDependencies {
 
     private func incrementAccountGeneration() {
         accountGeneration &+= 1
-        UserDefaults.standard.set(accountGeneration, forKey: Self.accountGenerationKey)
+        persistAccountGeneration(accountGeneration)
         NotificationCenter.default.post(
             name: .rishiAccountTransitionStarted,
             object: self,
@@ -309,6 +638,7 @@ final class AppDependencies {
     }
 
     func bootstrap() async {
+        guard case .application = construction else { return }
         if let inFlight = bootstrapTask {
             await inFlight.value
             return
@@ -323,8 +653,52 @@ final class AppDependencies {
                 "cold-launch.bootstrap",
                 id: signpostId
             )
-            let built = await Self.makeServices(userIdBox: self.userIdBox)
+            do {
+            let authority = self.credentialAuthority
+            let built = try await Self.makeServices(userIdBox: self.userIdBox, authority: authority,
+                admitRejection: { [weak self] code, context in
+                    guard let self else { return .stale }
+                    return await self.admitCredentialRejection(code, context: context)
+                })
             self.services = built
+            self.credentialAuthenticationAdapter = try CredentialAuthenticationAdapter(
+                    authority: authority, dependencies: self, worker: built.workerClient, consent: built.dataUseConsentStore,
+                    installSession: { [weak self] session, refresh, transaction in
+                        guard let self else { throw CredentialAuthenticationFailure.accountChanged }
+                        return try await self.installCredentialSession(session, refreshToken: refresh, in: transaction)
+                    }, restoreIdentity: { [weak self] snapshot in
+                        guard let self else { throw CredentialAuthenticationFailure.accountChanged }
+                        try await self.restoreCredentialIdentity(snapshot)
+                        guard authority.isCurrent(snapshot.lease) else { throw CredentialAuthenticationFailure.accountChanged }
+                        await built.voice.sessionRegistry.recoverPersistedSession()
+                    }, registerPendingDeviceToken: { [weak self] snapshot in
+                        guard let self else { throw CredentialAuthenticationFailure.accountChanged }
+                        try await self.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
+                            platform: Self.devicePlatform, appVersion: Self.appVersion,
+                            credentialContext: .normal(snapshot.lease))
+                    }, completeDebugOnboarding: { snapshot in
+                        guard await built.onboarding.state.setHasCompletedOnboarding(true, lease: snapshot.lease, authority: authority)
+                        else { throw CredentialAuthenticationFailure.accountChanged }
+                    }, refreshEntitlement: { snapshot in
+                        guard await built.billing.entitlementService.bindToUser(userId: snapshot.lease.rawUserID, lease: snapshot.lease)
+                        else { return }
+                        _ = await built.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn, credentialContext: .normal(snapshot.lease))
+                    })
+            built.billing.customerEntitlements.startObserving()
+            self.bootstrapFailure = nil
+            let speechCatalogRefreshCoordinator = AppSpeechCatalogRefreshCoordinator(
+                store: TTSPickerCatalogStore.shared,
+                loader: { try await built.workerClient.send(SpeechOptionsEndpoint()) },
+                isSuppressed: {
+                    #if DEBUG
+                    ProcessInfo.processInfo.environment["RISHI_E2E_REAL_AUTH"] == "1"
+                    #else
+                    false
+                    #endif
+                }
+            )
+            self.speechCatalogRefreshCoordinator = speechCatalogRefreshCoordinator
+            speechCatalogRefreshCoordinator.start()
             if self.pendingAccountChange == nil, let userID = self.userIdBox.value {
                 self.activeAccountIdentity = LibraryAccountIdentity(userID: userID, generation: self.accountGeneration)
             }
@@ -332,39 +706,45 @@ final class AppDependencies {
                 guard let self, let ownerID = self.userIdBox.value else { return }
                 lifecycle.fenceAccount(ownerID: ownerID, generation: self.accountGeneration)
             }
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
-               let userID = self.userIdBox.value {
-                await built.onboarding.state.setHasCompletedOnboarding(true)
-                await built.dataUseConsentStore.grant(for: userID.uuidString)
-            }
-            #endif
+
             await built.voice.sessionRegistry.recoverPersistedSession()
+            } catch {
+                self.services?.billing.customerEntitlements.stopObserving()
+                self.services = nil
+                self.credentialAuthenticationAdapter = nil
+                self.bootstrapFailure = error
+                Log.error("app.bootstrap.failed", error: error)
+            }
             Self.signposter.endInterval("cold-launch.bootstrap", state)
         }
         bootstrapTask = task
         await task.value
+        if services == nil { bootstrapTask = nil }
     }
 
     func refreshEntitlementsAtLaunch() async {
-        guard let coordinator = services?.billing.entitlementRefreshCoordinator else { return }
-        if let launchEntitlementRefreshTask {
-            await launchEntitlementRefreshTask.value
-            return
-        }
-
-        let task = Task {
-            await coordinator.refreshIfSignedIn(reason: .launch)
-        }
-        launchEntitlementRefreshTask = task
-        await task.value
+        guard let coordinator = services?.billing.entitlementRefreshCoordinator,
+              let snapshot = try? credentialAuthority.snapshot() else { return }
+        _ = await coordinator.refreshIfSignedIn(reason: .launch, credentialContext: .normal(snapshot.lease))
     }
 
+    nonisolated private static var devicePlatform: String {
+        #if targetEnvironment(macCatalyst)
+        "macos-catalyst"
+        #else
+        "ios"
+        #endif
+    }
+    nonisolated private static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+    }
     nonisolated private static func makeServices(
-        userIdBox: UserIdBox
-    ) async -> BootstrappedServices {
-        await Task.detached(priority: .userInitiated) {
-            await ServiceGraphFactory.build(userIdBox: userIdBox)
+        userIdBox: UserIdBox, authority: SessionCredentialAuthority,
+        admitRejection: @escaping @Sendable (CredentialRejectionCode, CredentialRejectionContext) async -> CredentialRetirementAdmission
+    ) async throws -> BootstrappedServices {
+        try await Task.detached(priority: .userInitiated) {
+            try await ServiceGraphFactory.build(userIdBox: userIdBox, credentialAuthority: authority,
+                                            admitCredentialRejection: admitRejection)
         }.value
     }
 
@@ -373,9 +753,9 @@ final class AppDependencies {
 struct BootstrappedServices: @unchecked Sendable {
 
     let workerClient: WorkerClient
-    let sharedReadingAPI: SharedReadingAPI
+    let sharedReadingAPIFactory: @Sendable (CredentialRequestContext) throws -> SharedReadingAPI
     let sharedReadingSessionRegistry: SharedReadingSessionRegistry
-    let dataUseConsentStore: any DataUseConsentStore
+    let dataUseConsentStore: any CredentialDataUseConsentStore
 
     let library: LibraryRuntime
 
@@ -394,62 +774,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let systemIntegration: SystemIntegrationRuntime
 }
 
-extension BootstrappedServices {
-    func accountDeletionCoordinator(
-        userId: UUID,
-        signOut: @escaping @MainActor @Sendable () -> Void
-    ) -> AccountDeletionCoordinator {
-        AccountDeletionCoordinator(
-            deleteServer: { [workerClient] in
-                _ = try await workerClient.send(DeleteUserEndpoint())
-            },
-            purgeLocal: { [self] in
-                let generation = (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
-                try await purgeAccountLocally(userID: userId, outgoingGeneration: generation)
-            },
-            purgeLocalForGeneration: { [self] generation in try await purgeAccountLocally(userID: userId, outgoingGeneration: generation) },
-            currentAccountGeneration: {
-                (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
-            },
-            reactivateLocalOwner: { token in await AppDependencies.shared.restoreOwnerAfterDeletionFailure(token) },
-            beginAccountDeletionCleanup: { AppDependencies.shared.beginAccountDeletionCleanup($0) },
-            endAccountDeletionCleanup: { AppDependencies.shared.endAccountDeletionCleanup($0) },
-            signOut: signOut,
-            beginAccountChange: { try AppDependencies.shared.beginAccountChange() }
-        )
-    }
-
-    private func purgeAccountLocally(userID: UUID, outgoingGeneration: UInt64) async throws -> BookImportActivationToken {
-        var cleanupError: Error?
-        let activationToken = library.bookImportLifecycle.fenceAccount(ownerID: userID, generation: outgoingGeneration)
-        let accountMutationPermit = AccountMutationPermit(ownerID: userID, accountGeneration: outgoingGeneration)
-        library.scopedMutationStore.closeAdmission(for: accountMutationPermit)
-        await systemIntegration.spotlight.clearForAccountDeletion()
-        await audio.playbackOwner.stopForAccountChange()
-        await voice.presenter.requestEnd()
-        await sharedReadingSessionRegistry.drain(accountID: userID)
-        await sync.engine.resetForAccountSwitch()
-        do { try await library.scopedMutationStore.revoke(accountMutationPermit) }
-        catch { cleanupError = error }
-        await library.bookImportLifecycle.drainAccount(userID, generation: outgoingGeneration)
-        do { try library.bookFileStorage.purgeAll() }
-        catch { cleanupError = error }
-        do { try await library.dbStore.purgeAll() }
-        catch { cleanupError = cleanupError ?? error }
-        if let metadataStore = sync.metadataStore as? SwiftDataSyncMetadataStore {
-            do { try await metadataStore.resetAll() }
-            catch { cleanupError = cleanupError ?? error }
-        }
-        await dataUseConsentStore.revoke(for: userID.uuidString)
-        await audio.ttsSettingsStore.remove(userId: userID)
-        await onboarding.trialState.remove(userId: userID)
-        await billing.entitlementService.clearSnapshotCache(for: userID.uuidString)
-        await billing.entitlementService.clearCache()
-        await MainActor.run { billing.entitlementReconciler.reset() }
-        if let cleanupError { throw cleanupError }
-        return activationToken
-    }
-}
 
 struct SettingsRuntime: @unchecked Sendable {
     let readerDefaults: AppReaderDefaults
@@ -458,7 +782,7 @@ struct SettingsRuntime: @unchecked Sendable {
 }
 
 struct OnboardingRuntime: @unchecked Sendable {
-    let state: any OnboardingState
+    let state: any CredentialOnboardingState
     let trialState: any TrialOnboardingState
     let coordinator: OnboardingCoordinator
 }
@@ -497,7 +821,7 @@ struct LibraryRuntime: @unchecked Sendable {
     let importCoordinator: ImportCoordinator
     let sampleBookInstaller: SampleBookInstaller
     let sampleReaderInstaller: SampleReaderInstaller
-    let readerSettingsStore: any ReaderSettingsStore
+    let readerSettingsStore: any SynchronousReaderSettingsStore
     let chapterIndexPersistence: any ChapterIndexPersistence
     let chapterSummarizer: ChapterSummarizer
     let epubUnpackedCache: EPUBUnpackedCache
@@ -524,6 +848,8 @@ struct SyncRuntime: @unchecked Sendable {
 }
 
 struct BillingRuntime: @unchecked Sendable {
+    let customerEntitlements: CustomerEntitlements
+    let store: Store
     let entitlementService: EntitlementService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
@@ -600,4 +926,24 @@ extension EnvironmentValues {
         get { self[SignOutActionKey.self] }
         set { self[SignOutActionKey.self] = newValue }
     }
+}
+
+/// Actual identity-effect collaborators, shared with the existing service graph.
+struct CredentialIdentityResources: Sendable {
+    let spotlight: RishiSpotlightCoordinator
+    let materialization: BookMaterializationCoordinator
+    let lifecycle: BookImportLifecycle
+    let mutations: BookScopedMutationStore
+}
+
+enum CredentialIdentityActivationError: Error, Sendable {
+    case resourcesUnavailable
+    case spotlightCleanupIncomplete
+}
+
+struct CredentialRetirementProjection {
+    enum Status { case pending, completed, failed(Error) }
+    let transition: CredentialTransition
+    let ticket: CredentialAttemptTicket
+    let status: Status
 }

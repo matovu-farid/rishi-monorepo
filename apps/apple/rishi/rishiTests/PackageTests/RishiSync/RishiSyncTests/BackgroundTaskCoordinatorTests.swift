@@ -81,7 +81,17 @@ struct BackgroundTaskCoordinatorTests {
             metadataStore: metadata
         )
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
+        let applier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            bookmarkStore: NoopBookmarkStore(),
+            metadataStore: metadata,
+            bookIntegration: {
+                var integration = TestBookSyncIntegration()
+                return integration
+            }()
+        )
 
         let conversationsFetcher = ConversationsFetcher(workerClient: client, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: client, metadataStore: metadata)

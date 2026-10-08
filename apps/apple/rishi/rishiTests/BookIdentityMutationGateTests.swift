@@ -8,7 +8,7 @@ import Testing
 struct BookIdentityMutationGateTests {
     @Test("an entered live upsert completes before a queued local tombstone and cleanup")
     func liveCommitBeforeLocalTombstone() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         let barrier = IdentityMutationBarrier()
         let events = IdentityMutationEvents()
@@ -64,7 +64,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("incoming tombstone holds cleanup and acknowledgment together against a queued live upsert")
     func incomingCleanupBeforeLiveCommit() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         try await fixture.books.upsert(book)
         let barrier = IdentityMutationBarrier()
@@ -121,7 +121,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("a queued incoming tombstone waits for an entered live commit before deleting its canonical row")
     func liveCommitBeforeIncomingCleanup() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         let barrier = IdentityMutationBarrier()
         let events = IdentityMutationEvents()
@@ -169,7 +169,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("incoming tombstone CAS rejects changed dirtiness before invoking cleanup")
     func incomingCleanupRequiresExpectedDirtyState() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         try await fixture.books.upsert(book)
         try await fixture.metadata.markDirty(entityId: book.id, kind: .book)
@@ -192,7 +192,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("failed cleanup never acknowledges a tombstone and releases its gate for retry")
     func cleanupFailureDoesNotAcknowledge() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         try await fixture.books.upsert(book)
         await #expect(throws: IdentityMutationTestError.cleanupFailed) {
@@ -217,7 +217,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("queued cancellation removes only that waiter and cannot release an entered native commit")
     func cancelledWaiterCannotReleaseEnteredCommit() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         let barrier = IdentityMutationBarrier()
         let events = IdentityMutationEvents()
@@ -292,7 +292,7 @@ struct BookIdentityMutationGateTests {
 
     @Test("account reset waits for entered native commits before clearing tombstones and metadata")
     func resetDrainsEnteredCommit() async throws {
-        let fixture = try IdentityMutationFixture.make()
+        let fixture = try await IdentityMutationFixture.make()
         let book = fixture.book
         let previouslyDeleted = UUID()
         try await fixture.metadata.markTombstone(entityId: previouslyDeleted, kind: .book)
@@ -343,7 +343,7 @@ struct BookIdentityMutationGateTests {
         let book = Book(userId: UUID(), title: "Deleted", formatType: .pdf, fileURL: "deleted.pdf")
         // Leave live SwiftData files for OS temporary cleanup, matching the native lifetime fixtures.
         do {
-            let metadata = try IdentityMutationFixture.makeMetadata(at: metadataURL)
+            let metadata = try await IdentityMutationFixture.makeMetadata(at: metadataURL)
             let books = SwiftDataBookStore(dbStore: try RishiDB.makeStore(at: databaseURL))
             try await books.upsert(book)
             try await metadata.markTombstone(entityId: book.id, kind: .book)
@@ -357,7 +357,7 @@ struct BookIdentityMutationGateTests {
             try await metadata.markClean(entityId: book.id, kind: .book, lastSyncedAt: Date(), remoteEtag: "live")
             try await metadata.forget(entityId: book.id, kind: .book)
         }
-        let reopened = try IdentityMutationFixture.makeMetadata(at: metadataURL)
+        let reopened = try await IdentityMutationFixture.makeMetadata(at: metadataURL)
         let books = SwiftDataBookStore(dbStore: try RishiDB.makeStore(at: databaseURL))
         #expect(try await reopened.isTombstone(entityId: book.id, kind: .book))
         #expect(try await reopened.pendingCount() == (acknowledged ? 0 : 1))
@@ -385,14 +385,14 @@ private struct IdentityMutationFixture {
     let books: SwiftDataBookStore
     let book: Book
 
-    static func make() throws -> Self {
-        Self(metadata: try SyncMetadataStoreBootstrap.makeStore(inMemory: true),
+    static func make() async throws -> Self {
+        Self(metadata: try await SyncMetadataStoreBootstrap.makeStore(inMemory: true),
              books: SwiftDataBookStore(dbStore: try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))),
              book: Book(userId: UUID(), title: "Gated", formatType: .pdf, fileURL: "gated.pdf"))
     }
 
-    static func makeMetadata(at url: URL) throws -> SwiftDataSyncMetadataStore {
-        SwiftDataSyncMetadataStore(container: try ModelContainer(
+    static func makeMetadata(at url: URL) async throws -> SwiftDataSyncMetadataStore {
+        await SwiftDataSyncMetadataStore.make(container: try ModelContainer(
             for: SyncMetadataRow.self, SyncCursorStateRow.self, SyncRecoveryStateRow.self,
             configurations: ModelConfiguration(url: url)
         ))

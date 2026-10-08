@@ -25,6 +25,7 @@ import ReadiumShared
 /// real UIWindow / WKWebView pipeline that XCTest unit targets can't
 /// reach without spinning XCUITest.
 @Suite("Phase 6 EPUB integration smoke", .serialized)
+@MainActor
 struct EPUBIntegrationSmokeTests {
 
     private func aliceURL() throws -> URL {

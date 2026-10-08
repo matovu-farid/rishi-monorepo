@@ -2,103 +2,13 @@
 
 
 import Foundation
+import Observation
 import OSLog
 import StoreKit
 import SwiftUI
 
 
 
-
-// MARK: - Customer Entitlements
-
-// A view modifier that checks the customer's current entitlements.
-//
-// Only use once in your app.
-@available(iOS 18.4, *)
-private struct CustomerEntitlementsViewModifier: ViewModifier {
-    private let logger = Logger(subsystem: "Rishi", category: "CustomerEntitlementsViewModifier")
-   
-    @Environment(\.services) private var services
-    @Environment(SubscriptionService.self) private var subscriptionService
-    
-
-    private var customerEntitlements = CustomerEntitlements.shared
-
-//    @State private var rishiProStatus: RishiProStatus?
-
-    func body(content: Content) -> some View {
-        content
-            // Check the customer's current entitlements.
-            .task { await checkCurrentUserState() }
-            // Observe changes to the customer's entitlements.
-            .task { observeEntitlementUpdates() }
-            // Observe updates to the user's status for SKDemo+.
-            .onChange(of: customerEntitlements.subscriptionStatuses) { _, subscriptionStatuses in
-                do {
-                    if  let groupID = services?.billing.groupID{
-                        let subscriptionStatuses = subscriptionStatuses[groupID.value]
-                        let highestSubcription = try subscriptionStatuses?.activeSubscriptionStatuses.highestSubscriptionStatus
-                        
-                        if let highestSubcription {
-                            
-                            subscriptionService.saveSubscription(subscription: highestSubcription)
-                            // Entitlement-sync may have just landed; refresh
-                            // so Settings/gates update without waiting for
-                            // the next foreground.
-                            if let coordinator = services?.billing.entitlementRefreshCoordinator {
-                                Task {
-                                    await coordinator.refreshIfSignedIn(reason: .foreground)
-                                }
-                            }
-                        }
-                    }
-                } catch {
-                    logger.error("""
-                    Fail to transform statuses for subscription group ID \(error)
-                    """)
-                    return
-                }
-            }
-  
-         
-    }
-
-    private func checkCurrentUserState() async {
-        // Check if there are any unfinished transactions.
-        await CustomerEntitlements.shared.checkForUnfinishedTransactions()
-        // Check if there are any current entitlements.
-        await CustomerEntitlements.shared.checkForCurrentEntitlements()
-        // Check current status.
-        await CustomerEntitlements.shared.checkCurrentStatuses()
-    }
-
-    private func observeEntitlementUpdates() {
-        // Begin observing StoreKit transaction updates in case a
-        // transaction happens on another device.
-        CustomerEntitlements.shared.observeTransactionUpdates()
-        // Begin observing StoreKit status updates.
-        CustomerEntitlements.shared.observeStatusUpdates()
-    }
-
-    private func transformStatus(_ subscriptionStatuses: [SubscriptionStatus]?) throws ->  EntitlementLevel? {
-        try subscriptionStatuses?.activeSubscriptionStatuses.highestSubscriptionStatus.flatMap { EntitlementLevel.from(subscription: $0)}
-    }
-}
-
-@available(iOS 18.4, *)
-extension View {
-    func checkCustomerEntitlements() -> some View {
-        modifier(CustomerEntitlementsViewModifier())
-    }
-}
-
-extension EnvironmentValues {
-    // Make globally accessible the user's status for SKDemo+ to always have the latest information
-    // readily available.
-    @Entry fileprivate(set) var rishiProStatus: EntitlementLevel = .unsubscribed
-    // Make globally accessible the user's owned cars to always have the latest information
-    // readily available.
-}
 
 // MARK: - Store
 
@@ -107,10 +17,11 @@ extension EnvironmentValues {
 // Only use this once in your app.
 @available(iOS 18.4, *)
 private struct ProductLoaderViewModifier: ViewModifier {
+    @Environment(Store.self) private var store
     func body(content: Content) -> some View {
         content
             .task {
-                await Store.shared.loadProducts()
+                await store.loadProducts()
             }
     }
 }
@@ -124,18 +35,96 @@ extension View {
 
 // MARK: - Errors
 
+@MainActor
+@Observable
+final class ErrorObserverPresentationState {
+    var error: (any Error)?
+    private(set) var activeRestoreCount = 0
+
+    private var lastHandledCustomerError: CustomerEntitlementsError?
+    private var lastHandledStoreError: StoreError?
+    private var didInitializeHandledErrors = false
+
+    func initializeHandledErrors(
+        customerError: CustomerEntitlementsError?,
+        storeError: StoreError?
+    ) {
+        guard !didInitializeHandledErrors else { return }
+        didInitializeHandledErrors = true
+        lastHandledCustomerError = customerError
+        lastHandledStoreError = storeError
+    }
+
+    func recordHandledCustomerError(_ customerError: CustomerEntitlementsError?) {
+        lastHandledCustomerError = customerError
+        if Self.isEligible(customerError) {
+            error = customerError
+        }
+    }
+
+    func recordHandledStoreError(_ storeError: StoreError?) {
+        lastHandledStoreError = storeError
+        if storeError == .invalidTransaction {
+            error = storeError
+        }
+    }
+
+    func beginRestore() {
+        activeRestoreCount += 1
+    }
+
+    func endRestore() {
+        guard activeRestoreCount > 0 else { return }
+        activeRestoreCount -= 1
+    }
+
+    func isBlocking(
+        customerError: CustomerEntitlementsError?,
+        storeError: StoreError?
+    ) -> Bool {
+        error != nil
+            || activeRestoreCount > 0
+            || (Self.isEligible(customerError) && customerError != lastHandledCustomerError)
+            || (storeError == .invalidTransaction && storeError != lastHandledStoreError)
+    }
+
+    private static func isEligible(_ error: CustomerEntitlementsError?) -> Bool {
+        switch error {
+        case .some(.invalidTransaction), .some(.entitlementSyncFailed):
+            true
+        case .none, .some(.failedToFetchPersistedData), .some(.failedToUpdatePersistedData):
+            false
+        }
+    }
+}
+
+typealias ErrorPresentationObservation = @MainActor (
+    _ source: ErrorObserverPresentationState,
+    _ isRegistered: Bool,
+    _ liveBlocking: @escaping @MainActor () -> Bool
+) -> Void
+
 // A view modifier that listens for errors encountered during purchases and entitlement checks.
 //
 // This only use once in your app.
 @available(iOS 18.4, *)
 private struct ErrorObserverViewModifier: ViewModifier {
+    private let observation: ErrorPresentationObservation?
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.services) private var services
 
-    private var customerEntitlements = CustomerEntitlements.shared
-    private var store = Store.shared
+    @Environment(CustomerEntitlements.self) private var customerEntitlements
+    @Environment(Store.self) private var store
+    @Environment(\.appDependencies) private var dependencies
 
-    @State private var error: (any Error)?
+    @State private var presentationState = ErrorObserverPresentationState()
+    @State private var isVisible = false
+    @State private var restoreAttempt: UUID?
+
+    init(observation: ErrorPresentationObservation? = nil) {
+        self.observation = observation
+    }
 
     private enum RestorePresentationError: LocalizedError {
         case restored
@@ -156,36 +145,55 @@ private struct ErrorObserverViewModifier: ViewModifier {
 
     private var showErrorAlert: Binding<Bool> {
         Binding {
-            error != nil
+            presentationState.error != nil
         } set: {
             guard !$0 else { return }
-            error = nil
+            presentationState.error = nil
+            reportObservation(isRegistered: true)
         }
     }
 
     @ViewBuilder
     private var errorAlertActionView: some View {
         Button("Restore Purchases", role: .destructive) {
+            guard isVisible, let authority = dependencies?.credentialAuthority,
+                  let snapshot = try? authority.snapshot() else { return }
+            let lease = snapshot.lease
+            let attempt = UUID()
+            restoreAttempt = attempt
+            presentationState.beginRestore()
+            reportObservation(isRegistered: true)
             Task {
+                defer {
+                    presentationState.endRestore()
+                    if restoreAttempt == attempt { restoreAttempt = nil }
+                    reportObservation(isRegistered: isVisible)
+                }
                 do {
                     guard let services else {
-                        error = RestorePresentationError.failed(
+                        presentationState.error = RestorePresentationError.failed(
                             NSError(domain: "RishiBilling", code: 1)
                         )
+                        reportObservation(isRegistered: true)
                         return
                     }
-                    let outcome = try await services.billing.restoreService.restore()
-                    await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-                        reason: .foreground
-                    )
+                    let outcome = try await restoreAndRefresh(restoreService: services.billing.restoreService,
+                        refreshCoordinator: services.billing.entitlementRefreshCoordinator, credentialContext: .normal(lease))
+                    guard authority.isCurrent(lease), isVisible,
+                          restoreAttempt == attempt, !Task.isCancelled else { return }
                     switch outcome {
                     case .restored:
-                        self.error = RestorePresentationError.restored
+                        presentationState.error = RestorePresentationError.restored
                     case .nothingToRestore:
-                        self.error = RestorePresentationError.nothingToRestore
+                        presentationState.error = RestorePresentationError.nothingToRestore
                     }
+                    reportObservation(isRegistered: true)
                 } catch {
-                    self.error = RestorePresentationError.failed(error)
+                    let restoreError = error
+                    guard authority.isCurrent(lease), isVisible,
+                          restoreAttempt == attempt, !Task.isCancelled else { return }
+                    presentationState.error = RestorePresentationError.failed(restoreError)
+                    reportObservation(isRegistered: true)
                 }
             }
         }
@@ -200,23 +208,28 @@ private struct ErrorObserverViewModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .onAppear {
+                isVisible = true
+                presentationState.initializeHandledErrors(
+                    customerError: customerEntitlements.error,
+                    storeError: store.error
+                )
+                reportObservation(isRegistered: true)
+            }
+            .onDisappear {
+                isVisible = false
+                restoreAttempt = nil
+                reportObservation(isRegistered: false)
+            }
             // Observe errors encountered while checking customer entitlements.
             .onChange(of: customerEntitlements.error) { _, error in
-                switch error {
-                case .some(.invalidTransaction), .some(.entitlementSyncFailed):
-                    self.error = error
-                case _:
-                    return
-                }
+                presentationState.recordHandledCustomerError(error)
+                reportObservation(isRegistered: true)
             }
             // Observe errors encountered during purchases.
             .onChange(of: store.error) { _, error in
-                switch error {
-                case .some(.invalidTransaction):
-                    self.error = error
-                case _:
-                    return
-                }
+                presentationState.recordHandledStoreError(error)
+                reportObservation(isRegistered: true)
             }
             .alert(
                 "An error occurred while checking your purchase history.",
@@ -225,11 +238,23 @@ private struct ErrorObserverViewModifier: ViewModifier {
                 message: { errorAlertMessageView }
             )
     }
+
+    private func reportObservation(isRegistered: Bool) {
+        guard let observation else { return }
+        observation(presentationState, isRegistered) { @MainActor in
+            presentationState.isBlocking(
+                customerError: customerEntitlements.error,
+                storeError: store.error
+            )
+        }
+    }
 }
 
 @available(iOS 18.4, *)
  extension View {
-    func observeErrors() -> some View {
-        modifier(ErrorObserverViewModifier())
+    func observeErrors(
+        observation: ErrorPresentationObservation? = nil
+    ) -> some View {
+        modifier(ErrorObserverViewModifier(observation: observation))
     }
 }

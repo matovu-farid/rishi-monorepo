@@ -132,9 +132,6 @@ public struct ReaderScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var chrome: ReaderChromeController
-    @State private var sharedNavigationTask: Task<Void, Never>?
-    @State private var sharedQueuedNavigationRequest: SharedReaderNavigationRequest?
-    @State private var sharedNavigationWorkerGeneration = UUID()
 
     static let readerChromeInitialAutoHideDelay: Duration = .seconds(15)
     static let readerChromeAutoHideDelay: Duration = .seconds(4)
@@ -307,8 +304,13 @@ public struct ReaderScreen: View {
                 }
             },
 
-            coordinatorRef: coordinatorRef
+            coordinatorRef: coordinatorRef,
+            sharedNavigationRequest: sharedNavigationRequest,
+            sharedReadingSessionID: sharedReadingSessionID,
+            isSharedFollower: isSharedFollower,
+            onSharedNavigationResult: onSharedNavigationResult
         )
+        .id(ObjectIdentifier(viewModel))
     }
 
     public var body: some View {
@@ -420,24 +422,17 @@ public struct ReaderScreen: View {
 
                 applyPreferences()
             #endif
-            applySharedPosition()
         }
 
-        .onChange(of: sharedNavigationRequest) { _, _ in
-            applySharedPosition()
-        }
-        .onChange(of: isSharedFollower) { _, isFollower in
-            guard !isFollower else { return }
-            sharedNavigationWorkerGeneration = UUID()
-            sharedNavigationTask?.cancel()
-            sharedNavigationTask = nil
-            sharedQueuedNavigationRequest = nil
+        .onAppear {
+            #if canImport(UIKit)
+            coordinatorRef.setSharedNavigationActive(true)
+            #endif
         }
         .onDisappear {
-            sharedNavigationWorkerGeneration = UUID()
-            sharedNavigationTask?.cancel()
-            sharedNavigationTask = nil
-            sharedQueuedNavigationRequest = nil
+            #if canImport(UIKit)
+            coordinatorRef.setSharedNavigationActive(false)
+            #endif
         }
 
         .onReceive(
@@ -1128,99 +1123,6 @@ public struct ReaderScreen: View {
         return nil
     }
 
-    private func applySharedPosition() {
-        guard isSharedFollower, let sharedNavigationRequest else {
-            sharedNavigationWorkerGeneration = UUID()
-            sharedNavigationTask?.cancel()
-            sharedNavigationTask = nil
-            sharedQueuedNavigationRequest = nil
-            return
-        }
-        // Queue only the newest target. A single worker serializes Readium's
-        // uncancelable go(to:) calls, so an older page cannot finish last.
-        if sharedQueuedNavigationRequest.map({ $0.revision > sharedNavigationRequest.revision }) == true {
-            return
-        }
-        sharedQueuedNavigationRequest = sharedNavigationRequest
-        guard sharedNavigationTask == nil else { return }
-        let workerGeneration = UUID()
-        sharedNavigationWorkerGeneration = workerGeneration
-        sharedNavigationTask = Task { @MainActor in
-            defer {
-                if sharedNavigationWorkerGeneration == workerGeneration {
-                    sharedNavigationTask = nil
-                }
-            }
-            while !Task.isCancelled, let request = sharedQueuedNavigationRequest {
-                guard isSharedFollower,
-                      sharedNavigationWorkerGeneration == workerGeneration,
-                      self.sharedNavigationRequest?.revision == request.revision else { return }
-                sharedQueuedNavigationRequest = nil
-                let locator = (try? Locator(jsonString: request.position))
-                    ?? (try? ReaderPositionLocator.decode(jsonString: request.position).toReadiumLocator())
-                guard let locator else {
-                    guard isSharedFollower,
-                          sharedNavigationWorkerGeneration == workerGeneration,
-                          self.sharedNavigationRequest?.revision == request.revision else { continue }
-                    onSharedNavigationResult?(SharedReaderNavigationResult(
-                        revision: request.revision,
-                        outcome: .failed("The controller's reading position is invalid."),
-                        observedLocator: viewModel.visibleNavigatorLocator
-                    ))
-                    continue
-                }
-                guard let publication = viewModel.publication else {
-                    guard isSharedFollower,
-                          sharedNavigationWorkerGeneration == workerGeneration,
-                          self.sharedNavigationRequest?.revision == request.revision else { continue }
-                    onSharedNavigationResult?(SharedReaderNavigationResult(
-                        revision: request.revision,
-                        outcome: .failed("The reader is not ready to follow the controller."),
-                        observedLocator: viewModel.visibleNavigatorLocator
-                    ))
-                    continue
-                }
-                guard !locator.href.string.isEmpty,
-                      publication.readingOrder.contains(where: { $0.href == locator.href.string }) else {
-                    guard isSharedFollower,
-                          sharedNavigationWorkerGeneration == workerGeneration,
-                          self.sharedNavigationRequest?.revision == request.revision else { continue }
-                    onSharedNavigationResult?(SharedReaderNavigationResult(
-                        revision: request.revision,
-                        outcome: .failed("This shared position is not in the open book."),
-                        observedLocator: viewModel.visibleNavigatorLocator
-                    ))
-                    continue
-                }
-                guard let coordinator = coordinatorRef.coordinator else {
-                    guard isSharedFollower,
-                          sharedNavigationWorkerGeneration == workerGeneration,
-                          self.sharedNavigationRequest?.revision == request.revision else { continue }
-                    onSharedNavigationResult?(SharedReaderNavigationResult(
-                        revision: request.revision,
-                        outcome: .failed("The reader is not ready to follow the controller."),
-                        observedLocator: viewModel.visibleNavigatorLocator
-                    ))
-                    continue
-                }
-                guard isSharedFollower,
-                      sharedNavigationWorkerGeneration == workerGeneration,
-                      self.sharedNavigationRequest?.revision == request.revision else { continue }
-                let navigated = await coordinator.goToSharedPosition(locator)
-                guard isSharedFollower,
-                      sharedNavigationWorkerGeneration == workerGeneration,
-                      self.sharedNavigationRequest?.revision == request.revision,
-                      !Task.isCancelled else { continue }
-                onSharedNavigationResult?(SharedReaderNavigationResult(
-                    revision: request.revision,
-                    outcome: navigated
-                        ? .accepted
-                        : .failed("The reader could not open the controller's page."),
-                    observedLocator: viewModel.visibleNavigatorLocator
-                ))
-            }
-        }
-    }
 
     #if canImport(UIKit)
 

@@ -45,6 +45,51 @@ struct LibraryImportPublicationTests {
         #expect(vm.coverURLs[book.id] == coverURL)
     }
 
+    @Test("publishes fast covers independently and merges explicit nil without erasing a slow cover")
+    func publishesPartialCoverResultsAndPreservesUntouchedCover() async throws {
+        let userID = UUID()
+        let first = Book(userId: userID, title: "Fast", formatType: .pdf, fileURL: "Books/fast.pdf")
+        let second = Book(userId: userID, title: "Slow", formatType: .pdf, fileURL: "Books/slow.pdf")
+        let firstCover = URL(fileURLWithPath: "/tmp/first.heic")
+        let oldSecondCover = URL(fileURLWithPath: "/tmp/old-second.heic")
+        let finalSecondCover = URL(fileURLWithPath: "/tmp/final-second.heic")
+        let probe = PartialCoverProbe(
+            firstID: first.id,
+            secondID: second.id,
+            firstCover: firstCover,
+            oldSecondCover: oldSecondCover,
+            finalSecondCover: finalSecondCover
+        )
+        let store = InMemoryBookStore(initial: [first, second])
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = BookFileStorage(rootURL: root, bookStore: store, coverExtractors: [:])
+        let vm = LibraryViewModel(
+            bookStore: store,
+            currentUserId: { userID },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userID }),
+            positionLoader: PositionLoader(positionStore: InMemoryPositionStore()),
+            coverResolver: BookCoverResolver(resolve: { await probe.resolve($0) }),
+            deleteBook: { _ in }
+        )
+        await vm.refresh()
+        await vm.waitForHydration()
+        #expect(vm.coverURLs[first.id] == firstCover)
+        #expect(vm.coverURLs[second.id] == oldSecondCover)
+
+        let gate = AsyncGate()
+        await probe.beginPartialRefresh(gate: gate)
+        await vm.refresh()
+        await vm.waitForCoverResolution(first.id)
+        await gate.waitUntilPaused()
+
+        #expect(vm.coverURLs[first.id] == nil)
+        #expect(vm.coverURLs[second.id] == oldSecondCover)
+        await gate.open()
+        await vm.waitForHydration()
+        #expect(vm.coverURLs[second.id] == finalSecondCover)
+    }
+
     @Test("completed hydration clears positions and covers removed from its snapshot")
     func completedHydrationClearsRemovedValues() async throws {
         let userID = UUID()
@@ -307,5 +352,36 @@ private actor ControlledCoverProbe {
         let resolverGate = gate
         if let resolverGate { await resolverGate.pause() }
         return resolvedURL
+    }
+}
+
+private actor PartialCoverProbe {
+    private let firstID: BookID
+    private let secondID: BookID
+    private let firstCover: URL
+    private let oldSecondCover: URL
+    private let finalSecondCover: URL
+    private var partialGate: AsyncGate?
+
+    init(firstID: BookID, secondID: BookID, firstCover: URL, oldSecondCover: URL, finalSecondCover: URL) {
+        self.firstID = firstID
+        self.secondID = secondID
+        self.firstCover = firstCover
+        self.oldSecondCover = oldSecondCover
+        self.finalSecondCover = finalSecondCover
+    }
+
+    func beginPartialRefresh(gate: AsyncGate) { partialGate = gate }
+
+    func resolve(_ book: Book) async -> URL? {
+        guard let partialGate else {
+            return book.id == firstID ? firstCover : oldSecondCover
+        }
+        if book.id == firstID { return nil }
+        if book.id == secondID {
+            await partialGate.pause()
+            return finalSecondCover
+        }
+        return nil
     }
 }

@@ -4,6 +4,19 @@ import Testing
 
 @Suite("TTS user-facing errors")
 struct TTSUserFacingErrorTests {
+    @Test("raw transport errors and genuine native failures retain their categories")
+    func transportAndNativeCategories() {
+        #expect(TTSUserFacingError.classify(URLError(.networkConnectionLost)) == .network)
+        #expect(TTSUserFacingError.classify(TTSEnginePlaybackError.finishedWithoutPlaying) == .audioPlayback)
+        #expect(TTSUserFacingError.classify(TTSEnginePlaybackError.playbackFailed("private detail")) == .audioPlayback)
+    }
+
+    @Test("raw and wrapped URL cancellation never become an alert")
+    func transportCancellationHasNoAlert() {
+        #expect(TTSUserFacingError.classify(URLError(.cancelled)) == nil)
+        #expect(TTSUserFacingError.classify(RishiError.networkFailure(URLError(.cancelled))) == nil)
+    }
+
     @Test("classifies supported TTS failures into user-facing cases")
     func classifiesSupportedFailures() {
         #expect(

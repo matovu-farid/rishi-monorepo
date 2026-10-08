@@ -12,7 +12,7 @@ final class SharedReadingSessionRuntime: SharedReadingSessionRegistryHandle {
     /// later account's Keychain token after a scene or sign-out race.
     let cleanupAPI: SharedReadingAPI
     let coordinator: SharedReadingSessionCoordinator
-    let transport: SharedReadingSignalingClient
+    let transport: any SharedReadingSignalingTransport
     let join: SharedReadingJoin
     let localParticipantUserID: String
     let accountID: UUID
@@ -49,7 +49,7 @@ final class SharedReadingSessionRuntime: SharedReadingSessionRegistryHandle {
 
     init(api: SharedReadingAPI, cleanupAPI: SharedReadingAPI,
          coordinator: SharedReadingSessionCoordinator,
-         transport: SharedReadingSignalingClient, join: SharedReadingJoin,
+         transport: any SharedReadingSignalingTransport, join: SharedReadingJoin,
          localParticipantUserID: String, accountID: UUID,
          sessionRegistry: SharedReadingSessionRegistry,
          requiresAuthoritativeRecovery: Bool = false,
@@ -87,6 +87,8 @@ final class SharedReadingSessionRuntime: SharedReadingSessionRegistryHandle {
     /// This remains true after local close and registry unregistering. It is
     /// the durable ownership signal for a transition's bounded remote leave.
     var isRegistryDrainRemoteLeaveOwned: Bool { registryOwnsRemoteLeave }
+    /// Reconnect work uses the same existing closed/account fence as setup.
+    var canRefreshAdmission: Bool { !didCloseLocally && isAccountCurrent() }
     var currentStatus: SharedReadingSessionStatus { snapshot?.status ?? join.admission.status }
     var isLocalController: Bool { (snapshot?.currentParticipantUserId ?? roomStatus?.controllerUserId) == localParticipantUserID }
     var visibleParticipants: [SharedReadingParticipant] { !(snapshot?.participants.isEmpty ?? true) ? snapshot!.participants : (roomStatus?.participants ?? []) }

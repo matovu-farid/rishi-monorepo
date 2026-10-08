@@ -42,50 +42,17 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let connectionID = UUID()
         self.connectionID = connectionID
         Task { @MainActor [weak self] in
-            let userUUID: UUID
-            do {
-                userUUID = try await RishiAppIntentRuntime.validatedPersistedIdentity()
-            } catch let error as RishiAppIntentRuntimeError {
-                guard case .signedOut = error,
-                      self?.connectionID == connectionID else { return }
-                _ = await dependencies.synchronizeCarPlayIdentity(nil)
+            let snapshot: RishiAppIntentSnapshot
+            do { snapshot = try await RishiAppIntentRuntime.snapshot() }
+            catch {
+                guard self?.connectionID == connectionID else { return }
                 Self.showUnavailable(on: interfaceController, detail: error.localizedDescription)
                 return
-            } catch {
-                guard self?.connectionID == connectionID else { return }
-                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
-                return
             }
-            guard self?.connectionID == connectionID else { return }
-            await dependencies.bootstrap()
-            guard self?.connectionID == connectionID else { return }
-            guard let services = dependencies.services else {
-                guard self?.connectionID == connectionID else { return }
-                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
-                return
-            }
-            do {
-                _ = try await RishiAppIntentRuntime.validateServerIdentity(
-                    using: services.workerClient,
-                    userID: userUUID
-                )
-            } catch let error as RishiAppIntentRuntimeError {
-                guard case .signedOut = error,
-                      self?.connectionID == connectionID else { return }
-                _ = await dependencies.synchronizeCarPlayIdentity(nil)
-                Self.showUnavailable(on: interfaceController, detail: error.localizedDescription)
-                return
-            } catch {
-                guard self?.connectionID == connectionID else { return }
-                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
-                return
-            }
-            guard self?.connectionID == connectionID else { return }
-            guard await dependencies.synchronizeCarPlayIdentity(userUUID) else {
-                guard self?.connectionID == connectionID else { return }
-                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
-                return
-            }
+            guard self?.connectionID == connectionID,
+                  dependencies.carPlayAccountSnapshot == CarPlayAccountSnapshot(userID: snapshot.userID,
+                      generation: snapshot.authorizationGeneration) else { return }
+            let services = snapshot.services
             let session = CarPlaySessionCoordinator(
                 dependencies: dependencies,
                 services: services,

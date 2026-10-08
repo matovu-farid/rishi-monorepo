@@ -17,6 +17,7 @@ public struct SyncCursorState: Codable, Sendable, Equatable, Hashable {
 
 public enum SyncRecoveryReason: String, Codable, Sendable, Equatable, Hashable {
     case incompleteProjection
+    case rejectedPosition
 }
 
 public struct SyncRecoveryState: Codable, Sendable, Equatable, Hashable {

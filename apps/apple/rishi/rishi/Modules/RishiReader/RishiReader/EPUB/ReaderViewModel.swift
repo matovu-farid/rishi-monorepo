@@ -1,25 +1,25 @@
 import Foundation
 import Observation
-// `@preconcurrency` downgrades the Readium `Publication` non-Sendable
-// error to a warning when crossing the `Task.detached(...).value`
-// boundary in `load()`. The detached task is a single-producer
-// single-consumer transfer and the value is only mutated through
-// nonisolated Readium APIs after handoff (parse-then-display), so the
-// downgrade is sound here. Tracked as the documented Readium 3.x
-// Swift 6 concurrency gap — Phase 19 plan 19-09 (F-P0-08 EPUB slice).
+// Readium's installed APIs do not declare Publication Sendable. LoadResult
+// confines the parse handoff; detached content helpers only read snapshots.
+// This import does not establish general thread safety for Readium objects.
 @preconcurrency import ReadiumShared
 
 
 
 /// @Observable view-model for the EPUB reader. Mirrors the shape of
 /// `PDFReaderViewModel` (Phase 5):
-///   - `@Observable final class` for SwiftUI auto-tracking
-///   - `@unchecked Sendable` because Readium types we hold are not Sendable
+///   - `@Observable @MainActor final class` for isolated SwiftUI state
 ///   - `userId` is `internal` so the Wave-5 highlights extension can read it
 ///   - debounced position write (1s default) on locator change
 ///   - `flush()` drains the debounce on view dismiss
+public enum ReaderPositionFlushResult: Sendable, Equatable {
+    case committed, savedPublicationPending, writeFailed, revoked
+}
+
 @Observable
-public final class ReaderViewModel: @unchecked Sendable {
+@MainActor
+public final class ReaderViewModel {
 
     public let book: Book
     internal let userId: UserID
@@ -149,6 +149,40 @@ public final class ReaderViewModel: @unchecked Sendable {
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
     private var positionWriteTail: Task<Void, Never>?
+    private var flushTask: Task<ReaderPositionFlushResult, Never>?
+    private var positionID = UUID()
+    private var progressRevision: UInt64 = 0
+    private var handledRevision: UInt64 = 0
+    private var savedRevision: UInt64 = 0
+    private var queuedRevision: UInt64 = 0
+    private struct ProgressSnapshot {
+        let position: Position
+        let revision: UInt64
+        /// The subscriber present when movement created this revision, including none.
+        let publicationOwner: UUID?
+    }
+    private var progressSnapshot: ProgressSnapshot?
+    private var progressBaseline: ReaderPositionLocator?
+    public private(set) var positionSaveError: String?
+    private var lastFlushResult: ReaderPositionFlushResult = .committed
+    public typealias PersistedPositionHandler = @MainActor (
+        Position, @escaping @MainActor @Sendable () async throws -> Void
+    ) async throws -> PositionCommitResult
+    @ObservationIgnored private var persistedPositionOwner: UUID?
+    @ObservationIgnored private var persistedPositionHandler: PersistedPositionHandler?
+
+    @MainActor
+    public func installPersistedPositionHandler(owner: UUID, handler: @escaping PersistedPositionHandler) {
+        persistedPositionOwner = owner
+        persistedPositionHandler = handler
+    }
+
+    @MainActor
+    public func clearPersistedPositionHandler(ifOwner owner: UUID) {
+        guard persistedPositionOwner == owner else { return }
+        persistedPositionOwner = nil
+        persistedPositionHandler = nil
+    }
 
     /// Read-aloud resource/page parsing + chapter-continuation cursor. Created
     /// when the publication loads (the cursor holds the publication). `nil`
@@ -179,6 +213,14 @@ public final class ReaderViewModel: @unchecked Sendable {
         self.positionStore = positionStore
         self.loader = loader
         self.debounceSeconds = debounceSeconds
+    }
+
+    /// Immutable handoff of the parsed publication and restored position.
+    /// One MainActor awaiter consumes it; this does not make Readium's
+    /// mutable object graph safe for arbitrary concurrent access.
+    private struct LoadResult: @unchecked Sendable {
+        let publication: Publication
+        let restored: (position: Position, locator: Locator?, source: ReaderPositionLocator.Source)?
     }
 
     // MARK: - Lifecycle
@@ -224,8 +266,8 @@ public final class ReaderViewModel: @unchecked Sendable {
         // DETACHED: Readium ZIP unpack + parse are multi-second on large
         // EPUBs; offload to `.userInitiated` so the body and the awaited
         // continuation both land off-main. The result is consumed by a
-        // single awaiter (this Task), so the non-Sendable `Publication`
-        // crosses the boundary via the detached-task `sending` result.
+        // single awaiter (this Task), with LoadResult confining the parsed
+        // publication and restored-position handoff to that boundary.
         //
         // The position lookup starts alongside publication opening so a
         // slow position store cannot add its full latency after parsing.
@@ -237,37 +279,48 @@ public final class ReaderViewModel: @unchecked Sendable {
         let bookId = book.id
         let positionStoreRef = positionStore
         let pub: Publication?
-        let restoredPosition: (locator: Locator, source: ReaderPositionLocator.Source)?
+        let restoredPosition: (position: Position, locator: Locator?, source: ReaderPositionLocator.Source)?
         do {
-            let result: (Publication, (locator: Locator, source: ReaderPositionLocator.Source)?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+            let loadTask = Task.detached(priority: .userInitiated) { [loader, documentURL] in
                 let positionTask = Task.detached(priority: .userInitiated) {
-                    try? await positionStoreRef.position(for: bookId)
+                    try await positionStoreRef.position(for: bookId)
                 }
 
+                return try await withTaskCancellationHandler {
                 do {
                 let publication = try await loader.open(fileURL: documentURL)
-                let restored: (locator: Locator, source: ReaderPositionLocator.Source)?
-                if let last = await positionTask.value {
+                try Task.checkCancellation()
+                let restored: (position: Position, locator: Locator?, source: ReaderPositionLocator.Source)?
+                if let last = try await positionTask.value {
                     if let wrapper = try? ReaderPositionLocator.decode(jsonString: last.locator),
                        let locator = wrapper.toReadiumLocator()
                     {
-                        restored = (locator, wrapper.source)
+                        restored = (last, locator, wrapper.source)
                     } else if let locator = (try? EPUBPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator() {
-                        restored = (locator, .reader)
+                        restored = (last, locator, .reader)
                     } else {
-                        restored = nil
+                        restored = (last, nil, .reader)
                     }
                 } else {
                     restored = nil
                 }
-                return (publication, restored)
+                return LoadResult(publication: publication, restored: restored)
                 } catch {
                     positionTask.cancel()
                     throw error
                 }
-            }.value
-            pub = result.0
-            restoredPosition = result.1
+                } onCancel: { @Sendable [positionTask] in
+                    positionTask.cancel()
+                }
+            }
+            let result = try await withTaskCancellationHandler {
+                try await loadTask.value
+            } onCancel: { @Sendable [loadTask] in
+                loadTask.cancel()
+            }
+            try Task.checkCancellation()
+            pub = result.publication
+            restoredPosition = result.restored
         } catch {
             Log.reader.error("ReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.loadingState = .failed(reason: error.localizedDescription)
@@ -294,6 +347,10 @@ public final class ReaderViewModel: @unchecked Sendable {
         self.readAloudCursor = EPUBReadAloudCursor(publication: pub)
         self.title = pub.metadata.title ?? book.title
         if let restoredPosition {
+            positionID = restoredPosition.position.id
+            if let locator = restoredPosition.locator {
+                progressBaseline = ReaderPositionLocator(locator: locator, source: restoredPosition.source)
+            }
             self.latestLocator = restoredPosition.locator
             self.latestPositionSource = restoredPosition.source
             if restoredPosition.source == .readAloud {
@@ -339,11 +396,12 @@ public final class ReaderViewModel: @unchecked Sendable {
             latestPositionSource = .reader
             hasManualNavigationSinceLoad = true
         }
-        if !(isProgrammatic && readAloudResumeLocator != nil) {
-            schedulePositionWrite(
-                for: latestLocator ?? locator,
-                source: latestPositionSource
-            )
+        // Navigator restoration, reflow and auto-follow are visible-state
+        // updates. Only a reading/narration movement creates a durable revision.
+        if !isInitialLocation && !isProgrammatic {
+            recordProgress(for: locator, source: .reader)
+        } else if progressBaseline == nil {
+            progressBaseline = ReaderPositionLocator(locator: latestLocator ?? locator, source: latestPositionSource)
         }
         if !isProgrammatic && !isInitialLocation {
             if let explicitForwardID {
@@ -363,7 +421,7 @@ public final class ReaderViewModel: @unchecked Sendable {
         readAloudResumeLocator = locator
         latestLocator = locator
         latestPositionSource = .readAloud
-        schedulePositionWrite(for: locator, source: .readAloud)
+        recordProgress(for: locator, source: .readAloud)
     }
 
     /// Clears a narration candidate after a deliberate page change. This is
@@ -385,27 +443,35 @@ public final class ReaderViewModel: @unchecked Sendable {
         return await currentVisibleLocatorForReadAloud()
     }
 
-    /// Flushes any pending debounced write immediately. Call on view dismiss.
-    public func flush() async {
+    /// Drains genuine movement and its finite publication boundary. Overlapping
+    /// lifecycle and dismissal requests share one drain.
+    @MainActor
+    @discardableResult
+    public func flush() async -> ReaderPositionFlushResult {
+        if let flushTask { return await flushTask.value }
+        let task = Task { @MainActor [self] in await drainPositionWrites() }
+        flushTask = task
+        let result = await task.value
+        flushTask = nil
+        return result
+    }
+
+    @MainActor
+    private func drainPositionWrites() async -> ReaderPositionFlushResult {
         while true {
             let pending = pendingPositionTask
-            pending?.cancel()
             pendingPositionTask = nil
+            pending?.cancel()
             await pending?.value
-            // Debounced writes are serialized behind this tail. Awaiting the
-            // tail drains writes that were already inside PositionStore when
-            // cancellation happened; cancellation alone is not a barrier.
             await positionWriteTail?.value
-            let locator = latestPositionSource == .readAloud
-                ? (readAloudResumeLocator ?? latestLocator)
-                : latestLocator
-            if let locator {
-                enqueuePositionWrite(for: locator, source: latestPositionSource)
-                await positionWriteTail?.value
-            }
-            // A new locator may have arrived while the store write awaited;
-            // loop once more to serialize and drain that newer write too.
-            guard pendingPositionTask != nil else { return }
+            guard let snapshot = progressSnapshot,
+                  handledRevision < snapshot.revision else { return lastFlushResult }
+            let revision = snapshot.revision
+            enqueuePositionWrite(snapshot)
+            await positionWriteTail?.value
+            // Failures remain retryable on the next explicit flush. Movement
+            // arriving during the await is still drained in this invocation.
+            if progressRevision == revision { return lastFlushResult }
         }
     }
 
@@ -706,57 +772,84 @@ public final class ReaderViewModel: @unchecked Sendable {
         didChangeReadAloudLocation(locator)
     }
 
-    // MARK: - Debounce
+    // MARK: - Durable progress
 
-    private func schedulePositionWrite(
-        for locator: Locator,
-        source: ReaderPositionLocator.Source
-    ) {
-        pendingPositionTask?.cancel()
-        let seconds = debounceSeconds
-        // KEEP: VM is @Observable (not @MainActor); writePosition awaits
-        // positionStore.upsert (actor). No main-bound work.
-        pendingPositionTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            if Task.isCancelled { return }
-            self?.enqueuePositionWrite(for: locator, source: source)
-        }
-    }
-
-    private func enqueuePositionWrite(
-        for locator: Locator,
-        source: ReaderPositionLocator.Source
-    ) {
-        let previous = positionWriteTail
-        positionWriteTail = Task { [weak self] in
-            await previous?.value
-            guard !Task.isCancelled else { return }
-            await self?.writePosition(for: locator, source: source)
-        }
-    }
-
-    private func writePosition(
-        for locator: Locator,
-        source: ReaderPositionLocator.Source
-    ) async {
+    private func recordProgress(for locator: Locator, source: ReaderPositionLocator.Source) {
         let wrapper = ReaderPositionLocator(locator: locator, source: source)
-        let encoded: String
+        guard wrapper != progressBaseline else { return }
         do {
-            encoded = try wrapper.encodedJSONString()
+            let encoded = try wrapper.encodedJSONString()
+            progressBaseline = wrapper
+            progressRevision &+= 1
+            let snapshot = ProgressSnapshot(
+                position: Position(
+                    id: positionID, bookId: book.id, locator: encoded,
+                    percentComplete: locator.locations.totalProgression ?? 0,
+                    updatedAt: Date()
+                ),
+                revision: progressRevision,
+                publicationOwner: persistedPositionOwner
+            )
+            progressSnapshot = snapshot
+            pendingPositionTask?.cancel()
+            let seconds = debounceSeconds
+            pendingPositionTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+                guard !Task.isCancelled else { return }
+                self?.pendingPositionTask = nil
+                self?.enqueuePositionWrite(snapshot)
+            }
         } catch {
-            Log.reader.error("Failed to encode EPUB position locator: \(error.localizedDescription, privacy: .public)")
-            return
+            positionSaveError = error.localizedDescription
+            lastFlushResult = .writeFailed
         }
-        let position = Position(
-            bookId: book.id,
-            locator: encoded,
-            percentComplete: locator.locations.totalProgression ?? 0,
-            updatedAt: Date()
-        )
-        do {
+    }
+
+    private func enqueuePositionWrite(_ snapshot: ProgressSnapshot) {
+        guard snapshot.revision > handledRevision,
+              queuedRevision != snapshot.revision else { return }
+        let revision = snapshot.revision
+        queuedRevision = revision
+        let previous = positionWriteTail
+        positionWriteTail = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            await self.writePosition(snapshot.position, revision: revision, publicationOwner: snapshot.publicationOwner)
+            if self.queuedRevision == revision { self.queuedRevision = 0 }
+        }
+    }
+
+    @MainActor
+    private func writePosition(_ position: Position, revision: UInt64, publicationOwner: UUID?) async {
+        guard revision > handledRevision else { return }
+        let persist: @MainActor @Sendable () async throws -> Void = { [self] in
+            guard savedRevision < revision else { return }
+            let admission = try sourceAdmission()
+            defer { admission?.release() }
             try await positionStore.upsert(position)
+            savedRevision = revision
+            positionSaveError = nil
+        }
+        do {
+            let result: PositionCommitResult
+            if let publicationOwner,
+               publicationOwner == persistedPositionOwner,
+               let handler = persistedPositionHandler {
+                result = try await handler(position, persist)
+            } else {
+                try await persist()
+                result = .committed
+            }
+            handledRevision = revision
+            lastFlushResult = result == .committed ? .committed : .savedPublicationPending
         } catch {
-            Log.reader.error("Failed to persist EPUB position: \(error.localizedDescription, privacy: .public)")
+            if error is BookSourceAccessError || error is BookSourceOwnerError || error is BookScopedMutationError {
+                lastFlushResult = .revoked
+            } else {
+                lastFlushResult = savedRevision >= revision ? .savedPublicationPending : .writeFailed
+            }
+            positionSaveError = error.localizedDescription
+            Log.reader.error("Failed to commit reader position: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

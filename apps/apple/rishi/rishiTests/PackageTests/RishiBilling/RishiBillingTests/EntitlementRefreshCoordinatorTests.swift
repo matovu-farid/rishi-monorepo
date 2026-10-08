@@ -1,8 +1,9 @@
 @testable import rishi
 import Foundation
 import Testing
+import Synchronization
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct EntitlementRefreshCoordinatorTests {
 
     private let paidSnapshot = EntitlementSnapshot.readerActive(
@@ -83,6 +84,30 @@ struct EntitlementRefreshCoordinatorTests {
         #expect(await launchSpy.callCount() == 1)
     }
 
+    @Test("sign-in after launch still refreshes the signed-in account")
+    func signInAfterLaunchStillRefreshes() async {
+        let harness = LockedEntitlementURLProtocolHarness()
+        harness.configure(responses: [
+            1: .success(paidSnapshot),
+            2: .success(paidSnapshot)
+        ])
+        defer { harness.reset() }
+
+        let provider = MutableUserProvider("user-a")
+        let launchSpy = LaunchRefreshSpy()
+        let coordinator = makeCoordinator(
+            provider: provider,
+            harness: harness,
+            launchRefresh: launchSpy
+        )
+
+        _ = await coordinator.refreshIfSignedIn(reason: .launch)
+        _ = await coordinator.refreshIfSignedIn(reason: .signIn)
+
+        #expect(harness.requestCount == 2)
+        #expect(await launchSpy.callCount() == 1)
+    }
+
     @Test("launch refresh hook runs for early account-change validation")
     func launchRefreshRunsForEarlyAccountChangeValidation() async {
         let harness = LockedEntitlementURLProtocolHarness()
@@ -90,7 +115,8 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        provider.armBlockingReadBarrier(for: .launchCaller)
+        provider.scriptReads(["user-a", "user-b"], for: .launchCaller)
+        provider.set("user-b")
         let launchSpy = LaunchRefreshSpy()
         let coordinator = makeCoordinator(
             provider: provider,
@@ -104,18 +130,10 @@ struct EntitlementRefreshCoordinatorTests {
         }
         defer {
             launch.cancel()
-            provider.releaseReadBarrier(for: .launchCaller)
         }
-
-        guard provider.waitForReadBarrier(for: .launchCaller) else {
-            Issue.record("Launch validation did not reach the account-read barrier")
-            return
-        }
-        provider.set("user-b")
-        provider.releaseReadBarrier(for: .launchCaller)
 
         guard case .completed(let result) = await awaitEntitlementTaskValue(launch) else {
-            Issue.record("Early launch validation did not complete within 5 seconds")
+            Issue.record("Early launch validation did not complete")
             return
         }
         expectAccountChanged(result)
@@ -130,9 +148,12 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        provider.armBlockingReadBarrier(for: .launchCallerOne)
-        provider.armBlockingReadBarrier(for: .launchCallerTwo)
-        let launchSpy = LaunchRefreshSpy()
+        provider.scriptReads(["user-a", "user-b"], for: .launchCallerOne)
+        provider.scriptReads(["user-a", "user-b"], for: .launchCallerTwo)
+        provider.set("user-b")
+        let hookEntered = CoordinatorFixtureSignal()
+        let hookRelease = CoordinatorFixtureSignal()
+        let launchSpy = GatedLaunchRefreshSpy(entered: hookEntered, release: hookRelease)
         let coordinator = makeCoordinator(
             provider: provider,
             harness: harness,
@@ -143,32 +164,24 @@ struct EntitlementRefreshCoordinatorTests {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
+        defer { launchOne.cancel(); hookRelease.signal() }
+        guard await hookEntered.wait() else { Issue.record("First reconciliation did not enter"); return }
         let launchTwo = Task {
             await RefreshTestTaskContext.$role.withValue(.launchCallerTwo) {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
-        defer {
-            launchOne.cancel()
-            launchTwo.cancel()
-            provider.releaseReadBarrier(for: .launchCallerOne)
-            provider.releaseReadBarrier(for: .launchCallerTwo)
+        defer { launchTwo.cancel() }
+        guard await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
+            Issue.record("Second caller did not reach early validation"); return
         }
-
-        guard provider.waitForReadBarrier(for: .launchCallerOne),
-              provider.waitForReadBarrier(for: .launchCallerTwo)
-        else {
-            Issue.record("Both launch callers did not reach early validation")
-            return
-        }
-        provider.set("user-b")
-        provider.releaseReadBarrier(for: .launchCallerOne)
-        provider.releaseReadBarrier(for: .launchCallerTwo)
+        #expect(await launchSpy.callCount() == 1)
+        hookRelease.signal()
 
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
         else {
-            Issue.record("Early account-change callers did not complete within 5 seconds")
+            Issue.record("Early account-change callers did not complete")
             return
         }
         expectAccountChanged(firstResult)
@@ -184,9 +197,10 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        provider.armBlockingReadBarrier(for: .launchCaller)
-        let hookEntered = DispatchSemaphore(value: 0)
-        let hookRelease = DispatchSemaphore(value: 0)
+        provider.scriptReads(["user-a", "user-b"], for: .launchCaller)
+        provider.set("user-b")
+        let hookEntered = CoordinatorFixtureSignal()
+        let hookRelease = CoordinatorFixtureSignal()
         let launchSpy = GatedLaunchRefreshSpy(
             entered: hookEntered,
             release: hookRelease
@@ -203,30 +217,23 @@ struct EntitlementRefreshCoordinatorTests {
         }
         defer {
             launchOne.cancel()
-            provider.releaseReadBarrier(for: .launchCaller)
             hookRelease.signal()
         }
 
-        guard provider.waitForReadBarrier(for: .launchCaller) else {
-            Issue.record("Initial A launch caller did not reach validation")
-            return
-        }
-        provider.set("user-b")
-        provider.releaseReadBarrier(for: .launchCaller)
-        guard hookEntered.wait(timeout: .now() + 5) == .success else {
+        guard await hookEntered.wait() else {
             Issue.record("A early launch generation did not start reconciliation")
             return
         }
 
         provider.set("user-a")
-        provider.armReadBarrier(for: .launchCallerTwo)
+
         let launchTwo = Task {
             await RefreshTestTaskContext.$role.withValue(.launchCallerTwo) {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
         defer { launchTwo.cancel() }
-        guard provider.waitForReadBarrier(for: .launchCallerTwo) else {
+        guard await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
             Issue.record("Returning A launch caller did not reach validation")
             return
         }
@@ -236,7 +243,7 @@ struct EntitlementRefreshCoordinatorTests {
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
         else {
-            Issue.record("A->B->A launch callers did not complete within 5 seconds")
+            Issue.record("A->B->A launch callers did not complete")
             return
         }
         expectAccountChanged(firstResult)
@@ -248,7 +255,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("launchRefreshPromotesNonLaunchWork: launch refresh runs exactly once")
     func launchRefreshPromotesNonLaunchWork() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let foregroundGate = DispatchSemaphore(value: 0)
+        let foregroundGate = CoordinatorFixtureSignal()
         let foregroundSnapshot = EntitlementSnapshot.trialActive(remainingCredits: 7)
         harness.configure(
             responses: [
@@ -270,10 +277,10 @@ struct EntitlementRefreshCoordinatorTests {
         let foreground = Task {
             await coordinator.refreshIfSignedIn(reason: .foreground)
         }
-        guard harness.waitForRequestCount(1) else {
+        guard await harness.waitForRequestCount(1) else {
             foreground.cancel()
             foregroundGate.signal()
-            Issue.record("Foreground request did not start within 5 seconds")
+            Issue.record("Foreground request did not start")
             return
         }
 
@@ -287,17 +294,17 @@ struct EntitlementRefreshCoordinatorTests {
         }
         foregroundGate.signal()
 
-        guard harness.waitForRequestCount(2) else {
+        guard await harness.waitForRequestCount(2) else {
             Issue.record("Launch promotion did not start a second request")
             return
         }
 
         guard case .completed = await awaitEntitlementTaskValue(foreground) else {
-            Issue.record("Foreground refresh task did not complete within 5 seconds")
+            Issue.record("Foreground refresh task did not complete")
             return
         }
         guard case .completed(let result) = await awaitEntitlementTaskValue(launch) else {
-            Issue.record("Launch refresh task did not complete within 5 seconds")
+            Issue.record("Launch refresh task did not complete")
             return
         }
 
@@ -319,7 +326,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("accountChangeInvalidatesResponseBeforeApply: stale response is rejected and disk cache survives")
     func accountChangeInvalidatesResponseBeforeApply() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let responseGate = DispatchSemaphore(value: 0)
+        let responseGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [1: .success(paidSnapshot)],
             gates: [1: responseGate]
@@ -328,12 +335,16 @@ struct EntitlementRefreshCoordinatorTests {
 
         let defaults = makeDefaults()
         let oldSnapshot = EntitlementSnapshot.trialActive(remainingCredits: 17)
-        let oldData = seed(oldSnapshot, for: "user-a", in: defaults)
+        _ = seed(oldSnapshot, for: "user-a", in: defaults)
         let service = EntitlementService(
             workerClient: makeWorkerClient(harness: harness),
             defaults: defaults
         )
         await service.bindToUser(userId: "user-a")
+        let oldData = defaults.data(forKey: cacheKey(for: "user-a"))!
+        let oldPayload = try! JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: oldData)
+        #expect(oldPayload.snapshot == oldSnapshot)
+        #expect(oldPayload.cachedAt == Date(timeIntervalSince1970: 1_700_000_000))
         let provider = MutableUserProvider("user-a")
 
         let refresh = Task {
@@ -346,15 +357,15 @@ struct EntitlementRefreshCoordinatorTests {
             refresh.cancel()
             responseGate.signal()
         }
-        guard harness.waitForRequestCount(1) else {
-            Issue.record("Entitlement request did not start within 5 seconds")
+        guard await harness.waitForRequestCount(1) else {
+            Issue.record("Entitlement request did not start")
             return
         }
         provider.set("user-b")
         responseGate.signal()
 
         guard case .completed(let result) = await awaitEntitlementTaskValue(refresh) else {
-            Issue.record("Entitlement refresh did not complete within 5 seconds")
+            Issue.record("Entitlement refresh did not complete")
             return
         }
         expectAccountChanged(result)
@@ -365,7 +376,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("lateAccountAResponseDoesNotResetHydratedB: stale A work leaves B and both caches intact")
     func lateAccountAResponseDoesNotResetHydratedB() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let responseGate = DispatchSemaphore(value: 0)
+        let responseGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [1: .success(paidSnapshot)],
             gates: [1: responseGate]
@@ -375,13 +386,17 @@ struct EntitlementRefreshCoordinatorTests {
         let defaults = makeDefaults()
         let snapshotA = EntitlementSnapshot.trialActive(remainingCredits: 11)
         let snapshotB = EntitlementSnapshot.trialActive(remainingCredits: 22)
-        let dataA = seed(snapshotA, for: "user-a", in: defaults)
-        let dataB = seed(snapshotB, for: "user-b", in: defaults)
+        _ = seed(snapshotA, for: "user-a", in: defaults)
+        _ = seed(snapshotB, for: "user-b", in: defaults)
         let service = EntitlementService(
             workerClient: makeWorkerClient(harness: harness),
             defaults: defaults
         )
         await service.bindToUser(userId: "user-a")
+        let dataA = defaults.data(forKey: cacheKey(for: "user-a"))!
+        let payloadA = try! JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: dataA)
+        #expect(payloadA.snapshot == snapshotA)
+        #expect(payloadA.cachedAt == Date(timeIntervalSince1970: 1_700_000_000))
         let provider = MutableUserProvider("user-a")
 
         let refresh = Task {
@@ -394,16 +409,20 @@ struct EntitlementRefreshCoordinatorTests {
             refresh.cancel()
             responseGate.signal()
         }
-        guard harness.waitForRequestCount(1) else {
-            Issue.record("Entitlement request did not start within 5 seconds")
+        guard await harness.waitForRequestCount(1) else {
+            Issue.record("Entitlement request did not start")
             return
         }
         provider.set("user-b")
         await service.bindToUser(userId: "user-b")
+        let dataB = defaults.data(forKey: cacheKey(for: "user-b"))!
+        let payloadB = try! JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: dataB)
+        #expect(payloadB.snapshot == snapshotB)
+        #expect(payloadB.cachedAt == Date(timeIntervalSince1970: 1_700_000_000))
         responseGate.signal()
 
         guard case .completed(let result) = await awaitEntitlementTaskValue(refresh) else {
-            Issue.record("Entitlement refresh did not complete within 5 seconds")
+            Issue.record("Entitlement refresh did not complete")
             return
         }
         expectAccountChanged(result)
@@ -420,7 +439,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("coalescedResultRevalidatesAccount: joined callers reject a result after account switch")
     func coalescedResultRevalidatesAccount() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let responseGate = DispatchSemaphore(value: 0)
+        let responseGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [1: .success(paidSnapshot)],
             gates: [1: responseGate]
@@ -428,8 +447,8 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        let hookEntered = DispatchSemaphore(value: 0)
-        let hookRelease = DispatchSemaphore(value: 0)
+        let hookEntered = CoordinatorFixtureSignal()
+        let hookRelease = CoordinatorFixtureSignal()
         let launchSpy = GatedLaunchRefreshSpy(
             entered: hookEntered,
             release: hookRelease
@@ -455,8 +474,8 @@ struct EntitlementRefreshCoordinatorTests {
             responseGate.signal()
             for _ in 0..<4 { hookRelease.signal() }
         }
-        guard harness.waitForRequestCount(1),
-              provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2)
+        guard await harness.waitForRequestCount(1),
+              await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2)
         else {
             Issue.record("Second launch caller did not join the first in-flight refresh")
             return
@@ -464,8 +483,8 @@ struct EntitlementRefreshCoordinatorTests {
         #expect(harness.requestCount == 1)
         provider.set("user-b")
         responseGate.signal()
-        guard hookEntered.wait(timeout: .now() + 5) == .success else {
-            Issue.record("Launch reconciliation hook did not start within 5 seconds")
+        guard await hookEntered.wait() else {
+            Issue.record("Launch reconciliation hook did not start")
             return
         }
         for _ in 0..<4 { hookRelease.signal() }
@@ -473,7 +492,7 @@ struct EntitlementRefreshCoordinatorTests {
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(first),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(second)
         else {
-            Issue.record("Coalesced callers did not complete within 5 seconds")
+            Issue.record("Coalesced callers did not complete")
             return
         }
         expectAccountChanged(firstResult)
@@ -485,7 +504,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("forcedCallersCoalesceInFlightWork: concurrent force callers use one request")
     func forcedCallersCoalesceInFlightWork() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let responseGate = DispatchSemaphore(value: 0)
+        let responseGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [1: .success(paidSnapshot)],
             gates: [1: responseGate]
@@ -503,7 +522,7 @@ struct EntitlementRefreshCoordinatorTests {
             first.cancel()
             responseGate.signal()
         }
-        guard harness.waitForRequestCount(1) else {
+        guard await harness.waitForRequestCount(1) else {
             Issue.record("First forced refresh request did not start")
             return
         }
@@ -515,7 +534,7 @@ struct EntitlementRefreshCoordinatorTests {
         defer {
             second.cancel()
         }
-        guard provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
+        guard await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
             Issue.record("Second forced caller did not join the first in-flight refresh")
             return
         }
@@ -525,7 +544,7 @@ struct EntitlementRefreshCoordinatorTests {
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(first),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(second)
         else {
-            Issue.record("Forced coalesced callers did not complete within 5 seconds")
+            Issue.record("Forced coalesced callers did not complete")
             return
         }
         expectEqualResults(firstResult, secondResult)
@@ -535,8 +554,8 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("concurrent launch callers share one promoted generation")
     func concurrentLaunchCallersSharePromotedGeneration() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let firstGate = DispatchSemaphore(value: 0)
-        let launchGate = DispatchSemaphore(value: 0)
+        let firstGate = CoordinatorFixtureSignal()
+        let launchGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [
                 1: .success(paidSnapshot),
@@ -561,7 +580,8 @@ struct EntitlementRefreshCoordinatorTests {
                 await coordinator.refreshIfSignedIn(reason: .foreground)
             }
         }
-        guard harness.waitForRequestRole(.initialForeground, at: 1) else {
+        defer { foreground.cancel() }
+        guard await harness.waitForRequestRole(.initialForeground, at: 1) else {
             foreground.cancel()
             firstGate.signal()
             Issue.record("Initial foreground request did not start")
@@ -584,40 +604,33 @@ struct EntitlementRefreshCoordinatorTests {
             launchTwo.cancel()
             firstGate.signal()
             launchGate.signal()
-            provider.releaseReadBarrier(for: .launchCallerOne)
-            provider.releaseReadBarrier(for: .launchCallerTwo)
         }
 
-        guard provider.waitForReadCount(for: .launchCallerOne, atLeast: 2),
-              provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2)
+        guard await provider.waitForReadCount(for: .launchCallerOne, atLeast: 2),
+              await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2)
         else {
             Issue.record("Both launch callers did not join the gated refresh")
             return
         }
-        provider.armBlockingReadBarrier(for: .launchCallerTwo)
         harness.registerRequestRole(.promotedLaunch)
         firstGate.signal()
 
-        guard harness.waitForRequestRole(.promotedLaunch, at: 2) else {
+        guard await harness.waitForRequestRole(.promotedLaunch, at: 2) else {
             Issue.record("Promoted launch request did not start")
             return
         }
-        provider.armBlockingReadBarrier(for: .launchCallerOne)
         launchGate.signal()
-        guard harness.waitForResponseCompletion(for: 2),
-              provider.waitForReadBarrier(for: .launchCallerOne)
+        guard await harness.waitForResponseCompletion(for: 2)
         else {
-            Issue.record("First promoted launch generation did not finish and clear")
+            Issue.record("First promoted launch response did not finish")
             return
         }
-        provider.releaseReadBarrier(for: .launchCallerOne)
-        provider.releaseReadBarrier(for: .launchCallerTwo)
 
         guard case .completed(let foregroundResult) = await awaitEntitlementTaskValue(foreground),
               case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
         else {
-            Issue.record("A shared launch caller did not complete within 5 seconds")
+            Issue.record("A shared launch caller did not complete")
             return
         }
         guard let foregroundResult, case .success = foregroundResult else {
@@ -632,7 +645,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("account change after shared launch reconciliation does not rerun hook")
     func accountChangeAfterSharedLaunchReconciliationDoesNotRerunHook() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let responseGate = DispatchSemaphore(value: 0)
+        let responseGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [1: .success(paidSnapshot)],
             gates: [1: responseGate]
@@ -640,8 +653,8 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        let hookEntered = DispatchSemaphore(value: 0)
-        let hookRelease = DispatchSemaphore(value: 0)
+        let hookEntered = CoordinatorFixtureSignal()
+        let hookRelease = CoordinatorFixtureSignal()
         let launchSpy = GatedLaunchRefreshSpy(
             entered: hookEntered,
             release: hookRelease
@@ -656,7 +669,7 @@ struct EntitlementRefreshCoordinatorTests {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
-        guard harness.waitForRequestCount(1) else {
+        guard await harness.waitForRequestCount(1) else {
             launchOne.cancel()
             responseGate.signal()
             Issue.record("Initial launch request did not start")
@@ -674,13 +687,13 @@ struct EntitlementRefreshCoordinatorTests {
             responseGate.signal()
             for _ in 0..<4 { hookRelease.signal() }
         }
-        guard provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
+        guard await provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
             Issue.record("Second launch caller did not join the launch generation")
             return
         }
 
         responseGate.signal()
-        guard hookEntered.wait(timeout: .now() + 5) == .success else {
+        guard await hookEntered.wait() else {
             Issue.record("Launch reconciliation hook did not start")
             return
         }
@@ -690,7 +703,7 @@ struct EntitlementRefreshCoordinatorTests {
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
         else {
-            Issue.record("Account-changed launch callers did not complete within 5 seconds")
+            Issue.record("Account-changed launch callers did not complete")
             return
         }
         expectAccountChanged(firstResult)
@@ -699,12 +712,12 @@ struct EntitlementRefreshCoordinatorTests {
         #expect(await launchSpy.callCount() == 1)
     }
 
-    @Test("launchPromotionReReadsNewerNonLaunchTask: launch waits for newer work and runs once")
-    func launchPromotionReReadsNewerNonLaunchTask() async {
+    @Test("launchWaitsForNewerForeground: launch waits for newer work and runs once")
+    func launchWaitsForNewerForeground() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        let firstGate = DispatchSemaphore(value: 0)
-        let newerForegroundGate = DispatchSemaphore(value: 0)
-        let launchGate = DispatchSemaphore(value: 0)
+        let firstGate = CoordinatorFixtureSignal()
+        let newerForegroundGate = CoordinatorFixtureSignal()
+        let launchGate = CoordinatorFixtureSignal()
         harness.configure(
             responses: [
                 1: .success(paidSnapshot),
@@ -730,7 +743,6 @@ struct EntitlementRefreshCoordinatorTests {
             firstGate.signal()
             newerForegroundGate.signal()
             launchGate.signal()
-            provider.releaseReadBarrier(for: .launchCaller)
             harness.reset()
         }
 
@@ -740,58 +752,41 @@ struct EntitlementRefreshCoordinatorTests {
                 await coordinator.refreshIfSignedIn(reason: .foreground)
             }
         }
-        guard harness.waitForRequestRole(.initialForeground, at: 1) else {
+        defer { firstForeground.cancel() }
+        guard await harness.waitForRequestRole(.initialForeground, at: 1) else {
             Issue.record("Initial foreground request did not start with its role")
             return
         }
-        provider.armReadBarrier(for: .launchCaller)
+        firstGate.signal()
+        guard case .completed = await awaitEntitlementTaskValue(firstForeground) else {
+            Issue.record("Initial foreground did not complete"); return
+        }
+        harness.registerRequestRole(.newerForeground)
+        let newerForeground = Task {
+            await RefreshTestTaskContext.$role.withValue(.newerForeground) {
+                await coordinator.refreshIfSignedIn(reason: .foreground)
+            }
+        }
+        defer { newerForeground.cancel() }
+        guard await harness.waitForRequestRole(.newerForeground, at: 2) else {
+            Issue.record("Newer foreground request did not start with its role"); return
+        }
         let launch = Task {
             await RefreshTestTaskContext.$role.withValue(.launchCaller) {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
-        guard provider.waitForReadBarrier(for: .launchCaller) else {
-            Issue.record("Launch caller did not reach the in-flight wait")
-            return
-        }
-        provider.armBlockingReadBarrier(for: .launchCaller)
-
-        let newerForeground = Task {
-            harness.markTaskStarted(.newerForeground)
-            guard case .completed = await awaitEntitlementTaskValue(firstForeground) else {
-                return nil
-            }
-            harness.registerRequestRole(.newerForeground)
-            return await RefreshTestTaskContext.$role.withValue(.newerForeground) {
-                await coordinator.refreshIfSignedIn(reason: .foreground)
-            }
-        }
-        defer {
-            firstForeground.cancel()
-            newerForeground.cancel()
-            launch.cancel()
-        }
-        guard harness.waitForTaskStart(.newerForeground) else {
-            Issue.record("Newer foreground task did not install")
-            return
-        }
-        firstGate.signal()
-        guard harness.waitForRequestRole(.newerForeground, at: 2) else {
-            Issue.record("Newer foreground request did not start with its role")
-            return
-        }
-        guard provider.waitForReadBarrier(for: .launchCaller) else {
-            Issue.record("Launch caller did not reach the re-read barrier")
-            return
+        defer { launch.cancel() }
+        guard await provider.waitForReadCount(for: .launchCaller, atLeast: 2) else {
+            Issue.record("Launch did not validate the active newer foreground"); return
         }
         harness.registerRequestRole(.promotedLaunch)
-        provider.releaseReadBarrier(for: .launchCaller)
         newerForegroundGate.signal()
-        guard harness.waitForResponseCompletion(for: 2) else {
+        guard await harness.waitForResponseCompletion(for: 2) else {
             Issue.record("Newer foreground response did not fully complete")
             return
         }
-        guard harness.waitForRequestRole(.promotedLaunch, at: 3) else {
+        guard await harness.waitForRequestRole(.promotedLaunch, at: 3) else {
             Issue.record("Promoted launch request did not start with its role")
             return
         }
@@ -805,15 +800,15 @@ struct EntitlementRefreshCoordinatorTests {
         launchGate.signal()
 
         guard case .completed = await awaitEntitlementTaskValue(firstForeground) else {
-            Issue.record("Initial foreground task did not complete within 5 seconds")
+            Issue.record("Initial foreground task did not complete")
             return
         }
         guard case .completed = await awaitEntitlementTaskValue(newerForeground) else {
-            Issue.record("Newer foreground task did not complete within 5 seconds")
+            Issue.record("Newer foreground task did not complete")
             return
         }
         guard case .completed(let result) = await awaitEntitlementTaskValue(launch) else {
-            Issue.record("Promoted launch task did not complete within 5 seconds")
+            Issue.record("Promoted launch task did not complete")
             return
         }
         guard let result else {
@@ -958,108 +953,104 @@ private actor LaunchRefreshSpy: EntitlementLaunchRefresh {
     func callCount() -> Int { calls }
 }
 
-private final class GatedLaunchRefreshSpy: EntitlementLaunchRefresh, @unchecked Sendable {
-    private let lock = NSLock()
-    private let entered: DispatchSemaphore
-    private let release: DispatchSemaphore
-    private var calls = 0
-
-    init(entered: DispatchSemaphore, release: DispatchSemaphore) {
-        self.entered = entered
-        self.release = release
+private final class GatedLaunchRefreshSpy: EntitlementLaunchRefresh, Sendable {
+    private let calls = Mutex(0)
+    private let entered: CoordinatorFixtureSignal
+    private let release: CoordinatorFixtureSignal
+    init(entered: CoordinatorFixtureSignal, release: CoordinatorFixtureSignal) {
+        self.entered = entered; self.release = release
     }
-
     func refreshOnDeviceEntitlementAtLaunch() async {
-        lock.lock()
-        calls += 1
-        lock.unlock()
+        calls.withLock { $0 += 1 }
         entered.signal()
-        _ = release.wait(timeout: .now() + 5)
+        _ = await release.wait()
     }
-
-    func callCount() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return calls
-    }
+    func callCount() -> Int { calls.withLock { $0 } }
 }
 
-private enum TimedEntitlementTaskResult<Value>: @unchecked Sendable {
+private enum TimedEntitlementTaskResult<Value: Sendable>: Sendable {
     case completed(Value)
     case timedOut
 }
 
-private actor EntitlementTaskWaitState<Value> {
-    private var didFinish = false
-    private var taskWaiter: Task<Void, Never>?
-    private var timeoutWaiter: Task<Void, Never>?
-
-    func install(
-        taskWaiter: Task<Void, Never>,
-        timeoutWaiter: Task<Void, Never>
-    ) {
-        guard !didFinish else {
-            taskWaiter.cancel()
-            timeoutWaiter.cancel()
-            return
-        }
-        self.taskWaiter = taskWaiter
-        self.timeoutWaiter = timeoutWaiter
+private final class EntitlementTaskWaitState<Value: Sendable>: Sendable {
+    private struct State {
+        var finished = false
+        var continuation: CheckedContinuation<TimedEntitlementTaskResult<Value>, Never>?
+        var waiter: Task<Void, Never>?
     }
-
-    func finish(
-        _ result: TimedEntitlementTaskResult<Value>,
-        task: Task<Value, Never>,
-        continuation: CheckedContinuation<TimedEntitlementTaskResult<Value>, Never>
-    ) {
-        guard !didFinish else {
-            return
+    private let state = Mutex(State())
+    func install(_ continuation: CheckedContinuation<TimedEntitlementTaskResult<Value>, Never>) {
+        let canceled = state.withLock { state in
+            if state.finished { return true }
+            state.continuation = continuation; return false
         }
-        didFinish = true
-        let taskWaiter = self.taskWaiter
-        let timeoutWaiter = self.timeoutWaiter
-        self.taskWaiter = nil
-        self.timeoutWaiter = nil
-        taskWaiter?.cancel()
-        timeoutWaiter?.cancel()
-        if case .timedOut = result {
-            task.cancel()
+        if canceled { continuation.resume(returning: .timedOut) }
+    }
+    func install(_ waiter: Task<Void, Never>) {
+        let finished = state.withLock { state in
+            if state.finished { return true }
+            state.waiter = waiter; return false
         }
-        continuation.resume(returning: result)
+        if finished { waiter.cancel() }
+    }
+    func finish(_ result: TimedEntitlementTaskResult<Value>) {
+        let completion = state.withLock { state -> (CheckedContinuation<TimedEntitlementTaskResult<Value>, Never>?, Task<Void, Never>?) in
+            guard !state.finished else { return (nil, nil) }
+            state.finished = true
+            let completion = (state.continuation, state.waiter)
+            state.continuation = nil; state.waiter = nil
+            return completion
+        }
+        completion.1?.cancel()
+        completion.0?.resume(returning: result)
     }
 }
 
-private func awaitEntitlementTaskValue<Value>(
-    _ task: Task<Value, Never>,
-    timeout: Duration = .seconds(5)
-) async -> TimedEntitlementTaskResult<Value> {
-    await withCheckedContinuation { continuation in
-        let state = EntitlementTaskWaitState<Value>()
+private func awaitEntitlementTaskValue<Value: Sendable>(_ task: Task<Value, Never>) async -> TimedEntitlementTaskResult<Value> {
+    let state = EntitlementTaskWaitState<Value>()
+    return await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+            state.install(continuation)
+            let waiter = Task { state.finish(.completed(await task.value)) }
+            state.install(waiter)
+        }
+    } onCancel: {
+        task.cancel()
+        state.finish(.timedOut)
+    }
+}
 
-        let taskWaiter: Task<Void, Never> = Task {
-            await state.finish(
-                .completed(await task.value),
-                task: task,
-                continuation: continuation
-            )
+private final class CoordinatorFixtureSignal: Sendable {
+    private struct State {
+        var count = 0
+        var waiters: [UUID: (target: Int, continuation: CheckedContinuation<Bool, Never>)] = [:]
+    }
+    private let state = Mutex(State())
+    func signal() {
+        let ready = state.withLock { state in
+            state.count += 1
+            let ready = state.waiters.filter { $0.value.target <= state.count }
+            for id in ready.keys { state.waiters[id] = nil }
+            return ready.values.map(\.continuation)
         }
-        let timeoutWaiter: Task<Void, Never> = Task {
-            do {
-                try await Task.sleep(for: timeout)
-                await state.finish(
-                    .timedOut,
-                    task: task,
-                    continuation: continuation
-                )
-            } catch {
-                // The timeout waiter is cancelled when the task waiter wins.
+        for continuation in ready { continuation.resume(returning: true) }
+    }
+    func wait(for target: Int = 1) async -> Bool {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let immediate: Bool? = state.withLock { state in
+                    if Task.isCancelled { return false }
+                    if state.count >= target { return true }
+                    state.waiters[id] = (target, continuation)
+                    return nil
+                }
+                if let immediate { continuation.resume(returning: immediate) }
             }
-        }
-        Task {
-            await state.install(
-                taskWaiter: taskWaiter,
-                timeoutWaiter: timeoutWaiter
-            )
+        } onCancel: {
+            let continuation = self.state.withLock { $0.waiters.removeValue(forKey: id)?.continuation }
+            continuation?.resume(returning: false)
         }
     }
 }
@@ -1067,111 +1058,40 @@ private func awaitEntitlementTaskValue<Value>(
 private final class MutableUserProvider: @unchecked Sendable {
     private let lock = NSLock()
     private var userId: String?
-    private var readBarriers: [RefreshRole: ReadBarrier] = [:]
-    private var readCounts: [RefreshRole: Int] = [:]
-    private var readCountWaiters: [RefreshRole: [(expected: Int, signal: DispatchSemaphore)]] = [:]
+    private var readSignals: [RefreshRole: CoordinatorFixtureSignal] = [:]
+    private var readScripts: [RefreshRole: [String?]] = [:]
 
-    init(_ userId: String?) {
-        self.userId = userId
-    }
+    init(_ userId: String?) { self.userId = userId }
 
     var current: String? {
-        lock.lock()
-        let currentUserId = userId
-        let role = RefreshTestTaskContext.role
-        let barrier = role.flatMap { readBarriers[$0] }
-        var signalsToFire: [DispatchSemaphore] = []
-        if let role {
-            let count = readCounts[role, default: 0] + 1
-            readCounts[role] = count
-            let waiters = readCountWaiters[role, default: []]
-            readCountWaiters[role] = waiters.filter { waiter in
-                guard count >= waiter.expected else { return true }
-                signalsToFire.append(waiter.signal)
-                return false
+        let captured = lock.withLock { () -> (String?, CoordinatorFixtureSignal?) in
+            let role = RefreshTestTaskContext.role
+            var value = userId
+            if let role, var script = readScripts[role], !script.isEmpty {
+                value = script.removeFirst()
+                readScripts[role] = script
             }
+            let signal = role.map { role in
+                if let signal = readSignals[role] { return signal }
+                let signal = CoordinatorFixtureSignal(); readSignals[role] = signal; return signal
+            }
+            return (value, signal)
         }
-        let shouldBlock = barrier.map { !$0.consumed } ?? false
-        if shouldBlock {
-            barrier?.consumed = true
-        }
-        lock.unlock()
-        signalsToFire.forEach { $0.signal() }
-        if shouldBlock {
-            barrier?.reached.signal()
-        }
-        if shouldBlock, barrier?.blocksRead == true {
-            _ = barrier?.release.wait(timeout: .now() + 5)
-        }
-        return currentUserId
+        captured.1?.signal()
+        return captured.0
     }
 
-    func set(_ userId: String?) {
-        lock.lock()
-        self.userId = userId
-        lock.unlock()
+    func set(_ userId: String?) { lock.withLock { self.userId = userId } }
+    /// The provider races between captured and current reads; it never blocks its caller actor.
+    func scriptReads(_ values: [String?], for role: RefreshRole) {
+        lock.withLock { readScripts[role] = values }
     }
-
-    func armReadBarrier(for role: RefreshRole) {
-        lock.lock()
-        readBarriers[role] = ReadBarrier(blocksRead: false)
-        lock.unlock()
-    }
-
-    func armBlockingReadBarrier(for role: RefreshRole) {
-        lock.lock()
-        readBarriers[role] = ReadBarrier(blocksRead: true)
-        lock.unlock()
-    }
-
-    func waitForReadBarrier(
-        for role: RefreshRole,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        lock.lock()
-        let barrier = readBarriers[role]
-        lock.unlock()
-        guard let barrier,
-              barrier.reached.wait(timeout: .now() + timeout) == .success
-        else {
-            return false
+    func waitForReadCount(for role: RefreshRole, atLeast expected: Int) async -> Bool {
+        let signal = lock.withLock {
+            if let signal = readSignals[role] { return signal }
+            let signal = CoordinatorFixtureSignal(); readSignals[role] = signal; return signal
         }
-        return true
-    }
-
-    func releaseReadBarrier(for role: RefreshRole) {
-        lock.lock()
-        let barrier = readBarriers[role]
-        lock.unlock()
-        barrier?.release.signal()
-    }
-
-    func waitForReadCount(
-        for role: RefreshRole,
-        atLeast expected: Int,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        lock.lock()
-        let count = readCounts[role, default: 0]
-        if count >= expected {
-            lock.unlock()
-            return true
-        }
-        let signal = DispatchSemaphore(value: 0)
-        readCountWaiters[role, default: []].append((expected, signal))
-        lock.unlock()
-        return signal.wait(timeout: .now() + timeout) == .success
-    }
-
-    private final class ReadBarrier: @unchecked Sendable {
-        let blocksRead: Bool
-        let reached = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        var consumed = false
-
-        init(blocksRead: Bool) {
-            self.blocksRead = blocksRead
-        }
+        return await signal.wait(for: expected)
     }
 }
 
@@ -1188,21 +1108,19 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
         }
 
         static func failure(statusCode: Int) -> Response {
-            Response(statusCode: statusCode, body: Data(#"{"error":"test failure"}"#.utf8))
+            Response(statusCode: statusCode, body: Data(#"{"error":{"code":"TEST_ENTITLEMENT_UNAVAILABLE","message":"test failure"}}"#.utf8))
         }
     }
 
     private let lock = NSLock()
-    private let requestSignal = DispatchSemaphore(value: 0)
+    private let requestSignal = CoordinatorFixtureSignal()
     private var responses: [Int: Response] = [:]
-    private var gates: [Int: DispatchSemaphore] = [:]
+    private var gates: [Int: CoordinatorFixtureSignal] = [:]
     private var count = 0
     private var pendingRequestRoles: [RefreshRole] = []
     private var observedRoles: [Int: RefreshRole] = [:]
-    private var startedTaskRoles: Set<RefreshRole> = []
-    private var taskStartSignals: [RefreshRole: DispatchSemaphore] = [:]
     private var completedRequests: Set<Int> = []
-    private var responseCompletionSignals: [Int: DispatchSemaphore] = [:]
+    private var responseCompletionSignals: [Int: CoordinatorFixtureSignal] = [:]
     private var earlyRequestStarts: Set<Int> = []
 
     var protocolClass: URLProtocol.Type { LockedEntitlementURLProtocol.self }
@@ -1215,7 +1133,7 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
 
     func configure(
         responses: [Int: Response],
-        gates: [Int: DispatchSemaphore] = [:]
+        gates: [Int: CoordinatorFixtureSignal] = [:]
     ) {
         LockedEntitlementURLProtocol.activate(self)
         lock.lock()
@@ -1224,8 +1142,6 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
         count = 0
         pendingRequestRoles.removeAll()
         observedRoles.removeAll()
-        startedTaskRoles.removeAll()
-        taskStartSignals.removeAll()
         completedRequests.removeAll()
         responseCompletionSignals.removeAll()
         earlyRequestStarts.removeAll()
@@ -1235,17 +1151,17 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
     func reset() {
         LockedEntitlementURLProtocol.deactivate(self)
         lock.lock()
+        let releasedGates = Array(gates.values)
         responses.removeAll()
         gates.removeAll()
         count = 0
         pendingRequestRoles.removeAll()
         observedRoles.removeAll()
-        startedTaskRoles.removeAll()
-        taskStartSignals.removeAll()
         completedRequests.removeAll()
         responseCompletionSignals.removeAll()
         earlyRequestStarts.removeAll()
         lock.unlock()
+        releasedGates.forEach { $0.signal() }
     }
 
     func registerRequestRole(_ role: RefreshRole) {
@@ -1254,82 +1170,29 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
         lock.unlock()
     }
 
-    func markTaskStarted(_ role: RefreshRole) {
-        lock.lock()
-        startedTaskRoles.insert(role)
-        let signal = taskStartSignals[role]
-        lock.unlock()
-        signal?.signal()
+    func waitForRequestCount(_ expected: Int) async -> Bool {
+        await requestSignal.wait(for: expected)
     }
-
-    func waitForTaskStart(
-        _ role: RefreshRole,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        lock.lock()
-        if startedTaskRoles.contains(role) {
-            lock.unlock()
-            return true
-        }
-        let signal = taskStartSignals[role] ?? {
-            let signal = DispatchSemaphore(value: 0)
-            taskStartSignals[role] = signal
-            return signal
-        }()
-        lock.unlock()
-        return signal.wait(timeout: .now() + timeout) == .success
-    }
-
-    func waitForRequestCount(
-        _ expected: Int,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if requestCount >= expected { return true }
-            let remaining = deadline.timeIntervalSinceNow
-            if remaining <= 0 { break }
-            _ = requestSignal.wait(timeout: .now() + min(remaining, 0.05))
-        }
-        return requestCount >= expected
-    }
-
-    func waitForRequestRole(
-        _ role: RefreshRole,
-        at requestNumber: Int,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        guard waitForRequestCount(requestNumber, timeout: timeout) else { return false }
-        lock.lock()
-        let observedRole = observedRoles[requestNumber]
-        lock.unlock()
-        return observedRole == role
+    func waitForRequestRole(_ role: RefreshRole, at requestNumber: Int) async -> Bool {
+        guard await waitForRequestCount(requestNumber) else { return false }
+        return lock.withLock { observedRoles[requestNumber] == role }
     }
 
     func observedRequestRoles() -> [RefreshRole] {
         lock.lock()
         defer { lock.unlock() }
-        return observedRoles.keys
-            .sorted { $0.rawValue < $1.rawValue }
-            .compactMap { observedRoles[$0] }
+        let roles: [RefreshRole] = observedRoles.keys.sorted().compactMap { observedRoles[$0] }
+        return roles
     }
 
-    func waitForResponseCompletion(
-        for requestNumber: Int,
-        timeout: TimeInterval = 5
-    ) -> Bool {
-        lock.lock()
-        if completedRequests.contains(requestNumber) {
-            lock.unlock()
-            return true
-        }
-        let signal = responseCompletionSignals[requestNumber] ?? {
-            let signal = DispatchSemaphore(value: 0)
+    func waitForResponseCompletion(for requestNumber: Int) async -> Bool {
+        let capture = lock.withLock { () -> (Bool, CoordinatorFixtureSignal) in
+            let signal = responseCompletionSignals[requestNumber] ?? CoordinatorFixtureSignal()
             responseCompletionSignals[requestNumber] = signal
-            return signal
-        }()
-        lock.unlock()
-        return signal.wait(timeout: .now() + timeout) == .success
+            return (completedRequests.contains(requestNumber), signal)
+        }
+        if capture.0 { return true }
+        return await capture.1.wait()
     }
 
     func requestStartedAfterResponseCompletion(
@@ -1341,55 +1204,32 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
         return !earlyRequestStarts.contains(request) && completedRequests.contains(previousRequest)
     }
 
-    fileprivate func handle(_ protocolObject: URLProtocol) {
-        lock.lock()
-        count += 1
-        let requestNumber = count
-        let gate = gates[requestNumber]
-        let response = responses[requestNumber]
-        if !pendingRequestRoles.isEmpty {
-            observedRoles[requestNumber] = pendingRequestRoles.removeFirst()
+    fileprivate func handle(_ protocolObject: URLProtocol) async {
+        let capture = lock.withLock { () -> (Int, CoordinatorFixtureSignal?, Response?) in
+            count += 1
+            let requestNumber = count
+            if !pendingRequestRoles.isEmpty { observedRoles[requestNumber] = pendingRequestRoles.removeFirst() }
+            if requestNumber == 3 && !completedRequests.contains(2) { earlyRequestStarts.insert(requestNumber) }
+            return (requestNumber, gates[requestNumber], responses[requestNumber])
         }
-        if requestNumber == 3 && !completedRequests.contains(2) {
-            earlyRequestStarts.insert(requestNumber)
-        }
-        lock.unlock()
         requestSignal.signal()
-
-        if let gate, gate.wait(timeout: .now() + 5) == .timedOut {
-            protocolObject.client?.urlProtocol(
-                protocolObject,
-                didFailWithError: URLError(.timedOut)
-            )
-            return
+        if let gate = capture.1, !(await gate.wait()) { return }
+        guard !Task.isCancelled else { return }
+        guard let response = capture.2 else {
+            protocolObject.client?.urlProtocol(protocolObject, didFailWithError: URLError(.badServerResponse)); return
         }
-
-        guard let response else {
-            protocolObject.client?.urlProtocol(
-                protocolObject,
-                didFailWithError: URLError(.badServerResponse)
-            )
-            return
-        }
-        let httpResponse = HTTPURLResponse(
-            url: protocolObject.request.url!,
-            statusCode: response.statusCode,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
-        )!
-        protocolObject.client?.urlProtocol(
-            protocolObject,
-            didReceive: httpResponse,
-            cacheStoragePolicy: .notAllowed
-        )
+        let httpResponse = HTTPURLResponse(url: protocolObject.request.url!, statusCode: response.statusCode,
+                                           httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        protocolObject.client?.urlProtocol(protocolObject, didReceive: httpResponse, cacheStoragePolicy: .notAllowed)
         protocolObject.client?.urlProtocol(protocolObject, didLoad: response.body)
         protocolObject.client?.urlProtocolDidFinishLoading(protocolObject)
-        lock.lock()
-        completedRequests.insert(requestNumber)
-        let completionSignal = responseCompletionSignals[requestNumber]
-        lock.unlock()
+        let completionSignal = lock.withLock {
+            completedRequests.insert(capture.0)
+            return responseCompletionSignals[capture.0]
+        }
         completionSignal?.signal()
     }
+
 }
 
 private final class LockedEntitlementURLProtocol: URLProtocol, @unchecked Sendable {
@@ -1411,12 +1251,30 @@ private final class LockedEntitlementURLProtocol: URLProtocol, @unchecked Sendab
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    override func startLoading() {
-        Self.activeLock.lock()
-        let harness = Self.activeHarness
-        Self.activeLock.unlock()
-        harness?.handle(self)
+    private struct LoadingState {
+        var task: Task<Void, Never>?
+        var stopped = false
     }
-
-    override func stopLoading() {}
+    private let running = Mutex(LoadingState())
+    override func startLoading() {
+        let harness = Self.activeLock.withLock { Self.activeHarness }
+        let task = Task { [self] in
+            if let harness { await harness.handle(self) }
+        }
+        let stopped = running.withLock { state in
+            if state.stopped { return true }
+            state.task = task
+            return false
+        }
+        if stopped { task.cancel() }
+    }
+    override func stopLoading() {
+        let task = running.withLock { state in
+            state.stopped = true
+            let task = state.task
+            state.task = nil
+            return task
+        }
+        task?.cancel()
+    }
 }

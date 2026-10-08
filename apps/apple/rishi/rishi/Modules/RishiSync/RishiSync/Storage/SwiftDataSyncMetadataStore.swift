@@ -41,25 +41,96 @@ final class SyncMetadataRow {
 }
 
 public enum SyncMetadataStoreBootstrap {
-    public static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
+    public nonisolated static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
         try ModelContainer(
             for: SyncMetadataRow.self, SyncCursorStateRow.self, SyncRecoveryStateRow.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: inMemory)
         )
     }
 
-    public static func makeStore(inMemory: Bool = false) throws -> SwiftDataSyncMetadataStore {
-        SwiftDataSyncMetadataStore(container: try makeContainer(inMemory: inMemory))
+    public nonisolated static func makeStore(inMemory: Bool = false) async throws -> SwiftDataSyncMetadataStore {
+        try await createStore(inMemory: inMemory, onContextCreation: nil)
+    }
+
+    #if DEBUG
+    nonisolated static func makeStore(
+        inMemory: Bool, onContextCreation: @escaping @Sendable (Bool) -> Void
+    ) async throws -> SwiftDataSyncMetadataStore {
+        try await createStore(inMemory: inMemory, onContextCreation: onContextCreation)
+    }
+    #endif
+
+    private nonisolated static func contextWasCreatedOnMainThread() -> Bool {
+        Thread.isMainThread
+    }
+
+    private nonisolated static func createStore(
+        inMemory: Bool, onContextCreation: (@Sendable (Bool) -> Void)?
+    ) async throws -> SwiftDataSyncMetadataStore {
+        try await Task.detached {
+            let container = try makeContainer(inMemory: inMemory)
+            let store = SwiftDataSyncMetadataStore(modelContainer: container)
+            onContextCreation?(contextWasCreatedOnMainThread())
+            await store.configureExplicitSaves()
+            return store
+        }.value
     }
 }
 
 /// SwiftData-backed implementation of `SyncMetadataStore`.
+@ModelActor
 public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
-    private let container: ModelContainer
     private let bookIdentityGate = BookIdentityMutationGate()
 
-    public init(container: ModelContainer) {
-        self.container = container
+    /// Construct the retained context off MainActor even when the caller is UI-owned.
+    public nonisolated static func make(container: ModelContainer) async -> SwiftDataSyncMetadataStore {
+        await Task.detached {
+            let store = SwiftDataSyncMetadataStore(modelContainer: container)
+            await store.configureExplicitSaves()
+            return store
+        }.value
+    }
+
+    fileprivate func configureExplicitSaves() { modelContext.autosaveEnabled = false }
+
+    #if DEBUG
+    private var nextSaveFailureForTesting: (any Error)?
+    func failNextSaveForTesting(_ error: any Error) { nextSaveFailureForTesting = error }
+    #endif
+
+    /// Each synchronous mutation commits or rolls back before actor reentrancy.
+    private func mutate<T>(_ body: (ModelContext) throws -> T) throws -> T {
+        do {
+            let result = try body(modelContext)
+            if modelContext.hasChanges {
+                #if DEBUG
+                if let error = nextSaveFailureForTesting {
+                    nextSaveFailureForTesting = nil
+                    throw error
+                }
+                #endif
+                try modelContext.save()
+            }
+            return result
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    public func protectPositionPublication(_ id: UUID) async { await bookIdentityGate.protectPosition(id) }
+    public func releasePositionPublication(_ id: UUID) async { await bookIdentityGate.releasePosition(id) }
+    public func hasProtectedPositionPublication(_ id: UUID) async -> Bool { await bookIdentityGate.positionIsProtected(id) }
+
+    public func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool {
+        let id = entityId.uuidString
+        return try mutate { context in
+            guard let row = try Self.fetchRow(entityId: id, kind: SyncEntityKind.position.rawValue, in: context),
+                  row.dirty, row.dirtyAt == expectedDirtyAt, row.operationId == expectedOperationId else { return false }
+            row.dirty = false; row.dirtyAt = nil; row.operationId = nil
+            row.lastSyncedAt = previousLastSyncedAt
+            return true
+        }
     }
 
     public func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T {
@@ -98,8 +169,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        return try await MainActor.run { () throws -> SyncDirtyMarkDisposition in
-            let context = ModelContext(container)
+        return try mutate { context in
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 if kind == .book, row.tombstone { return row.dirty ? .pending : .ignoredClosedBook }
                 row.entityType = type
@@ -121,7 +191,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     )
                 )
             }
-            try context.save()
             return .pending
         }
     }
@@ -130,8 +199,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 guard kind != .book || !row.tombstone else { return }
                 row.entityType = type
@@ -153,7 +221,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     )
                 )
             }
-            try context.save()
         }
     }
 
@@ -167,8 +234,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        return try await MainActor.run {
-            let context = ModelContext(container)
+        return try mutate { context in
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context) else {
                 guard expectedDirtyAt == nil else { return false }
                 context.insert(SyncMetadataRow(
@@ -178,7 +244,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     dirty: false,
                     tombstone: false
                 ))
-                try context.save()
                 return true
             }
             guard (kind != .book || !row.tombstone), row.dirtyAt == expectedDirtyAt else { return false }
@@ -189,7 +254,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             row.dirtyAt = nil
             row.operationId = nil
             row.tombstone = false
-            try context.save()
             return true
         }
     }
@@ -204,8 +268,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     ) async throws -> Bool {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
+        return try mutate { context in
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context),
                   (kind != .book || !row.tombstone),
                   row.dirty,
@@ -218,7 +281,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             row.dirtyAt = nil
             row.operationId = nil
             row.tombstone = false
-            try context.save()
             return true
         }
     }
@@ -240,8 +302,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        return try await MainActor.run {
-            let context = ModelContext(container)
+        return try mutate { context in
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context) else {
                 guard expectedDirtyAt == nil else { return false }
                 context.insert(SyncMetadataRow(
@@ -251,7 +312,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     dirty: false,
                     tombstone: true
                 ))
-                try context.save()
                 return true
             }
             guard row.dirtyAt == expectedDirtyAt else { return false }
@@ -262,7 +322,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             row.dirtyAt = nil
             row.operationId = nil
             row.tombstone = true
-            try context.save()
             return true
         }
     }
@@ -284,8 +343,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     ) async throws -> Bool {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
+        return try mutate { context in
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context),
                   row.dirty,
                   row.tombstone,
@@ -298,7 +356,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             row.dirtyAt = nil
             row.operationId = nil
             // Keep tombstone=true as the permanent closed-identity barrier.
-            try context.save()
             return true
         }
     }
@@ -307,8 +364,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 if row.remoteSeenAt == nil || row.remoteSeenAt! < updatedAt {
                     row.remoteSeenAt = updatedAt
@@ -322,87 +378,70 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     tombstone: false
                 ))
             }
-            try context.save()
         }
     }
 
     public func remoteSeenAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            return try Self.fetchRow(entityId: id, kind: type, in: context)?.remoteSeenAt
-        }
+        return try Self.fetchRow(entityId: id, kind: type, in: modelContext)?.remoteSeenAt
     }
 
     public func allDirty() async throws -> [SyncPendingItem] {
-        try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { $0.dirty },
-                sortBy: [SortDescriptor(\SyncMetadataRow.entityId)]
-            )
-            return try context.fetch(descriptor).compactMap(Self.decodePending)
-        }
+        let descriptor = FetchDescriptor<SyncMetadataRow>(
+            predicate: #Predicate { $0.dirty },
+            sortBy: [SortDescriptor(\SyncMetadataRow.entityId)]
+        )
+        return try modelContext.fetch(descriptor).compactMap(Self.decodePending)
     }
 
     public func pending(kind: SyncEntityKind, limit: Int) async throws -> [SyncPendingItem] {
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            var descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { $0.dirty && $0.entityType == type },
-                sortBy: [SortDescriptor(\SyncMetadataRow.entityId)]
-            )
-            descriptor.fetchLimit = limit
-            return try context.fetch(descriptor).compactMap(Self.decodePending)
-        }
+        var descriptor = FetchDescriptor<SyncMetadataRow>(
+            predicate: #Predicate { $0.dirty && $0.entityType == type },
+            sortBy: [SortDescriptor(\SyncMetadataRow.entityId)]
+        )
+        descriptor.fetchLimit = limit
+        return try modelContext.fetch(descriptor).compactMap(Self.decodePending)
     }
 
     public func pendingCount() async throws -> Int {
-        try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { $0.dirty }
-            )
-            return try context.fetch(descriptor).count
-        }
+        let descriptor = FetchDescriptor<SyncMetadataRow>(
+            predicate: #Predicate { $0.dirty }
+        )
+        return try modelContext.fetchCount(descriptor)
     }
 
     public func lastSyncedAt(forKind kind: SyncEntityKind) async throws -> Date? {
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { !$0.dirty && $0.entityType == type }
-            )
-            return try context.fetch(descriptor).compactMap(\.lastSyncedAt).max()
-        }
+        var descriptor = FetchDescriptor<SyncMetadataRow>(
+            predicate: #Predicate { !$0.dirty && $0.entityType == type && $0.lastSyncedAt != nil },
+            sortBy: [SortDescriptor(\SyncMetadataRow.lastSyncedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first?.lastSyncedAt
     }
 
     public func globalLastSyncedAt() async throws -> Date? {
-        try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { !$0.dirty }
-            )
-            return try context.fetch(descriptor).compactMap(\.lastSyncedAt).max()
-        }
+        var descriptor = FetchDescriptor<SyncMetadataRow>(
+            predicate: #Predicate { !$0.dirty && $0.lastSyncedAt != nil },
+            sortBy: [SortDescriptor(\SyncMetadataRow.lastSyncedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first?.lastSyncedAt
     }
 
     public func forget(entityId: UUID, kind: SyncEntityKind) async throws {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncMetadataRow>(
                 predicate: #Predicate { $0.entityId == key && $0.entityType == type }
             )
             for row in try context.fetch(descriptor) {
                 if kind != .book || !row.tombstone { context.delete(row) }
             }
-            try context.save()
         }
     }
 
@@ -411,12 +450,12 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     public func resetAll() async throws {
         try await bookIdentityGate.withExclusive {
             try await self.resetAllUngated()
+            await self.bookIdentityGate.clearProtectedPositions()
         }
     }
 
     private func resetAllUngated() async throws {
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let metadataDescriptor = FetchDescriptor<SyncMetadataRow>()
             for row in try context.fetch(metadataDescriptor) {
                 context.delete(row)
@@ -429,7 +468,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             for row in try context.fetch(recoveryDescriptor) {
                 context.delete(row)
             }
-            try context.save()
         }
     }
 
@@ -443,8 +481,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 let alreadyPendingTombstone = row.dirty && row.tombstone
                 row.entityType = type
@@ -466,42 +503,31 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     tombstone: true
                 ))
             }
-            try context.save()
         }
     }
 
     public func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            return try Self.fetchRow(entityId: id, kind: type, in: context)?.tombstone ?? false
-        }
+        return try Self.fetchRow(entityId: id, kind: type, in: modelContext)?.tombstone ?? false
     }
 
     public func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            return try Self.fetchRow(entityId: id, kind: type, in: context)?.dirtyAt
-        }
+        return try Self.fetchRow(entityId: id, kind: type, in: modelContext)?.dirtyAt
     }
 
     public func operationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID? {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            return try Self.fetchRow(entityId: id, kind: type, in: context)?.operationId
-        }
+        return try Self.fetchRow(entityId: id, kind: type, in: modelContext)?.operationId
     }
 
     public func ensureOperationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
+        return try mutate { context in
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context) else {
                 throw SyncMetadataError.missingPendingOperation(entityId: entityId, kind: kind)
             }
@@ -511,7 +537,6 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             if let operationId = row.operationId { return operationId }
             let operationId = UUID()
             row.operationId = operationId
-            try context.save()
             return operationId
         }
     }
@@ -519,28 +544,21 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     public func lastSyncedAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
         let id = entityId.uuidString
         let type = kind.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            return try Self.fetchRow(entityId: id, kind: type, in: context)?.lastSyncedAt
-        }
+        return try Self.fetchRow(entityId: id, kind: type, in: modelContext)?.lastSyncedAt
     }
 
     public func cursorState(for scope: SyncCursorScope) async throws -> SyncCursorState? {
         let rawScope = scope.rawValue
-        return try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncCursorStateRow>(
-                predicate: #Predicate { $0.scope == rawScope }
-            )
-            guard let row = try context.fetch(descriptor).first else { return nil }
-            return SyncCursorState(scope: scope, cursor: row.cursor, accountGeneration: row.accountGeneration)
-        }
+        let descriptor = FetchDescriptor<SyncCursorStateRow>(
+            predicate: #Predicate { $0.scope == rawScope }
+        )
+        guard let row = try modelContext.fetch(descriptor).first else { return nil }
+        return SyncCursorState(scope: scope, cursor: row.cursor, accountGeneration: row.accountGeneration)
     }
 
     public func saveCursorState(_ state: SyncCursorState) async throws {
         let rawScope = state.scope.rawValue
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncCursorStateRow>(
                 predicate: #Predicate { $0.scope == rawScope }
             )
@@ -550,55 +568,46 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             } else {
                 context.insert(SyncCursorStateRow(scope: rawScope, cursor: state.cursor, accountGeneration: state.accountGeneration))
             }
-            try context.save()
         }
     }
 
     public func clearCursorState(for scope: SyncCursorScope) async throws {
         let rawScope = scope.rawValue
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncCursorStateRow>(
                 predicate: #Predicate { $0.scope == rawScope }
             )
             for row in try context.fetch(descriptor) {
                 context.delete(row)
             }
-            try context.save()
         }
     }
 
     public func clearCursorState(for scope: SyncCursorScope, accountGeneration: Int) async throws {
         let rawScope = scope.rawValue
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncCursorStateRow>(
                 predicate: #Predicate { $0.scope == rawScope && $0.accountGeneration == accountGeneration }
             )
             for row in try context.fetch(descriptor) {
                 context.delete(row)
             }
-            try context.save()
         }
     }
 
     public func recoveryState() async throws -> SyncRecoveryState? {
-        try await MainActor.run {
-            let context = ModelContext(container)
-            let descriptor = FetchDescriptor<SyncRecoveryStateRow>(
-                predicate: #Predicate { $0.id == "account" }
-            )
-            guard let row = try context.fetch(descriptor).first,
-                  let reason = SyncRecoveryReason(rawValue: row.reason) else {
-                return nil
-            }
-            return SyncRecoveryState(reason: reason, accountGeneration: row.accountGeneration)
+        let descriptor = FetchDescriptor<SyncRecoveryStateRow>(
+            predicate: #Predicate { $0.id == "account" }
+        )
+        guard let row = try modelContext.fetch(descriptor).first,
+              let reason = SyncRecoveryReason(rawValue: row.reason) else {
+            return nil
         }
+        return SyncRecoveryState(reason: reason, accountGeneration: row.accountGeneration)
     }
 
     public func saveRecoveryState(_ state: SyncRecoveryState) async throws {
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncRecoveryStateRow>(
                 predicate: #Predicate { $0.id == "account" }
             )
@@ -611,33 +620,28 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                     accountGeneration: state.accountGeneration
                 ))
             }
-            try context.save()
         }
     }
 
     public func clearRecoveryState() async throws {
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncRecoveryStateRow>(
                 predicate: #Predicate { $0.id == "account" }
             )
             for row in try context.fetch(descriptor) {
                 context.delete(row)
             }
-            try context.save()
         }
     }
 
     public func clearRecoveryState(accountGeneration: Int) async throws {
-        try await MainActor.run {
-            let context = ModelContext(container)
+        try mutate { context in
             let descriptor = FetchDescriptor<SyncRecoveryStateRow>(
                 predicate: #Predicate { $0.id == "account" && $0.accountGeneration == accountGeneration }
             )
             for row in try context.fetch(descriptor) {
                 context.delete(row)
             }
-            try context.save()
         }
     }
 

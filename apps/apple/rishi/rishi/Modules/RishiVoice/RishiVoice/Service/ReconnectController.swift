@@ -138,6 +138,8 @@ actor ReconnectController {
             } catch {
                 continue
             }
+            // Key fetching suspends: ending, parking, or credential retirement may win.
+            if await callbacks.isEnding() { return }
             do {
                 try await client.connect(
                     ephemeralKey: newKey.secret,

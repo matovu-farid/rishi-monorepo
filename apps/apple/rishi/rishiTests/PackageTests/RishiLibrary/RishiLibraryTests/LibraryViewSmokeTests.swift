@@ -35,6 +35,31 @@ struct LibraryViewSmokeTests {
         #expect(entry.percentComplete == 0.42)
     }
 
+    @Test("Reading Now prioritizes a card only when both horizontal and shelf visibility are true")
+    func readingNowVisibilityRequiresBothScrollAxes() {
+        let bookID = UUID()
+        var visibility = ReadingNowShelfVisibility()
+
+        let cardBecameVisibleBeforeShelf = visibility.setCardVisible(bookID, true)
+        #expect(!cardBecameVisibleBeforeShelf)
+        let visibleState = visibility.setShelfVisible(true)
+        #expect(visibleState.visibleCardIDs == [bookID])
+        #expect(visibility.shelfIsVisible)
+        let becameVisible = visibility.setCardVisible(bookID, true)
+        #expect(becameVisible)
+        let removedBookID = UUID()
+        let removedBookBecameVisible = visibility.setCardVisible(removedBookID, true)
+        #expect(removedBookBecameVisible)
+        let removedCardIDs = visibility.removeCards(notIn: [bookID])
+        #expect(removedCardIDs == [removedBookID])
+        #expect(visibility.visibleCardIDs == [bookID])
+        let hiddenState = visibility.setShelfVisible(false)
+        #expect(!hiddenState.shelfVisible)
+        let resetCardIDs = visibility.reset()
+        #expect(resetCardIDs == [bookID])
+        #expect(!visibility.shelfIsVisible)
+    }
+
     // MARK: - Stub-driven Reading Now derivation
 
     @Test("Stub readingNow includes only in-progress books")

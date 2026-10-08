@@ -34,6 +34,14 @@ public protocol ReaderSettingsStore: Sendable {
     func setTypography(_ typography: ReaderTypography, for bookId: BookID) async
 }
 
+/// Storage that can finish a settings mutation within synchronous source and
+/// book admission. These writes must complete before returning; an async
+/// adapter cannot retain that admission across a later unguarded write.
+public protocol SynchronousReaderSettingsStore: ReaderSettingsStore {
+    func writeThemeSynchronously(_ theme: ReaderTheme, for bookId: BookID)
+    func writeTypographySynchronously(_ typography: ReaderTypography, for bookId: BookID)
+}
+
 public extension ReaderSettingsStore {
     func persistedTheme(for bookId: BookID) async -> ReaderTheme? {
         peekPersistedTheme(for: bookId)

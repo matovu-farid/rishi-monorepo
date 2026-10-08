@@ -35,7 +35,7 @@ public struct BookFileStorage:Sendable {
     private let fingerprintAccountGeneration: @Sendable () async -> UInt64?
     private let materializationCoordinator: BookMaterializationCoordinator?
     private let importInstrumentation: BookImportInstrumentation
-
+   
     private var fileManager: FileManager { .default }
     private let coverCache: CoverCache?
 
@@ -341,7 +341,7 @@ public struct BookFileStorage:Sendable {
             expectedContentHash: expectedContentHash
         )
     }
-
+   
 
     public func delete(_ book: Book) async throws {
         try await deleteMaterial(for: book)

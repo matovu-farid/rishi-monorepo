@@ -555,7 +555,7 @@ struct RishiSearchIndexingHookTests {
         #expect(!FileManager.default.fileExists(atPath: BookIndexLocator(rootURL: fixture.root).bookDir(fixture.book.id).path))
         let reopened = try RishiDB.makeStore(at: fixture.databaseURL)
         #expect(try await SwiftDataBookStore(dbStore: reopened).book(fixture.book.id) == nil)
-        let reopenedMetadata = try ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
+        let reopenedMetadata = try await ReaderDeletionFixture.makeMetadata(at: fixture.metadataURL)
         #expect(try await reopenedMetadata.isTombstone(entityId: fixture.book.id, kind: .book))
     }
 

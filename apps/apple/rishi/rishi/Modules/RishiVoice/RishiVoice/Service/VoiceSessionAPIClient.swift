@@ -58,18 +58,91 @@ extension VoiceSessionCoordinating {
 /// `WorkerClient`. Actor (not a plain struct) to match `EphemeralKeyFetcher`'s
 /// concurrency shape — no mutable state today, but keeps the seam
 /// actor-isolated in case a future retry/cache layer needs it.
+/// A successful admitted create remains cleanable after its lease is replaced.
+/// This capability ends only its own returned ID and never reads live credentials.
+struct VoiceSessionCreationReceipt: Sendable {
+    let started: StartedVoiceSession
+    let lease: CredentialLease
+    let endSpecificSession: @Sendable () async throws -> Void
+}
+
 public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
 
     private let workerClient: WorkerClient
+    private enum Authentication: Sendable {
+        case legacy
+        case scoped(ScopedAuthentication)
+    }
+    private struct ScopedAuthentication: Sendable {
+        let authority: SessionCredentialAuthority
+        let context: CredentialRequestContext
+        let baseURL: URL
+        let session: URLSession
+        let consent: any WorkerDataUseConsentProvider
+    }
+    private let authentication: Authentication
 
     public init(workerClient: WorkerClient) {
         self.workerClient = workerClient
+        self.authentication = .legacy
+    }
+
+    /// Passive until atomic composition switches. Captured before session creation.
+    init(workerClient: WorkerClient, credentialAuthority: SessionCredentialAuthority,
+         credentialContext: CredentialRequestContext, baseURL: URL, session: URLSession,
+         dataUseConsentProvider: any WorkerDataUseConsentProvider) throws {
+        guard case .normal = credentialContext,
+              workerClient.usesCredentialAuthority(credentialAuthority) else { throw CredentialAuthenticationFailure.accountChanged }
+        self.workerClient = workerClient
+        self.authentication = .scoped(.init(authority: credentialAuthority, context: credentialContext,
+                                             baseURL: baseURL, session: session, consent: dataUseConsentProvider))
+    }
+
+    func startSessionWithReceipt(language: String?, bookContext: BookContextSnapshot?) async throws -> VoiceSessionCreationReceipt {
+        guard case .scoped(let scoped) = authentication else { throw CredentialAuthenticationFailure.accountChanged }
+        _ = try scoped.authority.snapshot(for: scoped.context)
+        let delivery = try await workerClient.sendAdmittedCreation(
+            CreateVoiceSessionEndpoint(language: language, bookContext: bookContext), credentialContext: scoped.context
+        )
+        let response = delivery.response
+        let started = StartedVoiceSession(rishiSessionId: response.rishiSessionId, nonce: response.nonce,
+                                          clientSecret: response.clientSecret, capIntervals: response.capIntervals,
+                                          realtimeModel: response.realtimeModel)
+        let cleanup = WorkerClient(baseURL: scoped.baseURL, session: scoped.session,
+                                   admittedCleanupBearer: delivery.transmittedBearer,
+                                   dataUseConsentProvider: scoped.consent)
+        return VoiceSessionCreationReceipt(started: started, lease: delivery.lease) {
+            do { _ = try await cleanup.send(EndVoiceSessionEndpoint(rishiSessionId: started.rishiSessionId)) }
+            catch { if !Self.isAlreadyTerminalEndError(error) { throw error } }
+        }
+    }
+
+    func requireCurrentCredentialContext() throws {
+        guard case .scoped(let scoped) = authentication else { throw CredentialAuthenticationFailure.accountChanged }
+        _ = try scoped.authority.snapshot(for: scoped.context)
+    }
+
+    nonisolated func isBound(to authority: SessionCredentialAuthority, context: CredentialRequestContext) -> Bool {
+        guard case .scoped(let scoped) = authentication,
+              case .normal(let expected) = context, case .normal(let actual) = scoped.context else { return false }
+        return scoped.authority === authority && actual == expected
+    }
+
+    private func send<E: WorkerEndpoint>(_ endpoint: E) async throws -> E.Response {
+        switch authentication {
+        case .legacy: return try await workerClient.send(endpoint)
+        case .scoped(let scoped):
+            _ = try scoped.authority.snapshot(for: scoped.context)
+            return try await workerClient.send(endpoint, credentialContext: scoped.context)
+        }
     }
 
     public func startSession(
         language: String?,
         bookContext: BookContextSnapshot?
     ) async throws -> StartedVoiceSession {
+        // Scoped creation must deliver its cleanup receipt, never payload only.
+        guard case .legacy = authentication else { throw CredentialAuthenticationFailure.accountChanged }
         let endpoint = CreateVoiceSessionEndpoint(language: language, bookContext: bookContext)
         do {
             let response = try await workerClient.send(endpoint)
@@ -95,7 +168,7 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
     public func registerCall(rishiSessionId: String, callId: String, nonce: String) async throws {
         let endpoint = RegisterVoiceCallEndpoint(rishiSessionId: rishiSessionId, callId: callId, nonce: nonce)
         do {
-            _ = try await workerClient.send(endpoint)
+            _ = try await send(endpoint)
             Log.event("voice.session.register_call.succeeded", level: .info, data: [
                 "rishiSessionId": rishiSessionId,
             ])
@@ -111,7 +184,7 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
     public func endActiveSessionIfAny() async throws -> String? {
         let endpoint = EndActiveVoiceSessionEndpoint()
         do {
-            let response = try await workerClient.send(endpoint)
+            let response = try await send(endpoint)
             if let id = response.rishiSessionId {
                 Log.event("voice.session.end_active.succeeded", level: .info, data: [
                     "rishiSessionId": id,
@@ -131,7 +204,7 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
     public func endSession(rishiSessionId: String) async throws {
         let endpoint = EndVoiceSessionEndpoint(rishiSessionId: rishiSessionId)
         do {
-            _ = try await workerClient.send(endpoint)
+            _ = try await send(endpoint)
             Log.event("voice.session.end.succeeded", level: .info, data: [
                 "rishiSessionId": rishiSessionId,
             ])

@@ -7,6 +7,7 @@ private final class ReaderSourceLifetimeProbe {}
 @Suite("Transient reader source ownership", .serialized)
 struct TransientBookSourceTests {
     @Test("reader view model keeps its source alive until the reader is released")
+    @MainActor
     func readerRetainsSourceLifetime() {
         var source: ReaderSourceLifetimeProbe? = ReaderSourceLifetimeProbe()
         weak var weakSource = source

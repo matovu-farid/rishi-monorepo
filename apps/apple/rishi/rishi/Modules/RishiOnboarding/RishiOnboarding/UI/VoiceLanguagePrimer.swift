@@ -6,66 +6,79 @@ import SwiftUI
 public struct VoiceLanguagePrimer: View {
 
     @Binding private var selection: String
+    public let onBack: () -> Void
     public let onContinue: () -> Void
     public let onSkip: () -> Void
 
     public init(
         selection: Binding<String>,
+        onBack: @escaping () -> Void,
         onContinue: @escaping () -> Void,
         onSkip: @escaping () -> Void
     ) {
         self._selection = selection
+        self.onBack = onBack
         self.onContinue = onContinue
         self.onSkip = onSkip
     }
 
     public var body: some View {
-        RishiScreenScaffold(actionPlacement: .belowContent) {
-            VStack(spacing: RishiSpacing.l) {
-                Image(systemName: "globe")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 76, height: 76)
-                    .foregroundStyle(RishiColor.accent)
-                    .accessibilityHidden(true)
+        OnboardingScrollContainer {
+            RishiScreenScaffold(actionPlacement: .belowContent) {
+                VStack(spacing: RishiSpacing.l) {
+                    Image(systemName: "globe")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .foregroundStyle(RishiColor.accent)
+                        .accessibilityHidden(true)
 
-                Text("Choose your language")
-                    .font(RishiTypography.titleM)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .multilineTextAlignment(.center)
+                    Text("Choose your language")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .multilineTextAlignment(.center)
 
-                Text("English is the default. Pick a different language now if you want the assistant to reply and transcribe in that language.")
-                    .font(RishiTypography.body)
-                    .foregroundStyle(RishiColor.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, RishiSpacing.l)
-                    .onboardingContentWidth()
+                    Text("English is the default. Pick a different language now if you want the assistant to reply and transcribe in that language.")
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, RishiSpacing.l)
+                        .onboardingContentWidth()
 
-                Picker("Language", selection: $selection) {
-                    ForEach(Self.options, id: \.code) { option in
-                        Text(option.label).tag(option.code)
+                    Picker("Language", selection: $selection) {
+                        ForEach(Self.options, id: \.code) { option in
+                            Text(option.label).tag(option.code)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .padding(.horizontal, RishiSpacing.l)
                 }
-                .pickerStyle(.menu)
+            } actions: {
+                VStack(spacing: RishiSpacing.m) {
+                    Button(action: onContinue) {
+                        Text("Continue")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, RishiSpacing.m)
+                            .onboardingCTAWidth()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(RishiColor.accent)
+                    .accessibilityIdentifier("onboarding-language-continue")
+
+                    Button("Not now", action: onSkip)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .accessibilityIdentifier("onboarding-language-skip")
+
+                    Button(action: onBack) {
+                        Text("Back")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .accessibilityIdentifier("onboarding-language-back")
+                }
                 .padding(.horizontal, RishiSpacing.l)
             }
-        } actions: {
-            VStack(spacing: RishiSpacing.m) {
-                Button(action: onContinue) {
-                    Text("Continue")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, RishiSpacing.m)
-                        .onboardingCTAWidth()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(RishiColor.accent)
-                .accessibilityIdentifier("onboarding-language-continue")
-
-                Button("Not now", action: onSkip)
-                    .foregroundStyle(RishiColor.textSecondary)
-                    .accessibilityIdentifier("onboarding-language-skip")
-            }
-            .padding(.horizontal, RishiSpacing.l)
         }
     }
 
@@ -92,6 +105,7 @@ public struct VoiceLanguagePrimer: View {
 #Preview {
     VoiceLanguagePrimer(
         selection: .constant("en"),
+        onBack: {},
         onContinue: {},
         onSkip: {}
     )
