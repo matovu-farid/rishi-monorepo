@@ -5,9 +5,25 @@ import Testing
 #if canImport(AVFAudio) && canImport(AudioToolbox)
 import AVFAudio
 import AudioToolbox
+import ChunkedAudioPlayer
 
 @Suite("Chunked audio player TTS engine", .serialized)
 struct ChunkedAudioPlayerTTSEngineTests {
+    @Test("nested native OSStatus failures preserve their diagnostic domain and code")
+    func nestedNativeStatusKeepsMetadata() {
+        let failure = ChunkedTTSNativePlayerFailure(error: .other(AudioPlayerError.status(-50)))
+        #expect(failure.domain == NSOSStatusErrorDomain)
+        #expect(failure.code == -50)
+    }
+
+    @Test("plain native NSError failures preserve their original diagnostic metadata")
+    func nativeNSErrorKeepsMetadata() {
+        let cause = NSError(domain: "NativeDecoderProbe", code: 731, userInfo: [NSLocalizedDescriptionKey: "private diagnostic"])
+        let failure = ChunkedTTSNativePlayerFailure(error: .other(cause))
+        #expect(failure.domain == "NativeDecoderProbe")
+        #expect(failure.code == 731)
+    }
+
     @Test("synchronous native start then finish always completes successfully")
     @MainActor
     func synchronousCallbacksStayOrdered() async throws {
@@ -363,7 +379,7 @@ private struct TypedAllowanceSource: TTSChunkSource {
         }
     }
 }
-private enum NativeSourceFailureCase: Sendable, CaseIterable {
+enum NativeSourceFailureCase: Sendable, CaseIterable {
     case network, rawURL, service, authentication, consent, allowance, cancellation, urlCancellation, wrappedCancellation
     var error: Error {
         switch self {

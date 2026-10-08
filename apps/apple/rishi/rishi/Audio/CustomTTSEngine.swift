@@ -156,7 +156,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
             return .success(())
         } catch {
-            let wasCancelled = error is CancellationError || Task.isCancelled
+            let wasCancelled = TTSUserFacingError.isCancellation(error) || Task.isCancelled
             if wasCancelled {
                 // The cancellation handler starts the stop asynchronously. Do
                 // not let Readium observe this utterance as finished until the
@@ -167,27 +167,42 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             if !wasCancelled {
                 await onUtteranceFailed?()
             }
-            if let allowance = error as? WorkerAllowanceError,
+            if !wasCancelled,
+               let allowance = error as? WorkerAllowanceError,
                let activeTokens {
                 await MainActor.run {
+                    guard !Task.isCancelled else { return }
                     state.recordTypedFailure(allowance, tokens: activeTokens)
                 }
-            } else if let userFacingError = TTSUserFacingError.classify(error) {
+            } else if !wasCancelled,
+                      let activeTokens,
+                      let userFacingError = TTSUserFacingError.classify(error) {
                 await MainActor.run {
+                    guard !Task.isCancelled, state.activeTokenSnapshot == activeTokens else { return }
                     state.recordUserFacingFailure(userFacingError)
                 }
             }
-            Log.error(
-                "tts.readaloud.speak.end",
-                error: error,
-                diagnostic: TelemetryDiagnostic(
-                    feature: "tts",
-                    operation: "tts.readaloud.speak",
-                    stage: "playback",
-                    errorCode: TTSUserFacingError.classify(error)?.rawValue ?? "playback_failed",
-                    fields: ["request_chars": String(text.count)]
+            if wasCancelled || Task.isCancelled {
+                Log.event("tts.readaloud.speak.cancelled", level: .warning, data: [
+                    "feature": "tts",
+                    "operation": "tts.readaloud.speak",
+                    "stage": "playback",
+                    "cancel_reason": Task.isCancelled ? "task_cancelled" : "source_cancelled",
+                ])
+            } else {
+                let sourceError = error as NSError
+                Log.error(
+                    "tts.readaloud.speak.end",
+                    error: NSError(domain: sourceError.domain, code: sourceError.code, userInfo: nil),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.readaloud.speak",
+                        stage: "playback",
+                        errorCode: TTSUserFacingError.classify(error)?.rawValue ?? "playback_failed",
+                        fields: ["request_chars": String(text.count)]
+                    )
                 )
-            )
+            }
             return .failure(.other(error))
         }
     }

@@ -17,6 +17,61 @@ struct CustomTTSEngineTests {
         quality: .high
     )
 
+    @Test("forwards the original source error through the Readium engine result")
+    func originalSourceErrorIsForwarded() async {
+        let state = TTSPlaybackState()
+        let player = OriginalErrorTTSPlayer(state: state, cancelled: false)
+        let engine = CustomTTSEngine(player: player, state: state, settingsStore: InMemoryTTSSettingsStore(), userId: UserID(), voices: [englishVoice])
+        let result = await engine.speak(text: "Original source failure.", delay: 0, voiceOrLanguage: .left(englishVoice)) { _ in }
+        guard case .failure(.other(let cause)) = result,
+              case .networkFailure(let urlError) = cause as? RishiError else {
+            Issue.record("Expected original Rishi network failure in Readium .other")
+            return
+        }
+        #expect(urlError.code == .networkConnectionLost)
+        #expect(TTSUserFacingError.classify(cause) == .network)
+        #expect(state.userFacingFailure == .network)
+    }
+
+    @Test("delayed failure publication cannot overwrite replacement tokens or a cancelled task", arguments: [false, true])
+    func delayedFailurePublicationIsFenced(cancelDuringCallback: Bool) async {
+        let state = TTSPlaybackState()
+        let gate = HeldCustomFailureCallback()
+        let player = OriginalErrorTTSPlayer(state: state, cancelled: false)
+        let engine = CustomTTSEngine(
+            player: player, state: state, settingsStore: InMemoryTTSSettingsStore(), userId: UserID(), voices: [englishVoice],
+            onUtteranceFailed: { await gate.hold() }
+        )
+        let task = Task { await engine.speak(text: "Old failure.", delay: 0, voiceOrLanguage: .left(englishVoice)) { _ in } }
+        await gate.waitForEntry()
+        let replacement = TTSStreamRequest(text: "Replacement.", voice: "alloy", speed: 1)
+        if cancelDuringCallback { task.cancel() }
+        else { state.activate(tokens: replacement.tokenSnapshot) }
+        state.update(status: .playing)
+        await gate.release()
+        _ = await task.value
+        if !cancelDuringCallback { #expect(state.activeTokenSnapshot == replacement.tokenSnapshot) }
+        #expect(state.status == .playing)
+        #expect(state.userFacingFailure == nil)
+    }
+
+    @Test("URL source cancellation drains stop without a failure hook or alert")
+    func urlCancellationHasNoFailurePresentation() async {
+        let state = TTSPlaybackState()
+        let player = OriginalErrorTTSPlayer(state: state, cancelled: true)
+        let failed = SpeakCompletionFlag()
+        let engine = CustomTTSEngine(
+            player: player, state: state, settingsStore: InMemoryTTSSettingsStore(), userId: UserID(), voices: [englishVoice],
+            onUtteranceFailed: { await failed.markDone() }
+        )
+        let result = await engine.speak(text: "Cancelled source.", delay: 0, voiceOrLanguage: .left(englishVoice)) { _ in }
+        guard case .failure(.other(let cause)) = result else { Issue.record("Expected cancellation error"); return }
+        #expect((cause as? URLError)?.code == .cancelled)
+        #expect(await player.stopCount == 1)
+        #expect(await failed.isDone() == false)
+        #expect(state.userFacingFailure == nil)
+    }
+
     @Test("forwards custom voice, model, and speed to remote playback")
     func forwardsRemoteRequest() async {
         let state = TTSPlaybackState()
@@ -495,4 +550,40 @@ private extension Result where Failure == TTSError {
         if case .success = self { return true }
         return false
     }
+}
+
+private actor OriginalErrorTTSPlayer: TTSPlaying {
+    private let state: TTSPlaybackState
+    private let cancelled: Bool
+    private(set) var stopCount = 0
+    init(state: TTSPlaybackState, cancelled: Bool) { self.state = state; self.cancelled = cancelled }
+    func start(request: TTSStreamRequest) async {
+        await MainActor.run { state.activate(tokens: request.tokenSnapshot); state.update(status: .playing) }
+    }
+    func waitUntilFinished() async throws {
+        if cancelled { throw URLError(.cancelled) }
+        throw RishiError.networkFailure(URLError(.networkConnectionLost))
+    }
+    func pause() async {}
+    func resume() async {}
+    func stop() async { stopCount += 1 }
+}
+
+private actor HeldCustomFailureCallback {
+    private var entered = false
+    private var released = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    func hold() async {
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        if released { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+    func waitForEntry() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiter = $0 }
+    }
+    func release() { released = true; releaseWaiter?.resume(); releaseWaiter = nil }
 }

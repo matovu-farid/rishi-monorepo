@@ -303,7 +303,7 @@ public actor TTSStreamer {
                     ])
                     continuation.finish()
                 } catch {
-                    if Task.isCancelled || error is CancellationError {
+                    if Task.isCancelled {
                         Log.event("tts.stream.cancelled", level: .warning, data: [
                             "feature": "tts",
                             "operation": "tts.stream",
@@ -314,9 +314,21 @@ public actor TTSStreamer {
                         continuation.finish()
                         return
                     }
+                    if TTSUserFacingError.isCancellation(error) {
+                        Log.event("tts.stream.cancelled", level: .warning, data: [
+                            "feature": "tts",
+                            "operation": "tts.stream",
+                            "stage": "stream",
+                            "correlation_id": correlationID,
+                            "cancel_reason": "source_cancelled",
+                        ])
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                    let sourceError = error as NSError
                     Log.error(
                         "tts.stream.failed",
-                        error: error,
+                        error: NSError(domain: sourceError.domain, code: sourceError.code, userInfo: nil),
                         diagnostic: TelemetryDiagnostic(
                             feature: "tts",
                             operation: "tts.stream",

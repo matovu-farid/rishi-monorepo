@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import ReadiumShared
+import ReadiumNavigator
 @testable import rishi
 
 @Suite("Read aloud terminal recovery")
@@ -35,6 +36,81 @@ struct ReadAloudRecoveryTests {
             await Task.yield()
         }
         Issue.record("Playback operation did not reach its admission boundary")
+    }
+
+    @Test("real EPUB delegate preserves source categories through the final alert")
+    func epubDelegatePreservesSourceCategories() async throws {
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "alice", withExtension: "epub"))
+        let userID = UserID()
+        let book = Book(userId: userID, title: "Alice", formatType: .epub, fileURL: "alice.epub")
+        let vm = ReaderViewModel(book: book, userId: userID, documentURL: url, positionStore: InMemoryPositionStore())
+        await vm.load()
+        _ = try #require(vm.publication)
+        for kind in RecoverySourceFailureCase.allCases {
+            let (controller, engine, state) = context()
+            await controller.startReader(vm: vm)
+            await engine.waitForRequestCount(1)
+            let request = try #require(await engine.requests.first)
+            await engine.holdNextStop()
+            // The fake supplies only the original Error. Both CustomTTSEngine
+            // and the final Readium delegate perform real classification.
+            await engine.failActiveUtterance(error: kind.error, seedFailure: nil)
+            await engine.waitForHeldStop()
+            #expect(state.userFacingFailure == kind.category)
+            #expect(TTSFailureAlert.message(for: state) == kind.category.message)
+            #expect(controller.requiresPlaybackRestart)
+            if kind == .allowance {
+                #expect(state.typedFailure == .narration(message: "source allowance"))
+                #expect(state.typedFailureTokens == request.tokenSnapshot)
+            }
+            await engine.releaseStop()
+            await controller.stop()
+            controller.dispose()
+        }
+        await vm.flush()
+    }
+
+    @Test("an old EPUB synthesizer delegate failure cannot change replacement playback")
+    func staleEPUBDelegateCannotOverwriteReplacement() async throws {
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "alice", withExtension: "epub"))
+        let userID = UserID()
+        let book = Book(userId: userID, title: "Alice", formatType: .epub, fileURL: "alice.epub")
+        let vm = ReaderViewModel(book: book, userId: userID, documentURL: url, positionStore: InMemoryPositionStore())
+        await vm.load()
+        _ = try #require(vm.publication)
+        let (controller, engine, state) = context()
+        await controller.startReader(vm: vm)
+        await engine.waitForRequestCount(1)
+        let oldSynthesizer = try #require(controller.readiumSynthesizer)
+        let oldUtterance = try await playingUtterance(oldSynthesizer)
+        await controller.startReader(vm: vm)
+        await engine.waitForRequestCount(2)
+        let replacement = try #require(controller.readiumSynthesizer)
+        _ = try await playingUtterance(replacement)
+        #expect(replacement !== oldSynthesizer)
+        let tokens = state.activeTokenSnapshot
+        let status = state.status
+        let category = state.userFacingFailure
+        controller.publicationSpeechSynthesizer(
+            oldSynthesizer, utterance: oldUtterance,
+            didFailWithError: .engine(.other(URLError(.networkConnectionLost)))
+        )
+        #expect(state.activeTokenSnapshot == tokens)
+        #expect(state.status == status)
+        #expect(state.userFacingFailure == category)
+        #expect(state.status == .playing)
+        #expect(!controller.requiresPlaybackRestart)
+        await controller.stop()
+        await vm.flush()
+        controller.dispose()
+    }
+
+    private func playingUtterance(_ synthesizer: PublicationSpeechSynthesizer) async throws -> PublicationSpeechSynthesizer.Utterance {
+        for _ in 0..<1000 {
+            if case .playing(let utterance, _) = synthesizer.state { return utterance }
+            await Task.yield()
+        }
+        throw RecoveryFixtureError.didNotStartPlaying
     }
 
     @Test("Dismiss and Play select restart while terminal cleanup is still held")
@@ -354,9 +430,11 @@ private actor HeldRecoveryEngine: TTSPlaying {
         if requests.count >= count { return }
         await withCheckedContinuation { requestWaiters.append((count, $0)) }
     }
-    func failActiveUtterance() async {
-        await MainActor.run { state.recordUserFacingFailure(.audioPlayback) }
-        let error = TTSEnginePlaybackError.playbackFailed("injected transient failure")
+    func failActiveUtterance(
+        error: Error = TTSEnginePlaybackError.playbackFailed("injected transient failure"),
+        seedFailure: TTSUserFacingError? = .audioPlayback
+    ) async {
+        if let seedFailure { await MainActor.run { state.recordUserFacingFailure(seedFailure) } }
         if let playbackWaiter {
             self.playbackWaiter = nil
             playbackWaiter.resume(throwing: error)
@@ -426,5 +504,30 @@ private actor RecoveryVoiceEndGate {
     func release() {
         waiter?.resume()
         waiter = nil
+    }
+}
+
+private enum RecoveryFixtureError: Error { case didNotStartPlaying }
+private enum RecoverySourceFailureCase: CaseIterable {
+    case network, service, authentication, consent, native, allowance
+    var error: Error {
+        switch self {
+        case .network: RishiError.networkFailure(URLError(.networkConnectionLost))
+        case .service: RishiError.network(code: "http_503", message: "private provider detail")
+        case .authentication: RishiError.unauthenticated
+        case .consent: WorkerDataUseConsentRequiredError()
+        case .native: TTSEnginePlaybackError.playbackFailed("private decoder detail")
+        case .allowance: WorkerAllowanceError.narration(message: "source allowance")
+        }
+    }
+    var category: TTSUserFacingError {
+        switch self {
+        case .network: .network
+        case .service: .serviceUnavailable
+        case .authentication: .authentication
+        case .consent: .dataUseConsent
+        case .native: .audioPlayback
+        case .allowance: .narrationExhausted
+        }
     }
 }

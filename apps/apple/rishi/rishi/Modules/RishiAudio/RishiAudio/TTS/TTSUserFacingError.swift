@@ -53,6 +53,9 @@ public enum TTSUserFacingError: String, Sendable, Equatable, Hashable, Identifia
     }
 
     public static func classify(_ error: Error) -> Self? {
+        if isCancellation(error) { return nil }
+        if error is TTSEnginePlaybackError { return .audioPlayback }
+        if error is URLError { return .network }
         if let allowance = error as? WorkerAllowanceError {
             return allowance.kind == .trial ? .trialExhausted : .narrationExhausted
         }
@@ -84,9 +87,19 @@ public enum TTSUserFacingError: String, Sendable, Equatable, Hashable, Identifia
                 return .serviceUnavailable
             }
         }
-        if error is CancellationError {
-            return nil
-        }
         return .serviceUnavailable
+    }
+
+    public static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let error = error as? URLError { return error.code == .cancelled }
+        if let error = error as? RishiError {
+            switch error {
+            case .cancelled: return true
+            case .networkFailure(let cause): return cause.code == .cancelled
+            default: return false
+            }
+        }
+        return false
     }
 }

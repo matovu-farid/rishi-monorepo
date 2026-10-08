@@ -246,10 +246,12 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         do {
             partialURL = try await store.beginWrite(key: key)
         } catch {
+            if Task.isCancelled || TTSUserFacingError.isCancellation(error) { throw error }
             // If we cannot open a partial, fall back to passthrough: don't fail the user.
+            let cacheError = error as NSError
             Log.error(
                 "tts.cache.beginWrite.failed",
-                error: error,
+                error: NSError(domain: cacheError.domain, code: cacheError.code, userInfo: nil),
                 diagnostic: TelemetryDiagnostic(
                     feature: "tts",
                     operation: "tts.cache",
@@ -279,16 +281,42 @@ public actor CachingTTSChunkSource: TTSChunkSource {
 
         var committed = false
         var wroteBytes = 0
+        var cacheWriteEnabled = true
         do {
             try Task.checkCancellation()
             for try await chunk in await upstream.stream(request: request) {
                 try Task.checkCancellation()
                 publish(key: key, chunk: chunk)
-                try writeChunk(handle, chunk.data)
-                wroteBytes += chunk.count
+                if cacheWriteEnabled {
+                    do {
+                        try writeChunk(handle, chunk.data)
+                        wroteBytes += chunk.count
+                    } catch {
+                        if Task.isCancelled || TTSUserFacingError.isCancellation(error) { throw error }
+                        cacheWriteEnabled = false
+                        try? handle.close()
+                        await store.discard(partial: partialURL)
+                        let cacheError = error as NSError
+                        Log.error(
+                            "tts.cache.write.failed",
+                            error: NSError(domain: cacheError.domain, code: cacheError.code, userInfo: nil),
+                            diagnostic: TelemetryDiagnostic(
+                                feature: "tts",
+                                operation: "tts.cache",
+                                stage: "cache",
+                                errorCode: "cache_write_failed"
+                            )
+                        )
+                    }
+                }
             }
             try Task.checkCancellation()
             try? handle.close()
+            guard cacheWriteEnabled else {
+                await store.discard(partial: partialURL)
+                committed = true
+                return
+            }
             // Never commit an empty file: a 0-byte cache entry yields no audio
             // and halts playback on every later hit. An empty upstream response
             // is treated as a transient failure — discard so the next play
@@ -308,8 +336,24 @@ public actor CachingTTSChunkSource: TTSChunkSource {
                 )
                 return
             }
-            try await store.commit(key: key, partial: partialURL)
-            committed = true
+            do {
+                try await store.commit(key: key, partial: partialURL)
+                committed = true
+            } catch {
+                if Task.isCancelled || TTSUserFacingError.isCancellation(error) { throw error }
+                await store.discard(partial: partialURL)
+                let cacheError = error as NSError
+                Log.error(
+                    "tts.cache.commit.failed",
+                    error: NSError(domain: cacheError.domain, code: cacheError.code, userInfo: nil),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.cache",
+                        stage: "cache",
+                        errorCode: "cache_commit_failed"
+                    )
+                )
+            }
         } catch {
             try? handle.close()
             if !committed { await store.discard(partial: partialURL) }

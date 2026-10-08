@@ -1927,7 +1927,12 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         nowPlayingController?.detach()
         readiumState = .stopped
         if ttsState.typedFailure == nil {
-            if let userFacingError = TTSUserFacingError.classify(error) {
+            let underlying: Swift.Error
+            switch error {
+            case .engine(.other(let cause)): underlying = cause
+            case .engine(let cause): underlying = cause
+            }
+            if let userFacingError = TTSUserFacingError.classify(underlying) {
                 ttsState.recordUserFacingFailure(userFacingError)
             }
         }

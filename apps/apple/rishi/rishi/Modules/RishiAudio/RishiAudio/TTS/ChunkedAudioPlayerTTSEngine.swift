@@ -32,6 +32,7 @@ import Foundation
         private var settledGeneration = 0
         private var terminalTransitionGeneration = 0
         private var playbackStartedAt: Date?
+        private var sourceFailure: Error?
         private var pendingResult: Result<Void, Error>?
         private var waiter: CheckedContinuation<Void, Error>?
 
@@ -203,6 +204,7 @@ import Foundation
             terminalTransitionGeneration = 0
             pendingResult = nil
             playbackStartedAt = nil
+            sourceFailure = nil
             if let existing = waiter {
                 waiter = nil
                 existing.resume(throwing: CancellationError())
@@ -231,23 +233,30 @@ import Foundation
             AsyncThrowingStream { continuation in
                 let upstream = Task { [weak self, streamer] in
                     do {
-                for try await chunk in await streamer.stream(request) {
+                        for try await chunk in await streamer.stream(request) {
                             if Task.isCancelled {
                                 continuation.finish()
                                 return
                             }
                             continuation.yield(chunk.data)
-                }
-                continuation.finish()
-            } catch {
-                if let allowance = error as? WorkerAllowanceError,
-                   let self,
-                   await self.isCurrent(generation: generation, tokens: request.tokenSnapshot) {
-                    await MainActor.run {
-                        state.recordTypedFailure(allowance, tokens: request.tokenSnapshot)
-                    }
-                }
-                continuation.finish(throwing: error)
+                        }
+                        continuation.finish()
+                    } catch {
+                        if !Task.isCancelled,
+                           let self,
+                           await self.recordSourceFailure(
+                               error,
+                               generation: generation,
+                               tokens: request.tokenSnapshot
+                           ) {
+                            if let allowance = error as? WorkerAllowanceError {
+                                await MainActor.run {
+                                    guard !Task.isCancelled else { return }
+                                    state.recordTypedFailure(allowance, tokens: request.tokenSnapshot)
+                                }
+                            }
+                        }
+                        continuation.finish(throwing: error)
                     }
                 }
                 bridgeTask = upstream
@@ -255,11 +264,18 @@ import Foundation
             }
         }
 
-        private func isCurrent(
+        private func recordSourceFailure(
+            _ error: Error,
             generation: Int,
             tokens: TTSPlaybackTokenSnapshot
         ) -> Bool {
-            playbackGeneration == generation && activeRequestTokens == tokens
+            guard !Task.isCancelled,
+                  playbackGeneration == generation,
+                  activeRequestTokens == tokens,
+                  terminalTransitionGeneration != generation,
+                  settledGeneration != generation else { return false }
+            sourceFailure = error
+            return true
         }
 
         private func monitorForPlaybackFailure(
@@ -273,7 +289,7 @@ import Foundation
                 while !Task.isCancelled {
                     if let failure = await player.failure {
                         await self.markFailed(
-                            message: failure.message,
+                            nativeFailure: failure,
                             generation: generation,
                             correlationID: correlationID
                         )
@@ -301,8 +317,8 @@ import Foundation
             guard settledGeneration != generation else { return }
             let failure = await player.failure
             guard generation == playbackGeneration, settledGeneration != generation else { return }
-            if let failure {
-                await markFailed(message: failure.message, generation: generation, correlationID: correlationID)
+            if failure != nil || sourceFailure != nil {
+                await markFailed(nativeFailure: failure, generation: generation, correlationID: correlationID)
             } else {
                 await markStopped(generation: generation, correlationID: correlationID)
             }
@@ -387,7 +403,7 @@ import Foundation
         }
 
         private func markFailed(
-            message: String?,
+            nativeFailure: ChunkedTTSNativePlayerFailure?,
             generation: Int,
             correlationID: String
         ) async {
@@ -400,31 +416,64 @@ import Foundation
             bridgeTask = nil
             // Avoid player.stop() here: stop() clears .failed back to .initial
             // and can race with waiters. Status/error are enough for speak().
-            let text = message ?? "TTS playback failed"
+            let failure = sourceFailure ?? TTSEnginePlaybackError.playbackFailed(
+                nativeFailure?.message ?? "TTS playback failed"
+            )
+            let wasCancelled = TTSUserFacingError.isCancellation(failure)
             await MainActor.run {
-                guard state.typedFailure == nil else { return }
                 guard !Task.isCancelled, state.activeTokenSnapshot == tokens else { return }
-                state.recordUserFacingFailure(.audioPlayback)
+                if wasCancelled {
+                    state.update(status: .stopped)
+                } else if let category = TTSUserFacingError.classify(failure) {
+                    state.recordUserFacingFailure(category)
+                }
             }
             guard generation == playbackGeneration else { return }
-            Log.error(
-                "tts.player.failed",
-                error: NSError(domain: "org.fidexa.rishi.tts", code: 4),
-                diagnostic: TelemetryDiagnostic(
-                    feature: "tts",
-                    operation: "tts.player",
+            if wasCancelled {
+                Log.event("tts.player.cancelled", level: .warning, data: playbackTelemetry(
                     stage: "playback",
-                    errorCode: "audio_playback_failed",
-                    fields: [
-                        "correlation_id": correlationID,
-                        "duration_ms": playbackStartedAt.map {
-                            String(Int(Date().timeIntervalSince($0) * 1000))
-                        } ?? "0",
-                    ]
+                    extra: ["correlation_id": correlationID, "cancel_reason": "source_cancelled"]
+                ))
+            } else {
+                let category = TTSUserFacingError.classify(failure)
+                let diagnosticError: NSError
+                if let sourceFailure {
+                    if let rishiError = sourceFailure as? RishiError,
+                       case .networkFailure(let cause) = rishiError {
+                        diagnosticError = cause as NSError
+                    } else {
+                        diagnosticError = sourceFailure as NSError
+                    }
+                } else {
+                    let nativeError = failure as NSError
+                    diagnosticError = NSError(
+                        domain: nativeFailure?.domain ?? nativeError.domain,
+                        code: nativeFailure?.code ?? nativeError.code,
+                        userInfo: nil
+                    )
+                }
+                let fields = playbackTelemetry(stage: "playback", extra: [
+                    "correlation_id": correlationID,
+                    "failure_origin": sourceFailure == nil ? "native" : "source",
+                    "error_type": category?.rawValue ?? "audioPlayback",
+                    "error_domain": diagnosticError.domain,
+                    "error_code": String(diagnosticError.code),
+                ])
+                Log.event("tts.player.failure.metadata", level: .warning, data: fields)
+                Log.error(
+                    "tts.player.failed",
+                    error: NSError(domain: diagnosticError.domain, code: diagnosticError.code, userInfo: nil),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.player",
+                        stage: "playback",
+                        errorCode: category?.rawValue ?? "audio_playback_failed",
+                        fields: fields
+                    )
                 )
-            )
+            }
             settle(
-                .failure(TTSEnginePlaybackError.playbackFailed(text)),
+                .failure(failure),
                 generation: generation
             )
         }
@@ -458,6 +507,31 @@ import Foundation
 
     struct ChunkedTTSNativePlayerFailure: Sendable {
         let message: String?
+        let domain: String?
+        let code: Int?
+
+        init(message: String?, domain: String? = nil, code: Int? = nil) {
+            self.message = message
+            self.domain = domain
+            self.code = code
+        }
+
+        init(error: AudioPlayerError) {
+            let nativeError = Self.nativeError(error, depth: 0)
+            self.init(message: error.debugDescription, domain: nativeError.domain, code: nativeError.code)
+        }
+
+        private static func nativeError(_ error: AudioPlayerError, depth: Int) -> NSError {
+            switch error {
+            case .status(let status):
+                return NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+            case .other(let cause):
+                guard depth < 8, let nested = cause as? AudioPlayerError else { return cause as NSError }
+                return nativeError(nested, depth: depth + 1)
+            case .streamNotOpened:
+                return error as NSError
+            }
+        }
     }
 
     protocol ChunkedTTSNativePlayer: Sendable {
@@ -489,7 +563,10 @@ import Foundation
 
         @MainActor var failure: ChunkedTTSNativePlayerFailure? {
             guard player.currentState == .failed else { return nil }
-            return ChunkedTTSNativePlayerFailure(message: player.currentError?.debugDescription)
+            guard let error = player.currentError else {
+                return ChunkedTTSNativePlayerFailure(message: nil)
+            }
+            return ChunkedTTSNativePlayerFailure(error: error)
         }
     }
 #endif
