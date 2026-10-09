@@ -674,6 +674,18 @@ public actor SyncEngine {
         var terminalPageComplete: Bool
     }
 
+    private struct EventsEndpointUnavailable: Error {}
+
+    private struct SyncConsentRequired: Error, CustomStringConvertible {
+        var description: String { "Sync requires data-use consent" }
+    }
+
+    private func pageAdmissionIsCurrent(generation: Int, userId: UserID?) async throws -> Bool {
+        guard await isCurrent(generation: generation, userId: userId) else { return false }
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else { throw SyncConsentRequired() }
+        return await isCurrent(generation: generation, userId: userId)
+    }
+
     private func consumePages(
         scope: SyncCursorScope,
         generation: Int,
@@ -690,9 +702,21 @@ public actor SyncEngine {
         )
 
         while true {
-            let page = try await fetcher.fetchPage(scope: scope, cursor: cursor)
+            let page: SyncChangesPage
+            do {
+                page = try await fetcher.fetchPage(scope: scope, cursor: cursor)
+            } catch let error as RishiError {
+                // Only an older Worker's missing route permits compatibility
+                // fallback. Cursor storage and application errors are outside
+                // this fetch boundary and must keep outbound blocked.
+                if scope == .events,
+                   case .network(code: "http_4xx", message: "HTTP 404") = error {
+                    throw EventsEndpointUnavailable()
+                }
+                throw error
+            }
             result.wave.fetched += page.changes.count
-            guard !Task.isCancelled else {
+            guard try await pageAdmissionIsCurrent(generation: generation, userId: userId) else {
                 result.aborted = true
                 return result
             }
@@ -707,7 +731,7 @@ public actor SyncEngine {
                     return result
                 }
             }
-            guard await isCurrent(generation: generation, userId: userId) else {
+            guard try await pageAdmissionIsCurrent(generation: generation, userId: userId) else {
                 result.aborted = true
                 return result
             }
@@ -718,7 +742,7 @@ public actor SyncEngine {
                     result.readyForOutbound = false
                     return result
                 }
-                guard await isCurrent(generation: generation, userId: userId) else {
+                guard try await pageAdmissionIsCurrent(generation: generation, userId: userId) else {
                     result.aborted = true
                     return result
                 }
@@ -730,14 +754,14 @@ public actor SyncEngine {
                 cursor = nextCursor
             } else {
                 result.reachedTerminalPage = true
-                result.terminalPageComplete = page.projectionComplete
+                result.terminalPageComplete = page.projectionComplete && !page.isTruncated
                 if scope == .events {
                     // Event cursors are append-only sequence numbers. Unlike
                     // projection/recovery cursors, reaching the end does not
                     // mean the cursor should be deleted; doing so would make
                     // every later wave replay the entire event ledger.
                     if let nextCursor = page.nextCursor {
-                        guard await isCurrent(generation: generation, userId: userId) else {
+                        guard try await pageAdmissionIsCurrent(generation: generation, userId: userId) else {
                             result.aborted = true
                             return result
                         }
@@ -747,8 +771,8 @@ public actor SyncEngine {
                             accountGeneration: generation
                         ))
                     }
-                } else if page.projectionComplete {
-                    guard await isCurrent(generation: generation, userId: userId) else {
+                } else if result.terminalPageComplete {
+                    guard try await pageAdmissionIsCurrent(generation: generation, userId: userId) else {
                         result.aborted = true
                         return result
                     }
@@ -842,6 +866,7 @@ public actor SyncEngine {
         let waveUserId = await currentUserId()
         statusReporter.setRunning(true, on: status)
         var inboundReadyForOutbound = true
+        var canonicalComplete = false
 
         // 0. Hydrate the in-memory queue from sync_metadata.
         do {
@@ -854,34 +879,8 @@ public actor SyncEngine {
         // 1. Inbound — consume cursor pages and commit progress only after
         // the page has been applied successfully. A separate recovery plane
         // resumes incomplete projections without resetting incremental work.
-        // 1a. Consume the append-only event stream first. This is the
-        // authoritative deletion/retry plane; the materialized projection
-        // below remains as a compatibility and repair pass. A rolling deploy
-        // may briefly have an older Worker without /events, so failure of
-        // this additive plane must fall back to the projection pull.
-        do {
-            let eventResult = try await consumePages(
-                scope: .events,
-                generation: waveGeneration,
-                userId: waveUserId
-            )
-            merge(eventResult, into: &wave)
-            if eventResult.aborted {
-                statusReporter.setRunning(false, on: status)
-                return wave
-            }
-            inboundReadyForOutbound = eventResult.readyForOutbound
-        } catch {
-            // The append-only event stream is an additive optimization and
-            // is unavailable during rolling deploys or on older Workers.
-            // The projection/recovery pass below is the compatibility path,
-            // so an unavailable event endpoint must not make an otherwise
-            // successful sync wave appear failed.
-            Log.event("sync.events.unavailable", level: .warning, data: [
-                "error": String(describing: error),
-            ])
-        }
-
+        // Restore current canonical rows and permanent tombstones before
+        // replaying historical events, including books absent from the ledger.
         do {
             let existingRecovery = try await metadataStore.recoveryState()
             let recoveryIsCurrent = existingRecovery?.accountGeneration == waveGeneration
@@ -911,7 +910,10 @@ public actor SyncEngine {
                 statusReporter.setRunning(false, on: status)
                 return wave
             }
-            inboundReadyForOutbound = inboundReadyForOutbound && pageResult.readyForOutbound
+            canonicalComplete = pageResult.readyForOutbound
+                && pageResult.reachedTerminalPage
+                && pageResult.terminalPageComplete
+            inboundReadyForOutbound = inboundReadyForOutbound && canonicalComplete
             if pageResult.readyForOutbound,
                pageResult.reachedTerminalPage,
                pageResult.terminalPageComplete,
@@ -919,11 +921,15 @@ public actor SyncEngine {
                 // A complete recovery is the promotion boundary. The next
                 // incremental request establishes a new high-water mark;
                 // no recovery cursor or stale incremental cursor survives it.
-                guard await isCurrent(generation: waveGeneration, userId: waveUserId) else {
+                guard try await pageAdmissionIsCurrent(generation: waveGeneration, userId: waveUserId) else {
                     statusReporter.setRunning(false, on: status)
                     return wave
                 }
                 try await metadataStore.clearRecoveryState(accountGeneration: waveGeneration)
+                guard try await pageAdmissionIsCurrent(generation: waveGeneration, userId: waveUserId) else {
+                    statusReporter.setRunning(false, on: status)
+                    return wave
+                }
                 try await metadataStore.clearCursorState(for: .incremental, accountGeneration: waveGeneration)
             } else if pageResult.readyForOutbound,
                       pageResult.reachedTerminalPage,
@@ -939,10 +945,39 @@ public actor SyncEngine {
                         accountGeneration: waveGeneration
                     ))
                 }
+                wave.errors.append("fetch: canonical projection incomplete")
             }
         } catch {
             wave.errors.append("fetch: \(error)")
+            canonicalComplete = false
             inboundReadyForOutbound = false
+        }
+
+        if canonicalComplete {
+            do {
+                guard try await pageAdmissionIsCurrent(generation: waveGeneration, userId: waveUserId) else {
+                    statusReporter.setRunning(false, on: status)
+                    return wave
+                }
+                let eventResult = try await consumePages(
+                    scope: .events,
+                    generation: waveGeneration,
+                    userId: waveUserId
+                )
+                merge(eventResult, into: &wave)
+                if eventResult.aborted {
+                    statusReporter.setRunning(false, on: status)
+                    return wave
+                }
+                inboundReadyForOutbound = inboundReadyForOutbound && eventResult.readyForOutbound
+            } catch is EventsEndpointUnavailable {
+                Log.event("sync.events.unavailable", level: .warning, data: [
+                    "reason": "missing_route",
+                ])
+            } catch {
+                wave.errors.append("events: \(error)")
+                inboundReadyForOutbound = false
+            }
         }
 
         // 1b. Inbound — Phase 16-05: dedicated chat-sync pulls, delegated to
@@ -972,6 +1007,18 @@ public actor SyncEngine {
             return wave
         }
 
+        do {
+            guard try await pageAdmissionIsCurrent(generation: waveGeneration, userId: waveUserId) else {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
+        } catch {
+            wave.errors.append(String(describing: error))
+            await statusReporter.snapshotStatus(error: wave.errors.first, on: status, completedAt: nil)
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
+
         guard inboundReadyForOutbound else {
             await statusReporter.snapshotStatus(error: wave.errors.first, on: status, completedAt: nil)
             statusReporter.setRunning(false, on: status)
@@ -990,7 +1037,14 @@ public actor SyncEngine {
                 }
             } catch { wave.errors.append("book.reconciliation: \(error)") }
         }
-        guard await isCurrent(generation: waveGeneration, userId: waveUserId), !Task.isCancelled else {
+        do {
+            guard try await pageAdmissionIsCurrent(generation: waveGeneration, userId: waveUserId) else {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
+        } catch {
+            wave.errors.append(String(describing: error))
+            await statusReporter.snapshotStatus(error: wave.errors.first, on: status, completedAt: nil)
             statusReporter.setRunning(false, on: status)
             return wave
         }

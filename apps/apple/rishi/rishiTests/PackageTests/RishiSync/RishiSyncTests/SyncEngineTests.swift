@@ -65,6 +65,10 @@ struct SyncEngineTests {
         var recovery: SyncRecoveryState?
         var recoveryPreparationFailure: String?
         var recoveryEvents: [String] = []
+        var cursorFailure: String?
+        var hydrationFailure = false
+        func failCursor(_ stage: String) { cursorFailure = stage }
+        func failHydration() { hydrationFailure = true }
         func failRecoveryPreparation(_ stage: String) { recoveryPreparationFailure = stage }
         func recoveryEventSnapshot() -> [String] { recoveryEvents }
         var positionOperations: [UUID: UUID] = [:]
@@ -101,7 +105,10 @@ struct SyncEngineTests {
             cleaned.append((entityId, kind))
             globalCursor = lastSyncedAt
         }
-        func allDirty() async throws -> [SyncPendingItem] { dirty }
+        func allDirty() async throws -> [SyncPendingItem] {
+            if hydrationFailure { hydrationFailure = false; throw InjectedFailure() }
+            return dirty
+        }
         func pending(kind: SyncEntityKind, limit: Int) async throws -> [SyncPendingItem] {
             Array(dirty.filter { $0.kind == kind }.prefix(limit))
         }
@@ -122,9 +129,11 @@ struct SyncEngineTests {
         }
 
         func cursorState(for scope: SyncCursorScope) async throws -> SyncCursorState? {
-            cursors[scope.rawValue]
+            if scope == .events && cursorFailure == "read" { throw RishiError.network(code: "http_4xx", message: "HTTP 404") }
+            return cursors[scope.rawValue]
         }
         func saveCursorState(_ state: SyncCursorState) async throws {
+            if state.scope == .events && cursorFailure == "save" { throw RishiError.network(code: "http_4xx", message: "HTTP 404") }
             cursors[state.scope.rawValue] = state
             cursorSaveCount += 1
         }
@@ -154,6 +163,7 @@ struct SyncEngineTests {
         func cleanedSnapshot() -> [(UUID, SyncEntityKind)] { cleaned }
         func resetCallCount() -> Int { resetCalls }
         func incrementalCursor() -> SyncCursorState? { cursors[SyncCursorScope.incremental.rawValue] }
+        func eventCursor() -> SyncCursorState? { cursors[SyncCursorScope.events.rawValue] }
         func savedCursorCount() -> Int { cursorSaveCount }
         func recoverySnapshot() -> SyncRecoveryState? { recovery }
     }
@@ -282,10 +292,12 @@ struct SyncEngineTests {
         dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         ownerID: UUID = UUID(),
         bookReadinessPolicy: BookReadinessPolicy? = nil,
-        bookUploaderOverride: BookUploader? = nil
+        bookUploaderOverride: BookUploader? = nil,
+        bookIntegrationOverride: TestBookSyncIntegration? = nil,
+        currentUserIdOverride: (@Sendable () async -> UserID?)? = nil
     ) -> SyncEngine {
         let testUserId = ownerID
-        let currentUserId: @Sendable () async -> UserID? = { testUserId }
+        let currentUserId: @Sendable () async -> UserID? = currentUserIdOverride ?? { testUserId }
         let queue = SyncQueue(metadataStore: metadata)
         let bookUploader = bookUploaderOverride ?? BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata, currentUserId: currentUserId)
@@ -309,6 +321,7 @@ struct SyncEngineTests {
             bookmarkStore: EngineStubBookmarkStore(),
             metadataStore: metadata,
             bookIntegration: {
+                if let bookIntegrationOverride { return bookIntegrationOverride }
                 var integration = TestBookSyncIntegration()
                 integration.userIdProvider = currentUserId
 
@@ -2168,6 +2181,247 @@ struct SyncEngineTests {
             dataUseConsentProvider: consent, ownerID: owner)
         await dispatcher.configure(engine: engine)
         #expect(await consent.count() == 0)
+    }
+
+    private func restorePage(_ changes: [SyncChange] = [], scope: SyncCursorScope = .incremental,
+                             next: String? = nil, more: Bool = false, complete: Bool = true, truncated: Bool = false) throws -> Data {
+        let encoded = try JSONEncoder().encode(changes)
+        var object: [String: Any] = ["changes": try JSONSerialization.jsonObject(with: encoded),
+            "cursor_scope": scope.rawValue, "has_more": more, "projection_complete": complete, "is_truncated": truncated]
+        if let next { object["next_cursor"] = next }
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private actor RestoreMaterializations {
+        var ids: [UUID] = []
+        func record(_ id: UUID) { ids.append(id) }
+        func snapshot() -> [UUID] { ids }
+    }
+
+    @Test("Canonical legacy rows and closures restore before historical events and survive cursor recreation", arguments: [false, true])
+    func canonicalRestorePrecedesLedger(resuming: Bool) async throws {
+        EngineMockURLProtocol.reset()
+        let owner = UUID(), obsoleteID = UUID(), lateDeleteID = UUID()
+        let legacy = Book(userId: owner, title: "Projection only", formatType: .epub, fileURL: "legacy.epub")
+        let current = Book(userId: owner, title: "Current title", formatType: .epub, fileURL: "current.epub")
+        let old = Book(id: current.id, userId: owner, title: "Old title", formatType: .epub, fileURL: "old.epub")
+        let retired = Book(id: obsoleteID, userId: owner, title: "Obsolete history", formatType: .epub, fileURL: "retired.epub")
+        let stamp = Date(timeIntervalSince1970: 300)
+        let legacyChange = SyncChange(kind: "book", id: legacy.id, payload: try SyncPayloadCodec.encodeBook(legacy, r2Key: "owned/legacy", fileSize: 0), updatedAt: stamp, deleted: false)
+        let currentChange = SyncChange(kind: "book", id: current.id, payload: try SyncPayloadCodec.encodeBook(current, r2Key: "owned/current", fileSize: 0), updatedAt: stamp, deleted: false)
+        let tombstone = SyncChange(kind: "book", id: obsoleteID, payload: SyncOpaqueJSON(data: Data("{}".utf8)), updatedAt: stamp, deleted: true)
+        let history = [SyncChange(kind: "book", id: obsoleteID, payload: try SyncPayloadCodec.encodeBook(retired, r2Key: "deleted/obsolete"), updatedAt: stamp.addingTimeInterval(-2), deleted: false),
+            SyncChange(kind: "book", id: current.id, payload: try SyncPayloadCodec.encodeBook(old, r2Key: "owned/current"), updatedAt: stamp.addingTimeInterval(-1), deleted: false),
+            SyncChange(kind: "book", id: lateDeleteID, payload: SyncOpaqueJSON(data: Data("{}".utf8)), updatedAt: stamp.addingTimeInterval(1), deleted: true)]
+        let first = try restorePage([legacyChange, tombstone], next: "projection-page-2", more: true, complete: false, truncated: true)
+        let second = try restorePage([currentChange])
+        let events = try restorePage(history, scope: .events, next: "324")
+        EngineMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/sync/changes": return (200, request.url?.query?.contains("cursor=projection-page-2") == true ? second : first, nil)
+            case "/api/sync/events": return (200, events, nil)
+            case "/api/sync/conversations", "/api/sync/messages": return (200, Data("{\"rows\":[]}".utf8), nil)
+            default: return (404, Data(), nil)
+            }
+        }
+        let container = try SyncMetadataStoreBootstrap.makeContainer(inMemory: true)
+        let metadata = await SwiftDataSyncMetadataStore.make(container: container)
+        let books = StubBookStore()
+        if resuming {
+            await books.seed(legacy)
+            try await metadata.markClean(entityId: legacy.id, kind: .book, lastSyncedAt: stamp, remoteEtag: nil)
+            try await metadata.applyLocalBookTombstone(obsoleteID, mutation: {})
+            let dirty = try await metadata.dirtyAt(entityId: obsoleteID, kind: .book)
+            #expect(try await metadata.acknowledgeTombstoneIfUnchanged(entityId: obsoleteID, kind: .book, expectedDirtyAt: dirty, lastSyncedAt: stamp, remoteEtag: nil))
+            try await metadata.saveCursorState(.init(scope: .incremental, cursor: "projection-page-2"))
+            try await metadata.saveCursorState(.init(scope: .events, cursor: "82"))
+        }
+        let calls = RestoreMaterializations()
+        var integration = TestBookSyncIntegration(); integration.userIdProvider = { owner }
+        integration.materializeOperation = { book, _, file, _ in
+            guard book.id != obsoleteID else { throw BookDownloadCoordinator.DownloadError.failed(status: 404) }
+            #expect(file?.byteCount == nil)
+            await calls.record(book.id)
+            let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: owner, sha256: String(repeating: "a", count: 64),
+                version: ManagedFileVersion(byteCount: 8, modificationDate: .distantPast, fileIdentifier: nil, materializationRevision: UUID()))
+            return VerifiedDownloadedBook(book: book, fingerprint: fingerprint)
+        }
+        integration.fingerprintOperation = { _, _, _ in true }
+        let (storage, root) = try await makeFileStorage(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(); defer { session.invalidateAndCancel() }
+        let client = makeWorkerClient(session: session)
+        let engine = makeEngine(metadata: metadata, bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(),
+            workerClient: client, fileStorage: storage, ownerID: owner, bookIntegrationOverride: integration)
+        let wave = await engine.runOnce()
+        #expect(wave.errors.isEmpty)
+        #expect(try await books.book(legacy.id) != nil)
+        #expect(try await books.book(current.id)?.title == current.title)
+        #expect(try await books.book(obsoleteID) == nil)
+        #expect(try await metadata.isTombstone(entityId: obsoleteID, kind: .book))
+        #expect(try await metadata.isTombstone(entityId: lateDeleteID, kind: .book))
+        #expect(try await metadata.cursorState(for: .events)?.cursor == "324")
+        #expect(try await metadata.cursorState(for: .incremental) == nil)
+        #expect(try await metadata.lastSyncedAt(entityId: current.id, kind: .book) == stamp)
+        let requests = EngineMockURLProtocol.capturedSnapshot()
+        let firstEvent = try #require(requests.firstIndex { $0.url?.path == "/api/sync/events" })
+        #expect(requests[..<firstEvent].allSatisfy { $0.url?.path == "/api/sync/changes" })
+        #expect(firstEvent == (resuming ? 1 : 2))
+        #expect(requests[firstEvent].url?.query == (resuming ? "after=82" : nil))
+        #expect(!requests.contains { $0.httpMethod == "POST" })
+        #expect(!(await calls.snapshot()).contains(obsoleteID))
+        let recreated = await SwiftDataSyncMetadataStore.make(container: container)
+        let nextEngine = makeEngine(metadata: recreated, bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(),
+            workerClient: client, fileStorage: storage, ownerID: owner, bookIntegrationOverride: integration)
+        let requestCount = requests.count
+        #expect((await nextEngine.runOnce()).errors.isEmpty)
+        let repeated = Array(EngineMockURLProtocol.capturedSnapshot().dropFirst(requestCount))
+        #expect(repeated.first?.url?.path == "/api/sync/changes")
+        #expect(repeated.first { $0.url?.path == "/api/sync/events" }?.url?.query == "after=324")
+    }
+
+    @Test("Incomplete canonical terminal blocks ledger and outbound even with contradictory flags", arguments: [false, true])
+    func incompleteCanonicalTerminalBlocksEvents(contradictory: Bool) async throws {
+        EngineMockURLProtocol.reset()
+        let metadata = StubMetadata()
+        let pending = UUID(); try await metadata.markDirty(entityId: pending, kind: .position)
+        try await metadata.saveCursorState(.init(scope: .incremental, cursor: "retained-page"))
+        let body = try restorePage(complete: contradictory, truncated: true)
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" { return (200, body, nil) }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" { return (200, Data("{\"rows\":[]}".utf8), nil) }
+            return (200, Data("{\"changes\":[],\"next_cursor\":\"324\"}".utf8), nil)
+        }
+        let (storage, root) = try await makeFileStorage(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(); defer { session.invalidateAndCancel() }
+        let engine = makeEngine(metadata: metadata, bookStore: StubBookStore(), positionStore: StubPositionStore(), highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: session), fileStorage: storage)
+        let wave = await engine.runOnce()
+        #expect(!wave.errors.isEmpty)
+        #expect(await metadata.incrementalCursor()?.cursor == "retained-page")
+        #expect(await metadata.recoverySnapshot()?.reason == .incompleteProjection)
+        #expect(try await metadata.pendingCount() == 1)
+        #expect(!EngineMockURLProtocol.capturedSnapshot().contains { $0.url?.path == "/api/sync/events" || $0.url?.path == "/api/sync/push" })
+    }
+
+    @Test("Only genuine missing ledger route permits compatibility outbound", arguments: ["terminalSave", "intermediateSave", "read", "decode", "scopeMismatch", "network", "forbidden", "missing", "hydration"])
+    func eventFailureDoesNotMasqueradeAsUnavailable(mode: String) async throws {
+        EngineMockURLProtocol.reset()
+        let metadata = StubMetadata(), positions = StubPositionStore(), books = StubBookStore(), owner = UUID()
+        let book = Book(userId: owner, title: "Pending position", formatType: .epub, fileURL: "fixture-position.epub")
+        await books.seed(book)
+        await positions.seed(Position(bookId: book.id, locator: "saved", updatedAt: Date(timeIntervalSince1970: 100)))
+        try await metadata.markDirty(entityId: book.id, kind: .position)
+        if mode.contains("Save") { await metadata.failCursor("save") }
+        if mode == "read" { await metadata.failCursor("read") }
+        if mode == "hydration" { await metadata.failHydration() }
+        let event = try restorePage(scope: mode == "scopeMismatch" ? .incremental : .events, next: "324", more: mode == "intermediateSave")
+        EngineMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/sync/changes": return (200, self.emptyChangesBody(), nil)
+            case "/api/sync/events":
+                if mode == "network" { throw URLError(.notConnectedToInternet) }
+                if mode == "missing" { return (404, Data(), nil) }
+                if mode == "forbidden" { return (403, Data(), nil) }
+                if mode == "decode" { return (200, Data("invalid".utf8), nil) }
+                return (200, event, nil)
+            case "/api/sync/conversations", "/api/sync/messages": return (200, Data("{\"rows\":[]}".utf8), nil)
+            case "/api/sync/push": return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
+            default: return (404, Data(), nil)
+            }
+        }
+        let (storage, root) = try await makeFileStorage(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(); defer { session.invalidateAndCancel() }
+        let engine = makeEngine(metadata: metadata, bookStore: books, positionStore: positions, highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: session), fileStorage: storage, ownerID: owner)
+        let wave = await engine.runOnce()
+        #expect(wave.errors.isEmpty == (mode == "missing"))
+        #expect(EngineMockURLProtocol.capturedSnapshot().contains { $0.url?.path == "/api/sync/push" } == (mode == "missing"))
+        #expect(wave.positionsPushed == (mode == "missing" ? 1 : 0))
+        if mode != "hydration" { #expect(await metadata.eventCursor() == nil) }
+    }
+
+    private final class RestoreAdmission: WorkerDataUseConsentProvider, @unchecked Sendable {
+        private let lock = NSLock()
+        private var granted = true
+        private var owner: UUID?
+        init(owner: UUID) { self.owner = owner }
+        func withdrawConsent() { lock.withLock { granted = false } }
+        func changeOwner() { lock.withLock { owner = UUID() } }
+        func currentOwner() -> UUID? { lock.withLock { owner } }
+        func hasCurrentDataUseConsent() async -> Bool { lock.withLock { granted } }
+    }
+
+    @Test("Suspended canonical response cannot apply or promote after admission changes", arguments: ["consent", "owner", "cancel", "beforeCursor"])
+    func canonicalResponseRetainsAdmission(mode: String) async throws {
+        EngineMockURLProtocol.reset()
+        let owner = UUID(), admission = RestoreAdmission(owner: owner), metadata = StubMetadata(), books = StubBookStore()
+        let incoming = Book(userId: owner, title: "Must not apply", formatType: .epub, fileURL: "fixture-response.epub")
+        let change = SyncChange(kind: "book", id: incoming.id, payload: try SyncPayloadCodec.encodeBook(incoming, r2Key: "owned/fixture"), updatedAt: .now, deleted: false)
+        let page = try restorePage([change], next: "must-not-promote", more: true, complete: false, truncated: true)
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" { entered.signal(); release.wait(); return (200, page, nil) }
+            return (200, Data("{\"rows\":[]}".utf8), nil)
+        }
+        let (storage, root) = try await makeFileStorage(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(); defer { session.invalidateAndCancel() }
+        var integration = TestBookSyncIntegration(); integration.userIdProvider = { admission.currentOwner() }
+        integration.materializeOperation = { book, _, _, _ in
+            if mode == "beforeCursor" { admission.withdrawConsent() }
+            let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: owner, sha256: String(repeating: "a", count: 64),
+                version: ManagedFileVersion(byteCount: 8, modificationDate: .distantPast, fileIdentifier: nil, materializationRevision: UUID()))
+            return VerifiedDownloadedBook(book: book, fingerprint: fingerprint)
+        }
+        integration.fingerprintOperation = { _, _, _ in true }
+        let engine = makeEngine(metadata: metadata, bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: session), fileStorage: storage,
+            dataUseConsentProvider: admission, ownerID: owner, bookIntegrationOverride: integration, currentUserIdOverride: { admission.currentOwner() })
+        let work = Task { await engine.runOnce() }
+        await Task.detached { entered.wait() }.value
+        if mode == "consent" { admission.withdrawConsent() }
+        if mode == "owner" { admission.changeOwner() }
+        if mode == "cancel" { work.cancel() }
+        release.signal()
+        _ = await work.value
+        #expect((try await books.book(incoming.id) != nil) == (mode == "beforeCursor"))
+        #expect(await metadata.incrementalCursor() == nil)
+        #expect(!EngineMockURLProtocol.capturedSnapshot().contains { $0.url?.path == "/api/sync/events" || $0.url?.path == "/api/sync/push" })
+        // Cancelling a runOnce waiter resumes the caller before the active
+        // wave has drained. Keep its private transport alive through teardown.
+        if mode == "cancel" { await engine.resetForAccountSwitch() }
+    }
+
+    @Test("Historical download404 stays retryable until a later canonical tombstone closes it")
+    func historicalDownloadFailureRecoversThroughNextProjection() async throws {
+        EngineMockURLProtocol.reset()
+        let owner = UUID(), books = StubBookStore(), metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let obsolete = Book(userId: owner, title: "Closed during projection", formatType: .epub, fileURL: "fixture-closed.epub")
+        let live = SyncChange(kind: "book", id: obsolete.id, payload: try SyncPayloadCodec.encodeBook(obsolete, r2Key: "deleted/object"), updatedAt: Date(timeIntervalSince1970: 100), deleted: false)
+        let closed = SyncChange(kind: "book", id: obsolete.id, payload: SyncOpaqueJSON(data: Data("{}".utf8)), updatedAt: Date(timeIntervalSince1970: 200), deleted: true)
+        let events = try restorePage([live, closed], scope: .events, next: "324")
+        let closurePage = try restorePage([closed])
+        let calls = LockedRequestCounter()
+        EngineMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/sync/changes": return (200, calls.increment() == 1 ? self.emptyChangesBody() : closurePage, nil)
+            case "/api/sync/events": return (200, events, nil)
+            case "/api/sync/conversations", "/api/sync/messages": return (200, Data("{\"rows\":[]}".utf8), nil)
+            default: return (404, Data(), nil)
+            }
+        }
+        var integration = TestBookSyncIntegration(); integration.userIdProvider = { owner }
+        integration.materializeOperation = { _, _, _, _ in throw BookDownloadCoordinator.DownloadError.failed(status: 404) }
+        let (storage, root) = try await makeFileStorage(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(); defer { session.invalidateAndCancel() }
+        let engine = makeEngine(metadata: metadata, bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(),
+            workerClient: makeWorkerClient(session: session), fileStorage: storage, ownerID: owner, bookIntegrationOverride: integration)
+        let first = await engine.runOnce()
+        #expect(first.errors.contains { $0.contains("failed(status: 404)") })
+        #expect(try await metadata.cursorState(for: .events) == nil)
+        #expect(try await books.book(obsolete.id) == nil)
+        let retry = await engine.runOnce()
+        #expect(retry.errors.isEmpty)
+        #expect(try await metadata.cursorState(for: .events)?.cursor == "324")
+        #expect(try await metadata.isTombstone(entityId: obsolete.id, kind: .book))
+        #expect(try await books.book(obsolete.id) == nil)
     }
 
 }

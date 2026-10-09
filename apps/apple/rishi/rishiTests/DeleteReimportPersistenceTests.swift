@@ -795,4 +795,87 @@ struct DeleteReimportPersistenceTests {
         let current = try #require(try await fixture.registry.managedSource(for: fixture.book))
         #expect(current.accountGeneration == state.generation)
     }
+    @Test("Legacy download restores verified native files while provided metadata and HTTP failures stay strict", arguments: ["legacy", "positive", "hashed", "badSize", "badHash", "hashedZero", "negative", "404"])
+    func legacyDownloadVerification(mode: String) async throws {
+        let fixture = try await ReaderDeletionFixture.make()
+        let incoming = Book(userId: fixture.owner, title: "Cloud fixture", formatType: .epub, fileURL: "remote.epub")
+        let permit = AccountMutationPermit(ownerID: fixture.owner, accountGeneration: fixture.generation)
+        let bytes = try Data(contentsOf: fixture.root.appendingPathComponent(fixture.book.fileURL))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let hash: String? = mode == "hashed" || mode == "hashedZero" ? digest : mode == "badHash" ? String(repeating: "0", count: 64) : nil
+        let count = mode == "legacy" || mode == "hashedZero" || mode == "404" ? 0 : mode == "negative" ? -1 : mode == "badSize" ? bytes.count + 1 : bytes.count
+        DeleteReimportDownloadProtocol.reset()
+        defer { DeleteReimportDownloadProtocol.reset() }
+        DeleteReimportDownloadProtocol.handler = { request in
+            if request.url?.path == "/api/sync/download-url" {
+                return (200, Data("{\"url\":\"https://download.example.invalid/book\",\"expires_at\":946684800}".utf8), nil)
+            }
+            return (mode == "404" ? 404 : 200, bytes, ["Content-Type": "application/epub+zip"])
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DeleteReimportDownloadProtocol.self]
+        let session = URLSession(configuration: configuration); defer { session.invalidateAndCancel() }
+        let client = WorkerClient(baseURL: URL(string: "https://worker.example.invalid")!, session: session,
+            tokenProvider: StaticTokenProvider("fixture-token"), dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider())
+        let storage = BookFileStorage(rootURL: fixture.root, bookStore: fixture.books, coverExtractors: [:],
+            isTombstoned: { (try? await fixture.metadata.isTombstone(entityId: $0, kind: .book)) ?? true },
+            fingerprintPersistence: fixture.persistence, fingerprintAccountGeneration: { fixture.generation })
+        let current: @Sendable (AccountMutationPermit) async -> Bool = {
+            $0 == permit && fixture.lifecycle.admits(ownerID: $0.ownerID, generation: $0.accountGeneration)
+        }
+        let downloader = BookDownloadCoordinator(workerClient: client, fileStorage: storage, userIdProvider: { fixture.owner.uuidString },
+            urlSession: session, metadataStore: fixture.metadata, isCurrentAccountPermit: current,
+            admitAccountOperation: { captured in
+                guard await current(captured) else { return nil }
+                return fixture.lifecycle.admitOwnerOperation(ownerID: captured.ownerID, generation: captured.accountGeneration)
+            })
+        var integration = TestBookSyncIntegration()
+        integration.userIdProvider = { fixture.owner }
+        integration.capturePermitOperation = { owner in guard owner == fixture.owner else { throw BookSyncAccountChanged() }; return permit }
+        integration.validatePermitOperation = { captured in guard let captured, await current(captured) else { throw BookSyncAccountChanged() } }
+        integration.materializeOperation = { book, key, remote, captured in
+            guard let captured else { throw BookSyncAccountChanged() }
+            return try await downloader.downloadAndMaterializeVerified(book, r2Key: key, expectedRemoteSHA256: remote?.sha256,
+                expectedRemoteByteCount: remote?.byteCount, accountPermit: captured)
+        }
+        integration.fingerprintOperation = { fingerprint, book, generation in
+            guard let generation else { return false }
+            return await storage.persistVerifiedFingerprint(fingerprint, for: book, expectedGeneration: generation)
+        }
+        integration.admitCommitOperation = { captured in
+            guard let captured, await current(captured), let lease = fixture.lifecycle.admitOwnerOperation(ownerID: captured.ownerID, generation: captured.accountGeneration) else { throw BookSyncAccountChanged() }
+            return lease
+        }
+        integration.activationOperation = { id, captured in
+            guard let captured, await current(captured) else { return }
+            _ = fixture.registry.advanceBookAttemptSynchronously(ownerID: captured.ownerID, generation: captured.accountGeneration, bookID: id)
+        }
+        let applier = ChangeApplier(bookStore: fixture.books, positionStore: fixture.positions,
+            highlightStore: SwiftDataHighlightStore(dbStore: fixture.db), bookmarkStore: SwiftDataBookmarkStore(dbStore: fixture.db),
+            metadataStore: fixture.metadata, bookIntegration: integration)
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let change = SyncChange(kind: "book", id: incoming.id,
+            payload: try SyncPayloadCodec.encodeBook(incoming, r2Key: "owned/fixture", fileHash: hash, fileSize: count), updatedAt: stamp, deleted: false)
+        let result = try await deleteReimportRun { await applier.apply([change], expectedUserId: fixture.owner) }
+        let succeeds = ["legacy", "positive", "hashed"].contains(mode)
+        #expect(result.errors.isEmpty == succeeds)
+        #expect(result.applied == (succeeds ? 1 : 0))
+        if succeeds {
+            let materialized = try #require(try await fixture.books.book(incoming.id))
+            #expect(try Data(contentsOf: fixture.root.appendingPathComponent(materialized.fileURL)) == bytes)
+            let fingerprint = try #require(try await fixture.persistence.fingerprint(bookID: incoming.id, ownerID: fixture.owner))
+            #expect(fingerprint.sha256 == digest)
+            #expect(fingerprint.version.byteCount == Int64(bytes.count))
+            let managed = try #require(try await fixture.registry.managedSource(for: materialized))
+            #expect(managed.fingerprint == fingerprint)
+            #expect(try await fixture.metadata.lastSyncedAt(entityId: incoming.id, kind: .book) == stamp)
+            #expect(try await fixture.metadata.pendingCount() == 0)
+        } else {
+            #expect(try await fixture.books.book(incoming.id) == nil)
+            #expect(try await fixture.persistence.fingerprint(bookID: incoming.id, ownerID: fixture.owner) == nil)
+            #expect(try await fixture.metadata.lastSyncedAt(entityId: incoming.id, kind: .book) == nil)
+            #expect(result.errors.contains { $0.contains(mode == "404" ? "failed(status: 404)" : "remoteMetadataMismatch") })
+        }
+    }
+
 }

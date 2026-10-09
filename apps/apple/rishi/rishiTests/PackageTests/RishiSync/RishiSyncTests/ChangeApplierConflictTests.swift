@@ -26,21 +26,27 @@ struct ChangeApplierConflictTests {
         var tombstoneAcknowledgements: [(UUID, SyncEntityKind)] = []
         var remoteSeenCalls: [(UUID, SyncEntityKind, Date)] = []
         var dirtyRows: [String: Date] = [:]
+        var acceptedRows: [String: Date] = [:]
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
             cleanCalls.append((entityId, kind, lastSyncedAt, remoteEtag))
+            acceptedRows["\(entityId.uuidString):\(kind.rawValue)"] = lastSyncedAt
         }
         func allDirty() async throws -> [SyncPendingItem] { [] }
         func pending(kind: SyncEntityKind, limit: Int) async throws -> [SyncPendingItem] { [] }
         func pendingCount() async throws -> Int { 0 }
         func lastSyncedAt(forKind kind: SyncEntityKind) async throws -> Date? { nil }
         func globalLastSyncedAt() async throws -> Date? { nil }
+        func lastSyncedAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+            acceptedRows["\(entityId.uuidString):\(kind.rawValue)"]
+        }
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {
             forgetCalls.append((entityId, kind))
         }
         func markCleanIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
             cleanCalls.append((entityId, kind, lastSyncedAt, remoteEtag))
+            acceptedRows["\(entityId.uuidString):\(kind.rawValue)"] = lastSyncedAt
             return true
         }
         func acknowledgeTombstoneIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
@@ -1806,6 +1812,124 @@ struct ChangeApplierConflictTests {
         #expect(try await positions.position(for: closedID) == nil)
     }
 
+    @Test("Legacy zero size is unknown only without a supplied hash", arguments: ["legacy", "nil", "positive", "negative", "hashedZero", "emptyHashZero"])
+    func legacyExpectedByteCount(mode: String) throws {
+        let book = Book(userId: UUID(), title: "Fixture", formatType: .epub, fileURL: "fixture-codec.epub")
+        let hash: String? = mode == "hashedZero" ? String(repeating: "a", count: 64) : mode == "emptyHashZero" ? "" : nil
+        let count: Int? = mode == "nil" ? nil : mode == "positive" ? 8 : mode == "negative" ? -1 : 0
+        let payload = try SyncPayloadCodec.encodeBook(book, r2Key: "owned/fixture", fileHash: hash, fileSize: count)
+        let decoded = try SyncPayloadCodec.decodeBookPayload(payload, fallbackAddedAt: .distantPast, fallbackUserId: book.userId)
+        #expect(decoded.remoteFile.sha256 == hash)
+        #expect(decoded.remoteFile.byteCount == (mode == "legacy" || mode == "nil" ? nil : count.map(Int64.init)))
+    }
+
+    @Test("Older accepted book skips history while current or missing canonical rows still repair", arguments: ["missingSource", "ready", "equal", "newer", "missingRow"])
+    func acceptedBookHistoryAndRepair(mode: String) async throws {
+        let owner = UUID(), id = UUID()
+        let accepted = Date(timeIntervalSince1970: 200)
+        let timestamp = mode == "equal" ? accepted : mode == "newer" ? accepted.addingTimeInterval(1) : accepted.addingTimeInterval(-1)
+        let local = Book(id: id, userId: owner, title: "Current canonical", formatType: .epub, fileURL: "managed-current.epub")
+        let remote = Book(id: id, userId: owner, title: "Incoming payload", formatType: .epub, fileURL: "remote.epub")
+        let books = StubBookStore(), positions = StubPositionStore()
+        if mode != "missingRow" { await books.seed(local) }
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await metadata.markClean(entityId: id, kind: .book, lastSyncedAt: accepted, remoteEtag: nil)
+        let probe = CommitStageProbe()
+        let fingerprint = BookFileFingerprint(bookID: id, ownerID: owner, sha256: String(repeating: "a", count: 64),
+            version: ManagedFileVersion(byteCount: 8, modificationDate: .distantPast, fileIdentifier: nil, materializationRevision: UUID()))
+        var integration = TestBookSyncIntegration()
+        integration.userIdProvider = { owner }
+        integration.managedFingerprintOperation = { _ in
+            await probe.record("fingerprint")
+            return mode == "ready" ? fingerprint : nil
+        }
+        integration.materializeOperation = { book, _, _, _ in
+            await probe.record("download")
+            return VerifiedDownloadedBook(book: book, fingerprint: fingerprint)
+        }
+        integration.fingerprintOperation = { _, _, _ in true }
+        let applier = ChangeApplier(bookStore: books, positionStore: positions, highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(), metadataStore: metadata, bookIntegration: integration)
+        let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/fixture")
+        let result = await applier.apply([SyncChange(kind: "book", id: id, payload: payload, updatedAt: timestamp, deleted: false)], expectedUserId: owner)
+        let stale = mode == "missingSource" || mode == "ready"
+        #expect(result.errors.isEmpty)
+        #expect(result.conflicts == (stale ? 1 : 0))
+        #expect(result.applied == (stale ? 0 : 1))
+        #expect(try await books.book(id)?.title == (stale ? local.title : remote.title))
+        #expect((await probe.snapshot()).contains("download") == !stale)
+        if stale {
+            #expect((await probe.snapshot()).isEmpty)
+            #expect(try await metadata.lastSyncedAt(entityId: id, kind: .book) == accepted)
+            #expect(try await metadata.remoteSeenAt(entityId: id, kind: .book) == timestamp)
+            #expect(try await books.book(id)?.fileURL == local.fileURL)
+        }
+    }
+
+    @Test("Final inbound guard preserves a newer accepted row or pending operation", arguments: ["accepted", "dirty"])
+    func newerBookCommittedWhileSourceLookupSuspended(mode: String) async throws {
+        let owner = UUID(), id = UUID(), gate = ReplayGate()
+        let initial = Book(id: id, userId: owner, title: "Initial", formatType: .epub, fileURL: "managed.epub")
+        let winner = Book(id: id, userId: owner, title: "New winner", formatType: .epub, fileURL: "managed.epub")
+        let remote = Book(id: id, userId: owner, title: "Must not overwrite", formatType: .epub, fileURL: "remote.epub")
+        let books = StubBookStore(); await books.seed(initial)
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await metadata.markClean(entityId: id, kind: .book, lastSyncedAt: Date(timeIntervalSince1970: 100), remoteEtag: nil)
+        let stages = CommitStageProbe()
+        let token = BookSourceReplacementToken(ownerID: owner, generation: 7, bookID: id, operationID: UUID())
+        let fingerprint = BookFileFingerprint(bookID: id, ownerID: owner, sha256: String(repeating: "a", count: 64),
+            version: ManagedFileVersion(byteCount: 8, modificationDate: .distantPast, fileIdentifier: nil, materializationRevision: UUID()))
+        var integration = TestBookSyncIntegration()
+        integration.userIdProvider = { owner }
+        integration.managedFingerprintOperation = { _ in await gate.suspend(); return nil }
+        integration.prepareReplacementOperation = { _, _ in await stages.record("prepare"); return token }
+        integration.abortReplacementOperation = { _ in await stages.record("abort") }
+        integration.materializeOperation = { book, _, _, _ in VerifiedDownloadedBook(book: book, fingerprint: fingerprint) }
+        integration.fingerprintOperation = { _, _, _ in await stages.record("persist"); return true }
+        let applier = ChangeApplier(bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(), metadataStore: metadata, bookIntegration: integration)
+        let change = SyncChange(kind: "book", id: id, payload: try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/fixture"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)
+        let work = Task { await applier.apply([change], expectedUserId: owner) }
+        await gate.waitForEntry()
+        await books.seed(winner)
+        if mode == "accepted" {
+            try await metadata.markClean(entityId: id, kind: .book, lastSyncedAt: Date(timeIntervalSince1970: 300), remoteEtag: nil)
+        } else { try await metadata.markDirty(entityId: id, kind: .book) }
+        let operation = try await metadata.operationId(entityId: id, kind: .book)
+        let dirty = try await metadata.dirtyAt(entityId: id, kind: .book)
+        await gate.release()
+        let result = await work.value
+        #expect(result.errors.isEmpty)
+        #expect(result.conflicts == 1)
+        #expect(result.applied == 0)
+        #expect(try await books.book(id) == winner)
+        #expect(try await metadata.operationId(entityId: id, kind: .book) == operation)
+        #expect(try await metadata.dirtyAt(entityId: id, kind: .book) == dirty)
+        #expect(try await metadata.lastSyncedAt(entityId: id, kind: .book) == Date(timeIntervalSince1970: mode == "accepted" ? 300 : 100))
+        #expect(await stages.snapshot() == ["prepare", "abort"])
+        // This proves metadata/operation protection and lifecycle abort only;
+        // the real downloader's earlier byte/cache writes are not rolled back.
+    }
+
+    @Test("Pending-only metadata with no dirty date is not cleaned by stale book replay")
+    func pendingOnlyBookReplayPreservesOperation() async throws {
+        let owner = UUID(), book = Book(userId: UUID(), title: "Pending", formatType: .epub, fileURL: "fixture-pending.epub")
+        let owned = Book(id: book.id, userId: owner, title: book.title, formatType: .epub, fileURL: book.fileURL)
+        let books = StubBookStore(); await books.seed(owned)
+        let native = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await native.markDirty(entityId: owned.id, kind: .book)
+        let operation = try await native.operationId(entityId: owned.id, kind: .book)
+        let metadata = PositionReplayMetadata(base: native, hideDirtyAt: true)
+        let applier = makeApplier(bookStore: books, positionStore: StubPositionStore(), highlightStore: StubHighlightStore(), metadata: metadata, currentUserId: { owner })
+        let change = SyncChange(kind: "book", id: owned.id, payload: try SyncPayloadCodec.encodeBook(owned), updatedAt: .now, deleted: false)
+        let result = await applier.apply([change], expectedUserId: owner)
+        #expect(result.errors.isEmpty)
+        #expect(result.conflicts == 1)
+        #expect(try await native.operationId(entityId: owned.id, kind: .book) == operation)
+        #expect(try await native.pendingCount() == 1)
+        #expect(try await native.lastSyncedAt(entityId: owned.id, kind: .book) == nil)
+    }
+
 }
 
 
@@ -1838,6 +1962,7 @@ private struct PositionReplayMetadata: SyncMetadataStore {
     let base: any SyncMetadataStore
     var gateErrorID: UUID? = nil
     var observationFails = false
+    var hideDirtyAt = false
     var beforeGate: @Sendable () async -> Void = {}
     func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T {
         await beforeGate()
@@ -1852,7 +1977,10 @@ private struct PositionReplayMetadata: SyncMetadataStore {
     func markDirty(entityId: UUID, kind: SyncEntityKind) async throws { try await base.markDirty(entityId: entityId, kind: kind) }
     func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws { try await base.markClean(entityId: entityId, kind: kind, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
     func markCleanIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool { try await base.markCleanIfUnchanged(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
-    func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? { try await base.dirtyAt(entityId: entityId, kind: kind) }
+    func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+        if hideDirtyAt { return nil }
+        return try await base.dirtyAt(entityId: entityId, kind: kind)
+    }
     func allDirty() async throws -> [SyncPendingItem] { try await base.allDirty() }
     func pending(kind: SyncEntityKind, limit: Int) async throws -> [SyncPendingItem] { try await base.pending(kind: kind, limit: limit) }
     func pendingCount() async throws -> Int { try await base.pendingCount() }

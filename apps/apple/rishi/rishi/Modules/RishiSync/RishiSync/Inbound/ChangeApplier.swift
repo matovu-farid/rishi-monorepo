@@ -32,6 +32,8 @@ public final class ChangeApplier: Sendable {
         var description: String { "conditional sync acknowledgement failed" }
     }
 
+    private struct LiveBookAdvisoryConflict: Error {}
+
     private struct BookRetirementRecoveryRequired: Error, CustomStringConvertible {
         var description: String { "book remains listed after retirement but source recovery is required; remote tombstone remains unacknowledged" }
     }
@@ -412,6 +414,12 @@ public final class ChangeApplier: Sendable {
         }
         let capturedAccountPermit = try await bookIntegration.captureAccountPermit(ownerID: existingLocal?.userId ?? remote.userId)
         try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        if try await skipOlderAcceptedBook(
+            change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit
+        ) {
+            result.conflicts += 1
+            return
+        }
         let existingFingerprint: BookFileFingerprint? = if let existingLocal {
             await bookIntegration.managedFingerprint(existingLocal)
         } else {
@@ -524,6 +532,10 @@ public final class ChangeApplier: Sendable {
         } catch {
             if let sourceReplacement { await bookIntegration.abortSourceReplacement(sourceReplacement) }
             switch error {
+            case is LiveBookAdvisoryConflict:
+                try await recordBookConflict(change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit)
+                result.conflicts += 1
+                return
             case SyncMetadataError.bookIdentityClosed, BookImportPromotionError.retired:
                 try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
                 result.conflicts += 1
@@ -531,6 +543,63 @@ public final class ChangeApplier: Sendable {
             default: throw error
             }
         }
+    }
+
+    private func skipOlderAcceptedBook(
+        _ change: SyncChange,
+        expectedUserId: UserID?,
+        capturedAccountPermit: AccountMutationPermit?
+    ) async throws -> Bool {
+        do {
+            return try await metadataStore.withLiveBookIdentity(change.id) {
+                guard try await self.liveBookRequiresConflict(
+                    change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit
+                ) else { return false }
+                try await self.recordBookConflict(
+                    change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit
+                )
+                return true
+            }
+        } catch SyncMetadataError.bookIdentityClosed(let closedID) {
+            guard closedID == change.id else { throw SyncMetadataError.bookIdentityClosed(closedID) }
+            try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+            guard try await metadataStore.isTombstone(entityId: change.id, kind: .book) else {
+                throw SyncMetadataError.bookIdentityClosed(closedID)
+            }
+            try await recordBookConflict(change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit)
+            return true
+        }
+    }
+
+    /// Finite metadata/canonical reads only. The caller already owns the live
+    /// identity gate; source discovery and materialization remain outside it.
+    private func liveBookRequiresConflict(
+        _ change: SyncChange,
+        expectedUserId: UserID?,
+        capturedAccountPermit: AccountMutationPermit?
+    ) async throws -> Bool {
+        try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        if try await metadataStore.dirtyAt(entityId: change.id, kind: .book) != nil { return true }
+        let pending = try await metadataStore.pending(kind: .book, limit: 10_000)
+        if pending.contains(where: { $0.entityId == change.id }) { return true }
+        let canonical = try await bookStore.book(change.id)
+        let currentOwner = await bookIntegration.currentUserId()
+        try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        guard let canonical else { return false }
+        guard canonical.userId == currentOwner else { return true }
+        let acceptedAt = try await metadataStore.lastSyncedAt(entityId: change.id, kind: .book)
+        try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        return acceptedAt.map { $0 > change.updatedAt } ?? false
+    }
+
+    private func recordBookConflict(
+        _ change: SyncChange,
+        expectedUserId: UserID?,
+        capturedAccountPermit: AccountMutationPermit?
+    ) async throws {
+        try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        try await metadataStore.recordRemoteSeen(entityId: change.id, kind: .book, updatedAt: change.updatedAt)
+        try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
     }
 
     private func commitLiveBook(
@@ -544,6 +613,9 @@ public final class ChangeApplier: Sendable {
         let entityId = change.id
         var positionConflict = false
         try await ensureCommitAuthority(capturedAccountPermit, expectedUserId: expectedUserId)
+        guard try await !liveBookRequiresConflict(
+            change, expectedUserId: expectedUserId, capturedAccountPermit: capturedAccountPermit
+        ) else { throw LiveBookAdvisoryConflict() }
         guard try await metadataStore.dirtyAt(entityId: entityId, kind: .book) == expectedDirtyAt else {
             try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
             throw ConditionalAcknowledgementFailed()

@@ -136,6 +136,12 @@ enum SyncPayloadCodec {
         decoder.dateDecodingStrategy = .iso8601
         do {
             let wire = try decoder.decode(WireBook.self, from: payload.data)
+            // Legacy projection rows used zero without a hash for unknown size.
+            let expectedByteCount: Int64? = if wire.fileHash == nil && wire.fileSize == 0 {
+                nil
+            } else {
+                wire.fileSize.map(Int64.init)
+            }
             return DecodedBookPayload(
                 book: Book(
                     id: wire.id,
@@ -151,7 +157,7 @@ enum SyncPayloadCodec {
                     conversationId: wire.conversationId,
                     chapterIndexContentVersion: wire.chapterIndexContentVersion
                 ),
-                remoteFile: InboundBookFileMetadata(sha256: wire.fileHash, byteCount: wire.fileSize.map(Int64.init))
+                remoteFile: InboundBookFileMetadata(sha256: wire.fileHash, byteCount: expectedByteCount)
             )
         } catch {
             throw CodecError.decodeFailed(kind: "book", underlying: String(describing: error))
