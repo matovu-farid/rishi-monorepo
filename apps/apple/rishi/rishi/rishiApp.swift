@@ -237,9 +237,17 @@ struct rishiApp: App {
                 }
                 
             }
+            #if targetEnvironment(macCatalyst)
+            .frame(
+                minWidth: 800,
+                maxWidth: .infinity,
+                minHeight: 600,
+                maxHeight: .infinity
+            )
+            #endif
         }
 #if targetEnvironment(macCatalyst)
-        .defaultSize(width: 1400, height: 1000)
+        .windowResizability(.contentMinSize)
 #endif
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
