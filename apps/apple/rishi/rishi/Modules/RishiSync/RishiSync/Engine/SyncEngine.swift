@@ -182,6 +182,7 @@ public actor SyncEngine {
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let currentUserId: @Sendable () async -> UserID?
     private let localSyncObjectBuilder: LocalSyncObjectBuilder?
+    private let bookReadinessPolicy: BookReadinessPolicy?
 
     // Plan 34-10 (SRP) — runOnce's three responsibilities extracted into
     // focused collaborators. The engine keeps only orchestration + actor
@@ -251,6 +252,7 @@ public actor SyncEngine {
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
         self.currentUserId = dependencies.currentUserId
         self.localSyncObjectBuilder = dependencies.localSyncObjectBuilder
+        self.bookReadinessPolicy = dependencies.bookReadinessPolicy
 
         // Plan 34-10 (SRP) — assemble the runOnce collaborators from the
         // already-stored dependencies. No new init params; uploaders/fetchers/
@@ -972,6 +974,23 @@ public actor SyncEngine {
 
         guard inboundReadyForOutbound else {
             await statusReporter.snapshotStatus(error: wave.errors.first, on: status, completedAt: nil)
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
+
+        if let bookReadinessPolicy, let waveUserId {
+            do {
+                let recovered = try await bookReadinessPolicy.reconcileUntrackedBooks(expectedUserID: waveUserId) { [weak self] in
+                    guard let self else { return false }
+                    return await self.isCurrent(generation: waveGeneration, userId: waveUserId)
+                }
+                for item in recovered {
+                    guard await isCurrent(generation: waveGeneration, userId: waveUserId) else { break }
+                    await queue.enqueue(item)
+                }
+            } catch { wave.errors.append("book.reconciliation: \(error)") }
+        }
+        guard await isCurrent(generation: waveGeneration, userId: waveUserId), !Task.isCancelled else {
             statusReporter.setRunning(false, on: status)
             return wave
         }

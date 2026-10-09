@@ -165,6 +165,26 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         _ = try await markDirtyIfAdmitted(entityId: entityId, kind: kind)
     }
 
+    public func markUntrackedBookDirtyIfAdmitted(_ entityId: UUID) async throws -> Bool {
+        let id = entityId.uuidString
+        let type = SyncEntityKind.book.rawValue
+        let key = Self.storageId(entityId: id, kind: type)
+        // The final candidate check and new operation share one persistence mutation.
+        // Ordinary import dirty marks need not enter the book identity gate.
+        return try mutate { context in
+            if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
+                guard !row.dirty, !row.tombstone, row.lastSyncedAt == nil, row.dirtyAt == nil else { return false }
+                row.dirty = true
+                row.dirtyAt = Date()
+                row.operationId = UUID()
+            } else {
+                context.insert(SyncMetadataRow(entityId: key, entityType: type,
+                    dirtyAt: Date(), operationId: UUID(), dirty: true))
+            }
+            return true
+        }
+    }
+
     public func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition {
         let id = entityId.uuidString
         let type = kind.rawValue

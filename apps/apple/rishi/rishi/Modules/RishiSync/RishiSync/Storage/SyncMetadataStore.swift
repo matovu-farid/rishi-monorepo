@@ -25,6 +25,8 @@ public protocol SyncMetadataStore: Sendable {
     func hasProtectedPositionPublication(_ id: UUID) async -> Bool
     /// Retires a rejected mutation without promoting its rejected timestamp.
     func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool
+    /// Atomically recovers a never-synced book only if it still has no pending mutation.
+    func markUntrackedBookDirtyIfAdmitted(_ id: UUID) async throws -> Bool
     func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition
     func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T
     func applyBookTombstoneIfUnchanged(_ id: UUID, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?, mutation: @escaping @Sendable () async throws -> Void) async throws -> Bool
@@ -161,6 +163,9 @@ public extension SyncMetadataStore {
     func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool {
         try await markCleanIfCurrent(entityId: entityId, kind: .position, expectedDirtyAt: expectedDirtyAt, expectedOperationId: expectedOperationId, lastSyncedAt: previousLastSyncedAt ?? .distantPast, remoteEtag: nil)
     }
+
+    /// Compatibility stores must opt into the atomic recovery contract.
+    func markUntrackedBookDirtyIfAdmitted(_ id: UUID) async throws -> Bool { false }
 
     func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition {
         if kind == .book, try await isTombstone(entityId: entityId, kind: kind) {

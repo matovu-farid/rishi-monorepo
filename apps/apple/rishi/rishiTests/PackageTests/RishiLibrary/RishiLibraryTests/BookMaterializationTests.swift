@@ -133,13 +133,14 @@ struct BookMaterializationTests {
         let harness = try await makeBoundaryFixture()
         defer { try? FileManager.default.removeItem(at: harness.root) }
         let failureOnce = BoundaryCopyFailureOnce()
+        let ready = ManagedReadyTokenProbe()
         let coordinator = harness.makeCoordinator(copySelectedSource: { token, source, stagingURL, sha, count, version in
             if await failureOnce.shouldFail() { throw BoundaryInjectedCopyFailure.failed }
             return try await CoordinatedBookCopier().copy(
                 source: source, to: stagingURL, expectedSHA256: sha,
                 expectedByteCount: count, sourceVersion: version
             )
-        })
+        }, onManagedReady: { await ready.record($0) })
         let waiter = Task { try await harness.registry.awaitManagedSource(for: harness.book) }
         #expect(await waitForManagedWaiter(registry: harness.registry, book: harness.book, generation: harness.generation))
 
@@ -150,6 +151,7 @@ struct BookMaterializationTests {
         let paused = try #require(await harness.persistence.pendingMaterialization(bookID: harness.book.id, ownerID: harness.ownerID))
         #expect(paused.token == harness.request.job.token)
         #expect(paused.phase == .paused)
+        #expect(await ready.tokens().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: harness.destination.path))
 
         let retryToken = BookMaterializationToken(ownerID: harness.ownerID, accountGeneration: harness.generation, bookID: harness.book.id, attemptID: UUID())
@@ -166,12 +168,13 @@ struct BookMaterializationTests {
             canonicalManagedURL: harness.destination, expectedManagedFileVersion: nil,
             expectedPriorPendingToken: paused.token, job: retryJob
         )
-        guard case .repaired(let fingerprint) = try await harness.makeCoordinator().materializeReservedSampleRepair(
+        guard case .repaired(let fingerprint) = try await harness.makeCoordinator(onManagedReady: { await ready.record($0) }).materializeReservedSampleRepair(
             request: retryRequest, sourceURL: harness.sourceURL
         ) else {
             Issue.record("exact retry did not repair the Book")
             return
         }
+        #expect(await ready.tokens() == [retryToken])
         #expect(fingerprint.sha256 == harness.fingerprint.sha256)
         #expect(try Data(contentsOf: harness.destination) == harness.bytes)
         #expect(try await harness.persistence.pendingMaterialization(bookID: harness.book.id, ownerID: harness.ownerID)?.phase == .ready)
@@ -182,13 +185,14 @@ struct BookMaterializationTests {
         let harness = try await makeBoundaryFixture()
         defer { try? FileManager.default.removeItem(at: harness.root) }
         let gate = MaterializationTestGate()
+        let ready = ManagedReadyTokenProbe()
         let coordinator = harness.makeCoordinator(copySelectedSource: { _, source, stagingURL, sha, count, version in
             await gate.waitUntilReleased()
             return try await CoordinatedBookCopier().copy(
                 source: source, to: stagingURL, expectedSHA256: sha,
                 expectedByteCount: count, sourceVersion: version
             )
-        })
+        }, onManagedReady: { await ready.record($0) })
         let waiter = Task { try await harness.registry.awaitManagedSource(for: harness.book) }
         #expect(await waitForManagedWaiter(registry: harness.registry, book: harness.book, generation: harness.generation))
         let repair = Task {
@@ -202,6 +206,7 @@ struct BookMaterializationTests {
         let pending = try #require(await harness.persistence.pendingMaterialization(bookID: harness.book.id, ownerID: harness.ownerID))
         #expect(pending.token == harness.request.job.token)
         #expect(pending.phase != .ready)
+        #expect(await ready.tokens().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: harness.destination.path))
     }
 
@@ -396,15 +401,18 @@ struct BookMaterializationTests {
             managedURL: { root.appendingPathComponent($0.fileURL) }
         )
         let lifecycle = BookImportLifecycle(sourceRegistry: registry, currentAccountGeneration: { generation })
+        let ready = ManagedReadyTokenProbe()
         let coordinator = BookMaterializationCoordinator(
             rootURL: root,
             lifecycle: lifecycle,
             sourceRegistry: registry,
             persistence: persistence,
             bookStore: bookStore,
-            currentGeneration: { generation }
+            currentGeneration: { generation },
+            onManagedReady: { await ready.record($0) }
         )
 
+        #expect(!coordinator.hasImportEventFeed)
         let fingerprint = try await coordinator.materialize(book: book, token: token, sourceURL: sourceURL)
 
         let destination = root.appendingPathComponent(book.fileURL)
@@ -412,6 +420,14 @@ struct BookMaterializationTests {
         #expect(fingerprint.sha256 == digest)
         #expect(await persistence.currentJob.phase == .ready)
         #expect(await persistence.currentFingerprint == fingerprint)
+        #expect(await ready.tokens() == [token])
+
+        // Recovery republishes a ready job through the same callback without a UI feed.
+        #expect(await coordinator.publishReconciledManagedReady(book: book, generation: generation, fingerprint: fingerprint))
+        #expect(await ready.tokens() == [token, token])
+        lifecycle.retireBook(ownerID: ownerID, generation: generation, bookID: book.id)
+        #expect(!(await coordinator.publishReconciledManagedReady(book: book, generation: generation, fingerprint: fingerprint)))
+        #expect(await ready.tokens() == [token, token])
     }
 
     @Test("same-owner retries adopt two newer generations from the exact paused source after old bytes disappear")
@@ -1256,7 +1272,20 @@ private actor MaterializationPersistenceStub: BookImportPersistence {
 
     // Explicit negative results for operations outside this fixture's controlled scenario.
     func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
-    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool { false }
+    // This fixture authorizes only its exact ready job in the original generation.
+    // It does not model same-owner relogin or restore retired source authority.
+    func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool {
+        guard currentJob.phase == .ready,
+              currentJob.token.bookID == bookID, currentJob.token.ownerID == ownerID,
+              currentJob.token.accountGeneration == generation,
+              fingerprint.bookID == bookID, fingerprint.ownerID == ownerID,
+              currentFingerprint == fingerprint,
+              currentJob.expectedSHA256 == fingerprint.sha256,
+              currentJob.expectedByteCount == fingerprint.version.byteCount,
+              currentJob.destinationFileIdentifier == fingerprint.version.fileIdentifier,
+              currentJob.promotionRevision == fingerprint.version.materializationRevision else { return false }
+        return true
+    }
     func parkSampleRepair(book: Book, token: BookMaterializationToken) async -> SampleRepairParkingOutcome { .writeFailed }
     func discardUnpublishedRegistration(token: BookMaterializationToken) async throws -> Bool { false }
     func retryExpectation(bookID: BookID, ownerID: UserID, accountPermit: AccountMutationPermit) async throws -> BookImportRetryExpectation? { nil }
@@ -1302,12 +1331,13 @@ private struct SampleRepairBoundaryFixture {
 
     func makeCoordinator(
         copySelectedSource: (@Sendable (BookMaterializationToken, BookSourceLease, URL, String, Int64, ManagedFileVersion) async throws -> StagedBookArtifact)? = nil,
-        beforeRepairPromotion: @escaping @Sendable (URL) throws -> Void = { _ in }
+        beforeRepairPromotion: @escaping @Sendable (URL) throws -> Void = { _ in },
+        onManagedReady: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in }
     ) -> BookMaterializationCoordinator {
         BookMaterializationCoordinator(
             rootURL: root, lifecycle: lifecycle, sourceRegistry: registry,
             persistence: persistence, bookStore: books, currentGeneration: { generation },
-            copySelectedSource: copySelectedSource, beforeRepairPromotion: beforeRepairPromotion
+            copySelectedSource: copySelectedSource, onManagedReady: onManagedReady, beforeRepairPromotion: beforeRepairPromotion
         )
     }
 }
@@ -1454,4 +1484,10 @@ private actor RetryProbeCounter {
 
 private enum RetrySourceProbeFailure: Error {
     case secondProbe
+}
+
+private actor ManagedReadyTokenProbe {
+    private var received: [BookMaterializationToken] = []
+    func record(_ token: BookMaterializationToken) { received.append(token) }
+    func tokens() -> [BookMaterializationToken] { received }
 }

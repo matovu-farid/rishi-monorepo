@@ -1,6 +1,7 @@
 @testable import rishi
 import Foundation
 import Testing
+import SwiftData
 
 @Suite("Outbound managed readiness")
 struct OutboundReadinessTests {
@@ -145,4 +146,151 @@ struct OutboundReadinessTests {
         await metadata.accept(conversation.id, kind: .conversation)
         #expect(try await policy.classify(SyncQueueItem(entityId: message.id, kind: .message)) == .eligible)
     }
+    private actor DiscoverySources: BookSourceResolving {
+        var requested = Set<BookID>()
+        let unavailable: Set<BookID>
+        let gate: DiscoveryGate?
+        init(unavailable: Set<BookID> = [], gate: DiscoveryGate? = nil) {
+            self.unavailable = unavailable; self.gate = gate
+        }
+        func acquireReadableSource(for book: Book) async throws -> BookSourceLease { throw CancellationError() }
+        func managedSource(for book: Book) async throws -> ManagedBookSource? {
+            requested.insert(book.id)
+            if let gate { await gate.suspend() }
+            return try await Sources(ready: !unavailable.contains(book.id)).managedSource(for: book)
+        }
+        func awaitManagedSource(for book: Book) async throws -> ManagedBookSource {
+            guard let source = try await managedSource(for: book) else { throw CancellationError() }
+            return source
+        }
+        func requests() -> Set<BookID> { requested }
+    }
+
+    private actor DiscoveryGate {
+        var entered = false
+        var continuation: CheckedContinuation<Void, Never>?
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        func suspend() async {
+            await withCheckedContinuation {
+                continuation = $0; entered = true
+                waiters.forEach { $0.resume() }; waiters.removeAll()
+            }
+        }
+        func waitForEntry() async {
+            if entered { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func release() { continuation?.resume(); continuation = nil }
+    }
+
+    private actor DiscoveryAuthority {
+        var current = true
+        var provenance = true
+        func isCurrent() -> Bool { current }
+        func isValidSource() -> Bool { provenance }
+        func switchAccount() { current = false }
+        func changeFingerprint() { provenance = false }
+    }
+
+    private func discoveryPolicy(owner: UserID, books: Books, metadata: any SyncMetadataStore,
+        sources: any BookSourceResolving,
+        revalidate: @escaping @Sendable (Book, ManagedBookSource) async throws -> Bool = { _, _ in true }
+    ) -> BookReadinessPolicy {
+        BookReadinessPolicy(bookStore: books, positionStore: Positions(), highlightStore: Highlights(),
+            bookmarkStore: Bookmarks(), conversationStore: Conversations(), messageStore: Messages(),
+            chapterIndexes: nil, metadataStore: metadata, sourceResolver: sources,
+            currentUserID: { owner }, revalidateManagedSource: revalidate)
+    }
+
+    @Test("Recovery finds only never-synced ready books and preserves dirty operation IDs")
+    @MainActor
+    func recoveryPrefiltersRealMetadata() async throws {
+        let owner = UUID()
+        let books = Books()
+        func book(_ name: String, ownerID: UUID? = nil) -> Book {
+            Book(userId: ownerID ?? owner, title: name, formatType: .pdf, fileURL: "Books/\(name).pdf")
+        }
+        let missing = book("missing")
+        let cleanLegacy = book("cleanLegacy")
+        let dirty = book("dirty")
+        let legacyDirty = book("legacyDirty")
+        let deleted = book("deleted")
+        let wrongOwner = book("wrongOwner", ownerID: UUID())
+        let unavailable = book("unavailable")
+        for value in [missing, cleanLegacy, dirty, legacyDirty, deleted, wrongOwner, unavailable] { await books.seed(value) }
+        let container = try SyncMetadataStoreBootstrap.makeContainer(inMemory: true)
+        let operation = UUID()
+        let context = ModelContext(container)
+        context.insert(SyncMetadataRow(entityId: legacyDirty.id.uuidString, entityType: SyncEntityKind.book.rawValue,
+            dirtyAt: nil, operationId: operation, dirty: true))
+        try context.save()
+        let metadata = await SwiftDataSyncMetadataStore.make(container: container)
+        try await metadata.markClean(entityId: cleanLegacy.id, kind: .book, lastSyncedAt: .distantPast, remoteEtag: nil)
+        try await metadata.markDirty(entityId: dirty.id, kind: .book)
+        let dirtyOperation = try await metadata.operationId(entityId: dirty.id, kind: .book)
+        try await metadata.applyLocalBookTombstone(deleted.id, mutation: {})
+        let sources = DiscoverySources(unavailable: [unavailable.id])
+        let policy = discoveryPolicy(owner: owner, books: books, metadata: metadata, sources: sources)
+        let recovered = try await policy.reconcileUntrackedBooks(expectedUserID: owner, isCurrentAccount: { true })
+        #expect(recovered == [SyncQueueItem(entityId: missing.id, kind: .book)])
+        #expect(await sources.requests() == [missing.id, unavailable.id])
+        #expect(try await metadata.operationId(entityId: dirty.id, kind: .book) == dirtyOperation)
+        #expect(try await metadata.operationId(entityId: legacyDirty.id, kind: .book) == operation)
+        #expect(try await metadata.dirtyAt(entityId: legacyDirty.id, kind: .book) == nil)
+        #expect(try await metadata.dirtyAt(entityId: missing.id, kind: .book) != nil)
+        #expect(try await metadata.isTombstone(entityId: deleted.id, kind: .book))
+    }
+
+    @Test("Source resolution leaves deletion free to commit and rechecks account/provenance", arguments: ["delete", "account", "fingerprint", "path", "dirty"])
+    func recoveryRejectsChangesDuringResolution(mode: String) async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Candidate", formatType: .pdf, fileURL: "Books/candidate.pdf")
+        let books = Books(); await books.seed(book)
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let gate = DiscoveryGate()
+        let authority = DiscoveryAuthority()
+        let policy = discoveryPolicy(owner: owner, books: books, metadata: metadata,
+            sources: DiscoverySources(gate: gate), revalidate: { _, _ in await authority.isValidSource() })
+        let discovery = Task {
+            try await policy.reconcileUntrackedBooks(expectedUserID: owner, isCurrentAccount: { await authority.isCurrent() })
+        }
+        await gate.waitForEntry()
+        var operation: UUID?
+        switch mode {
+        case "delete":
+            // This await must finish while the source resolver remains suspended.
+            try await metadata.applyLocalBookTombstone(book.id) { try await books.delete(book.id) }
+            #expect(try await books.book(book.id) == nil)
+        case "account": await authority.switchAccount()
+        case "fingerprint": await authority.changeFingerprint()
+        case "path":
+            var replacement = book; replacement.fileURL = "Books/replacement.pdf"
+            try await books.upsert(replacement)
+        default:
+            try await metadata.markDirty(entityId: book.id, kind: .book)
+            operation = try await metadata.operationId(entityId: book.id, kind: .book)
+        }
+        await gate.release()
+        #expect(try await discovery.value.isEmpty)
+        if mode == "dirty" {
+            #expect(try await metadata.operationId(entityId: book.id, kind: .book) == operation)
+        } else if mode != "delete" {
+            #expect(try await metadata.allDirty().isEmpty)
+        }
+    }
+
+    @Test("Reconciliation stays disabled without a captured-source validator")
+    func recoveryRequiresExplicitSourceValidation() async throws {
+        let owner = UUID()
+        let books = Books()
+        let book = Book(userId: owner, title: "Candidate", formatType: .pdf, fileURL: "Books/candidate.pdf")
+        await books.seed(book)
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let policy = BookReadinessPolicy(bookStore: books, positionStore: Positions(), highlightStore: Highlights(),
+            bookmarkStore: Bookmarks(), conversationStore: Conversations(), messageStore: Messages(), chapterIndexes: nil,
+            metadataStore: metadata, sourceResolver: Sources(ready: true), currentUserID: { owner })
+        #expect(try await policy.reconcileUntrackedBooks(expectedUserID: owner, isCurrentAccount: { true }).isEmpty)
+        #expect(try await metadata.allDirty().isEmpty)
+    }
+
 }

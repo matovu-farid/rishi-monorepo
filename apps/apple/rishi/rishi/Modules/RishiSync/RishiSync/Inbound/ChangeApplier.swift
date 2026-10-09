@@ -150,30 +150,44 @@ public final class ChangeApplier: Sendable {
 
     private func applyPosition(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         let remote = try SyncPayloadCodec.decodePosition(change.payload, fallbackUpdatedAt: change.updatedAt)
-        let applied = try await metadataStore.withLiveBookIdentity(remote.bookId) { [self] in
-            try await ensureAccount(expectedUserId)
-            let dirtyAt = try await metadataStore.dirtyAt(entityId: remote.bookId, kind: .position)
-            guard dirtyAt == nil, !(await metadataStore.hasProtectedPositionPublication(remote.bookId)) else {
-                try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
-                return false
+        let applied: Bool
+        do {
+            applied = try await metadataStore.withLiveBookIdentity(remote.bookId) { [self] in
+                try await ensureAccount(expectedUserId)
+                let dirtyAt = try await metadataStore.dirtyAt(entityId: remote.bookId, kind: .position)
+                guard dirtyAt == nil, !(await metadataStore.hasProtectedPositionPublication(remote.bookId)) else {
+                    try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
+                    return false
+                }
+                let local = try await positionStore.position(for: remote.bookId)
+                if let local, local.updatedAt > remote.updatedAt
+                    || (local.updatedAt == remote.updatedAt && local.locator == remote.locator
+                        && local.percentComplete == remote.percentComplete) {
+                    try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
+                    return false
+                }
+                // Clean equal-time server winners replace the effective row rather
+                // than adding a tied history row under the server's UUID.
+                let effective = Position(id: local?.id ?? remote.id, bookId: remote.bookId,
+                    locator: remote.locator, percentComplete: remote.percentComplete, updatedAt: remote.updatedAt)
+                try await ensureAccount(expectedUserId)
+                try await positionStore.upsert(effective)
+                try await ensureAccount(expectedUserId)
+                guard try await metadataStore.markCleanIfUnchanged(entityId: remote.bookId, kind: .position,
+                    expectedDirtyAt: nil, lastSyncedAt: change.updatedAt, remoteEtag: nil) else { throw ConditionalAcknowledgementFailed() }
+                return true
             }
-            let local = try await positionStore.position(for: remote.bookId)
-            if let local, local.updatedAt > remote.updatedAt
-                || (local.updatedAt == remote.updatedAt && local.locator == remote.locator
-                    && local.percentComplete == remote.percentComplete) {
-                try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
-                return false
+        } catch SyncMetadataError.bookIdentityClosed(let closedBookID) {
+            guard closedBookID == remote.bookId else { throw SyncMetadataError.bookIdentityClosed(closedBookID) }
+            try await ensureAccount(expectedUserId)
+            guard try await metadataStore.isTombstone(entityId: remote.bookId, kind: .book) else {
+                throw SyncMetadataError.bookIdentityClosed(closedBookID)
             }
-            // Clean equal-time server winners replace the effective row rather
-            // than adding a tied history row under the server's UUID.
-            let effective = Position(id: local?.id ?? remote.id, bookId: remote.bookId,
-                locator: remote.locator, percentComplete: remote.percentComplete, updatedAt: remote.updatedAt)
+            // Historical position events can outlive their permanently deleted parent.
+            // Observation advances replay without changing deletion or pending operations.
+            try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
             try await ensureAccount(expectedUserId)
-            try await positionStore.upsert(effective)
-            try await ensureAccount(expectedUserId)
-            guard try await metadataStore.markCleanIfUnchanged(entityId: remote.bookId, kind: .position,
-                expectedDirtyAt: nil, lastSyncedAt: change.updatedAt, remoteEtag: nil) else { throw ConditionalAcknowledgementFailed() }
-            return true
+            applied = false
         }
         if applied { result.applied += 1 } else { result.conflicts += 1 }
     }

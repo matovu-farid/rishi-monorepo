@@ -556,6 +556,44 @@ struct SyncMetadataStoreTests {
         #expect(try await store.lastSyncedAt(entityId: failedID, kind: .position) == (existingRow ? acceptedAt : nil))
     }
     #endif
+
+    @Test("Atomic recovery preserves an import dirty mark admitted just before commit")
+    func untrackedRecoveryPreservesConcurrentDirtyOperation() async throws {
+        let store = try await makeStore(), id = UUID()
+        let gate = UntrackedRecoveryCommitGate()
+        let discovery = Task {
+            try await store.withLiveBookIdentity(id) {
+                #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
+                await gate.suspend()
+                return try await store.markUntrackedBookDirtyIfAdmitted(id)
+            }
+        }
+        await gate.waitForEntry()
+        // Normal import marks do not take the identity gate. They must win the final atomic check.
+        try await store.markDirty(entityId: id, kind: .book)
+        let operation = try await store.operationId(entityId: id, kind: .book)
+        let dirtyAt = try await store.dirtyAt(entityId: id, kind: .book)
+        await gate.release()
+        #expect(try await discovery.value == false)
+        #expect(try await store.operationId(entityId: id, kind: .book) == operation)
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) == dirtyAt)
+    }
+
+    @Test("Atomic recovery only creates a never-synced live book operation", arguments: ["missing", "dirty", "synced", "deleted"])
+    func atomicUntrackedBookAdmission(mode: String) async throws {
+        let store = try await makeStore(), id = UUID()
+        switch mode {
+        case "dirty": try await store.markDirty(entityId: id, kind: .book)
+        case "synced": try await store.markClean(entityId: id, kind: .book, lastSyncedAt: .distantPast, remoteEtag: nil)
+        case "deleted": try await store.applyLocalBookTombstone(id, mutation: {})
+        default: break
+        }
+        let operation = try await store.operationId(entityId: id, kind: .book)
+        #expect(try await store.markUntrackedBookDirtyIfAdmitted(id) == (mode == "missing"))
+        if mode == "missing" { #expect(try await store.operationId(entityId: id, kind: .book) != nil) }
+        else { #expect(try await store.operationId(entityId: id, kind: .book) == operation) }
+    }
+
 }
 
 private enum SyncMetadataSaveFailure: Error, Sendable, Equatable {
@@ -565,4 +603,23 @@ private enum SyncMetadataSaveFailure: Error, Sendable, Equatable {
 private actor SyncMetadataMutationCounter {
     private(set) var count = 0
     func increment() { count += 1 }
+
+}
+
+
+private actor UntrackedRecoveryCommitGate {
+    var entered = false
+    var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    var continuation: CheckedContinuation<Void, Never>?
+    func suspend() async {
+        await withCheckedContinuation {
+            continuation = $0; entered = true
+            entryWaiters.forEach { $0.resume() }; entryWaiters.removeAll()
+        }
+    }
+    func waitForEntry() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+    func release() { continuation?.resume(); continuation = nil }
 }

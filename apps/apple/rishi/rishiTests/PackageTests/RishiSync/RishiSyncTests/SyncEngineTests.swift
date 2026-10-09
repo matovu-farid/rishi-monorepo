@@ -3,6 +3,7 @@ import Testing
 import Foundation
 import os
 import SwiftData
+import CryptoKit
 
 @MainActor
 private final class CredentialStagingDependencyBox {
@@ -279,12 +280,14 @@ struct SyncEngineTests {
         fileStorage: BookFileStorage,
         chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil,
         dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
-        ownerID: UUID = UUID()
+        ownerID: UUID = UUID(),
+        bookReadinessPolicy: BookReadinessPolicy? = nil,
+        bookUploaderOverride: BookUploader? = nil
     ) -> SyncEngine {
         let testUserId = ownerID
         let currentUserId: @Sendable () async -> UserID? = { testUserId }
         let queue = SyncQueue(metadataStore: metadata)
-        let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
+        let bookUploader = bookUploaderOverride ?? BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata, currentUserId: currentUserId)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
@@ -332,7 +335,8 @@ struct SyncEngineTests {
             conversationStore: conversationStore,
             messageStore: messageStore,
             dataUseConsentProvider: dataUseConsentProvider,
-            currentUserId: currentUserId
+            currentUserId: currentUserId,
+            bookReadinessPolicy: bookReadinessPolicy
             ),
             chatRefreshDelegate: chatRefreshDelegate
         )
@@ -2020,6 +2024,150 @@ struct SyncEngineTests {
         #expect(try await metadata.pendingCount() == 1)
         await db.drainBookAdmission(permit: permit)
         await db.drainAccountAdmission(permit: account)
+    }
+
+    private struct RecoverySource: BookSourceResolving {
+        let source: ManagedBookSource
+        func acquireReadableSource(for book: Book) async throws -> BookSourceLease { throw CancellationError() }
+        func managedSource(for book: Book) async throws -> ManagedBookSource? { book.id == source.bookID ? source : nil }
+        func awaitManagedSource(for book: Book) async throws -> ManagedBookSource {
+            guard let result = try await managedSource(for: book) else { throw CancellationError() }
+            return result
+        }
+    }
+
+    @Test("Recovery and closed-parent replay reach upload only after successful inbound", arguments: ["missing", "closed", "malformed", "httpFailure"])
+    func readinessRecoveryHonorsInboundBarrier(mode: String) async throws {
+        EngineMockURLProtocol.reset()
+        let owner = UUID()
+        let books = StubBookStore(), positions = StubPositionStore(), highlights = StubHighlightStore()
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let (storage, root) = try await makeFileStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let book = Book(userId: owner, title: "Recover import", formatType: .epub, fileURL: "import.epub")
+        await books.seed(book)
+        let url = root.appendingPathComponent(book.fileURL)
+        let bytes = Data("verified managed bytes".utf8)
+        try bytes.write(to: url)
+        let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: owner,
+            sha256: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
+            version: ManagedFileVersion(byteCount: Int64(bytes.count), modificationDate: .distantPast,
+                fileIdentifier: nil, materializationRevision: UUID()))
+        let source = ManagedBookSource(bookID: book.id, url: url, fingerprint: fingerprint,
+            readingPermit: BookReadingPermit(ownerID: owner, accountGeneration: 1, bookID: book.id,
+                contentRevision: fingerprint.version.materializationRevision))
+        let policy = BookReadinessPolicy(bookStore: books, positionStore: positions, highlightStore: highlights,
+            bookmarkStore: EngineStubBookmarkStore(), conversationStore: StubConversationStore(), messageStore: StubMessageStore(),
+            chapterIndexes: nil, metadataStore: metadata, sourceResolver: RecoverySource(source: source),
+            currentUserID: { owner }, revalidateManagedSource: { _, captured in captured == source })
+        let closedID = UUID()
+        try await metadata.applyLocalBookTombstone(closedID, mutation: {})
+        let closedDirty = try await metadata.dirtyAt(entityId: closedID, kind: .book)
+        #expect(try await metadata.acknowledgeTombstoneIfUnchanged(entityId: closedID, kind: .book,
+            expectedDirtyAt: closedDirty, lastSyncedAt: .distantPast, remoteEtag: nil))
+        let stale = Position(bookId: closedID, locator: "closed", updatedAt: Date(timeIntervalSince1970: 100))
+        let valid = Position(bookId: book.id, locator: "valid", updatedAt: Date(timeIntervalSince1970: 101))
+        let eventChanges: [SyncChange]
+        if mode == "closed" || mode == "malformed" {
+            eventChanges = [SyncChange(kind: "position", id: stale.id,
+                payload: mode == "malformed" ? SyncOpaqueJSON(data: Data("{}".utf8)) : try SyncPayloadCodec.encodePosition(stale),
+                updatedAt: stale.updatedAt, deleted: false),
+                SyncChange(kind: "position", id: valid.id, payload: try SyncPayloadCodec.encodePosition(valid), updatedAt: valid.updatedAt, deleted: false)]
+        } else { eventChanges = [] }
+        let encoded = String(decoding: try JSONEncoder().encode(eventChanges), as: UTF8.self)
+        let eventBody = Data("{\"changes\":\(encoded),\"next_cursor\":\"ready-events\",\"cursor_scope\":\"events\",\"projection_complete\":true}".utf8)
+        let presigned = "https://upload.example.invalid/import"
+        EngineMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/sync/events": return (200, eventBody, nil)
+            case "/api/sync/changes": return mode == "httpFailure" ? (500, Data(), nil) : (200, self.emptyChangesBody(), nil)
+            case "/api/sync/conversations", "/api/sync/messages": return (200, Data("{\"rows\":[]}".utf8), nil)
+            case "/api/sync/upload-url": return (200, Data("{\"url\":\"\(presigned)\",\"expires_at\":946684800}".utf8), nil)
+            case "/import": return (200, Data(), ["ETag": "uploaded"])
+            case "/api/sync/push": return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
+            default: return (404, Data(), nil)
+            }
+        }
+        let session = makeSession(), client = makeWorkerClient(session: session)
+        let uploader = BookUploader(workerClient: client, metadataStore: metadata, fileStorage: storage,
+            urlSession: session, userIdProvider: { "test-user" },
+            managedSourceProvider: { _ in BookUploadSource(url: source.url, fingerprint: source.fingerprint, readingPermit: source.readingPermit) },
+            persistServerAcceptance: { _, _, _ in true })
+        let engine = makeEngine(metadata: metadata, bookStore: books, positionStore: positions, highlightStore: highlights,
+            workerClient: client, fileStorage: storage, ownerID: owner, bookReadinessPolicy: policy, bookUploaderOverride: uploader)
+        let wave = await engine.runOnce()
+        let succeeds = mode == "missing" || mode == "closed"
+        #expect(wave.booksUploaded == (succeeds ? 1 : 0))
+        #expect(wave.errors.isEmpty == succeeds)
+        #expect(EngineMockURLProtocol.capturedSnapshot().contains { $0.url?.path == "/api/sync/upload-url" } == succeeds)
+        #expect(try await metadata.isTombstone(entityId: closedID, kind: .book))
+        #expect(try await positions.position(for: closedID) == nil)
+        if mode == "closed" {
+            #expect(try await positions.position(for: book.id) == valid)
+            #expect(try await metadata.cursorState(for: .events)?.cursor == "ready-events")
+            #expect(try await metadata.remoteSeenAt(entityId: closedID, kind: .position) == stale.updatedAt)
+        }
+        if mode == "malformed" {
+            #expect(try await metadata.cursorState(for: .events) == nil)
+            #expect(try await positions.position(for: book.id) == nil)
+        }
+        if !succeeds { #expect(try await metadata.dirtyAt(entityId: book.id, kind: .book) == nil) }
+    }
+
+    private actor ReadinessConsentProbe: WorkerDataUseConsentProvider {
+        var calls = 0
+        let firstGate: CommitPause
+        var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        init(gate: CommitPause) { firstGate = gate }
+        func hasCurrentDataUseConsent() async -> Bool {
+            calls += 1
+            let ready = waiters.filter { $0.0 <= calls }
+            waiters.removeAll { $0.0 <= calls }
+            ready.forEach { $0.1.resume() }
+            if calls == 1 { await firstGate.enter() }
+            return false
+        }
+        func waitForCalls(_ count: Int) async {
+            if calls >= count { return }
+            await withCheckedContinuation { waiters.append((count, $0)) }
+        }
+        func count() -> Int { calls }
+    }
+
+    @Test("Managed readiness defers graph binding and requests a follow-up without UI")
+    func managedReadyDispatcherSchedulesAfterGraphBinding() async throws {
+        let owner = UUID(), generation: UInt64 = 17
+        let dispatcher = BookManagedReadySyncDispatcher(currentOwnerID: { owner }, currentGeneration: { generation })
+        let token = BookMaterializationToken(ownerID: owner, accountGeneration: generation, bookID: UUID(), attemptID: UUID())
+        await dispatcher.managedReady(token)
+        let consent = ReadinessConsentProbe(gate: CommitPause())
+        // Use a separate consent gate to hold a real engine wave without any network work.
+        let (storage, _) = try await makeFileStorage()
+        let engine = makeEngine(metadata: StubMetadata(), bookStore: StubBookStore(), positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage,
+            dataUseConsentProvider: consent, ownerID: owner)
+        await dispatcher.configure(engine: engine)
+        await consent.waitForCalls(1)
+        await dispatcher.managedReady(token)
+        await dispatcher.managedReady(token)
+        #expect(await consent.count() == 1)
+        await consent.firstGate.resume()
+        await consent.waitForCalls(2)
+    }
+
+    @Test("Managed readiness rejects stale account and generation tokens")
+    func managedReadyDispatcherRejectsStaleTokens() async throws {
+        let owner = UUID(), generation: UInt64 = 17
+        let consent = ReadinessConsentProbe(gate: CommitPause())
+        let dispatcher = BookManagedReadySyncDispatcher(currentOwnerID: { owner }, currentGeneration: { generation })
+        await dispatcher.managedReady(BookMaterializationToken(ownerID: UUID(), accountGeneration: generation, bookID: UUID(), attemptID: UUID()))
+        await dispatcher.managedReady(BookMaterializationToken(ownerID: owner, accountGeneration: generation - 1, bookID: UUID(), attemptID: UUID()))
+        let (storage, _) = try await makeFileStorage()
+        let engine = makeEngine(metadata: StubMetadata(), bookStore: StubBookStore(), positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(), workerClient: makeWorkerClient(session: makeSession()), fileStorage: storage,
+            dataUseConsentProvider: consent, ownerID: owner)
+        await dispatcher.configure(engine: engine)
+        #expect(await consent.count() == 0)
     }
 
 }

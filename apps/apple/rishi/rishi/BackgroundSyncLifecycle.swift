@@ -79,6 +79,55 @@ final class BackgroundSyncLifecycle {
         self.credentialRegistrar = credentialRegistrar
     }
 
+    /// A finite resolved foreground surface; the graph fence is checked after every await.
+    struct ForegroundServices {
+        let autoSync: Bool
+        let isCurrentGraph: @MainActor () -> Bool
+        let hasConsent: @MainActor () async -> Bool
+        let requestSync: @MainActor () async -> Void
+    }
+
+    private var foregroundIdentityOverride: (@MainActor () -> LibraryAccountIdentity?)?
+    private var foregroundResolverOverride: (@MainActor (UserID) async -> ForegroundServices?)?
+
+    /// Exercise the actual lifecycle entry without assembling network/audio service graphs.
+    init(foregroundIdentity: @escaping @MainActor () -> LibraryAccountIdentity?,
+         resolveForegroundServices: @escaping @MainActor (UserID) async -> ForegroundServices?) {
+        dependencies = nil
+        userIdBox = UserIdBox()
+        credentialRegistrar = nil
+        foregroundIdentityOverride = foregroundIdentity
+        foregroundResolverOverride = resolveForegroundServices
+    }
+
+    private var foregroundIdentity: LibraryAccountIdentity? {
+        if let foregroundIdentityOverride { return foregroundIdentityOverride() }
+        guard let deps = dependencies, let owner = userIdBox.value,
+              deps.activeAccountIdentity == LibraryAccountIdentity(userID: owner, generation: deps.accountGeneration)
+        else { return nil }
+        return deps.activeAccountIdentity
+    }
+
+    func foregroundDidActivate() async {
+        guard let identity = foregroundIdentity else { return }
+        let resolved: ForegroundServices?
+        if let foregroundResolverOverride {
+            resolved = await foregroundResolverOverride(identity.userID)
+        } else if let deps = dependencies, let services = await resolveServices(userId: identity.userID) {
+            let engine = services.sync.engine
+            let consent = AccountDataUseConsentProvider(store: services.dataUseConsentStore,
+                credentialAuthority: deps.credentialAuthority)
+            resolved = ForegroundServices(autoSync: services.settings.readerDefaults.autoSync,
+                isCurrentGraph: { [weak deps] in deps?.services?.sync.engine === engine },
+                hasConsent: { await consent.hasCurrentDataUseConsent() },
+                requestSync: { await engine.requestSync() })
+        } else { resolved = nil }
+        guard let resolved, foregroundIdentity == identity, resolved.isCurrentGraph(), resolved.autoSync,
+              await resolved.hasConsent(), foregroundIdentity == identity, resolved.isCurrentGraph()
+        else { return }
+        await resolved.requestSync()
+    }
+
     static func shouldRunSilentPush(autoSync: Bool) -> Bool {
         shouldRunAutoSync(autoSync)
     }
@@ -100,7 +149,8 @@ final class BackgroundSyncLifecycle {
             generation: generation,
             recovery: services.library.bookImportRecovery
         )
-        guard userIdBox.value == userId, deps.accountGeneration == generation else { return nil }
+        guard userIdBox.value == userId, deps.accountGeneration == generation,
+              deps.services?.sync.engine === services.sync.engine else { return nil }
         return services
     }
 

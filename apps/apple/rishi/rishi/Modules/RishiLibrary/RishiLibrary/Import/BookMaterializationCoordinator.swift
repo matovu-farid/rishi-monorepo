@@ -32,6 +32,7 @@ public struct BookMaterializationCoordinator: Sendable {
         ManagedFileVersion
     ) async throws -> StagedBookArtifact
     private let events: BookImportEvents?
+    private let onManagedReady: @Sendable (BookMaterializationToken) async -> Void
     private let importInstrumentation: BookImportInstrumentation
     private let reprobeSelectedSource: @Sendable (URL, UUID) async throws -> (sha256: String, byteCount: Int64, version: ManagedFileVersion)
     private let beforeRepairPromotion: @Sendable (URL) throws -> Void
@@ -61,6 +62,7 @@ public struct BookMaterializationCoordinator: Sendable {
             ManagedFileVersion
         ) async throws -> StagedBookArtifact)? = nil,
         events: BookImportEvents? = nil,
+        onManagedReady: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in },
         reprobeSelectedSource: (@Sendable (URL, UUID) async throws -> (sha256: String, byteCount: Int64, version: ManagedFileVersion))? = nil,
         beforeRepairPromotion: @escaping @Sendable (URL) throws -> Void = { _ in },
         startSelectedSourceScope: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
@@ -90,6 +92,7 @@ public struct BookMaterializationCoordinator: Sendable {
             )
         }
         self.events = events
+        self.onManagedReady = onManagedReady
         self.importInstrumentation = importInstrumentation
         self.beforeRepairPromotion = beforeRepairPromotion
         self.startSelectedSourceScope = startSelectedSourceScope
@@ -1396,6 +1399,7 @@ public struct BookMaterializationCoordinator: Sendable {
             ownerID: book.userId, accountGeneration: generation,
             token: pending.token, kind: .managedReady(book.id)
         ))
+        await onManagedReady(pending.token)
     }
 
     func publishReconciledManagedReady(book: Book, generation: UInt64, fingerprint: BookFileFingerprint) async -> Bool {

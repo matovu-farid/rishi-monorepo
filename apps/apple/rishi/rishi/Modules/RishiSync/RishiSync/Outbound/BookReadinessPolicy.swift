@@ -21,6 +21,7 @@ public struct BookReadinessPolicy: Sendable {
     private let metadataStore: any SyncMetadataStore
     private let sourceResolver: any BookSourceResolving
     private let currentUserID: @Sendable () async -> UserID?
+    private let revalidateManagedSource: @Sendable (Book, ManagedBookSource) async throws -> Bool
 
     public init(
         bookStore: any BookStore,
@@ -32,7 +33,8 @@ public struct BookReadinessPolicy: Sendable {
         chapterIndexes: (any ChapterIndexPersistence)?,
         metadataStore: any SyncMetadataStore,
         sourceResolver: any BookSourceResolving,
-        currentUserID: @escaping @Sendable () async -> UserID?
+        currentUserID: @escaping @Sendable () async -> UserID?,
+        revalidateManagedSource: @escaping @Sendable (Book, ManagedBookSource) async throws -> Bool = { _, _ in false }
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
@@ -44,6 +46,51 @@ public struct BookReadinessPolicy: Sendable {
         self.metadataStore = metadataStore
         self.sourceResolver = sourceResolver
         self.currentUserID = currentUserID
+        self.revalidateManagedSource = revalidateManagedSource
+    }
+
+    /// Recover the registration/dirty-mark crash window after inbound tombstones have applied.
+    /// Already pending operations and clean legacy books retain their existing metadata.
+    public func reconcileUntrackedBooks(
+        expectedUserID: UserID,
+        isCurrentAccount: @escaping @Sendable () async -> Bool
+    ) async throws -> [SyncQueueItem] {
+        guard await isCurrentAccount(), await currentUserID() == expectedUserID else { return [] }
+        let dirtyBookIDs = Set(try await metadataStore.allDirty().filter { $0.kind == .book }.map(\.entityId))
+        var recovered: [SyncQueueItem] = []
+        for book in try await bookStore.books(for: expectedUserID) {
+            guard await isCurrentAccount(), await currentUserID() == expectedUserID else { break }
+            guard book.userId == expectedUserID, !dirtyBookIDs.contains(book.id),
+                  try await isUntracked(book.id) else { continue }
+            // This can coordinate/hash/backfill bytes. Never put it in withLiveBookIdentity.
+            guard let source = try await sourceResolver.managedSource(for: book) else { continue }
+            do {
+                let admitted = try await metadataStore.withLiveBookIdentity(book.id) { [self] in
+                    guard await isCurrentAccount(), await currentUserID() == expectedUserID,
+                          let canonical = try await bookStore.book(book.id),
+                          canonical.userId == expectedUserID, canonical.fileURL == book.fileURL,
+                          canonical.formatType == book.formatType, try await isUntracked(book.id),
+                          try await revalidateManagedSource(canonical, source),
+                          await isCurrentAccount(), await currentUserID() == expectedUserID,
+                          try await isUntracked(book.id),
+                          !(try await metadataStore.allDirty()).contains(where: { $0.kind == .book && $0.entityId == book.id })
+                    else { return false }
+                    return try await metadataStore.markUntrackedBookDirtyIfAdmitted(book.id)
+                }
+                if admitted { recovered.append(SyncQueueItem(entityId: book.id, kind: .book)) }
+            } catch SyncMetadataError.bookIdentityClosed {
+                // A deletion that committed while source resolution was suspended wins.
+                continue
+            }
+        }
+        return recovered
+    }
+
+    private func isUntracked(_ id: BookID) async throws -> Bool {
+        guard try await !metadataStore.isTombstone(entityId: id, kind: .book),
+              try await metadataStore.dirtyAt(entityId: id, kind: .book) == nil,
+              try await metadataStore.lastSyncedAt(entityId: id, kind: .book) == nil else { return false }
+        return true
     }
 
     public func classify(_ item: SyncQueueItem) async throws -> Decision {

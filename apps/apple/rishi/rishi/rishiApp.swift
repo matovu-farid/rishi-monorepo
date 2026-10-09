@@ -268,6 +268,7 @@ struct rishiApp: App {
                         hasAccount: deps.cachedUserId != nil
                     )
                     #endif
+                    await deps.backgroundSyncLifecycle.foregroundDidActivate()
                     await deps.services?.systemIntegration.spotlight.requestReindex()
                     await refreshEntitlementSnapshot(reason: .foreground)
                 }

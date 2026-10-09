@@ -5,7 +5,8 @@ enum BookDomainFactory {
     static func make(documentsURL: URL, bookStore: any BookStore, bookImportPersistence: any BookImportPersistence,
         syncMetadataStore: any SyncMetadataStore, userIdBox: UserIdBox,
         fingerprintAccountGeneration: @escaping @Sendable () async -> UInt64?, indexBuilder: IndexBuilder,
-        pdfFooterPolicy: FooterDropPolicy, chapterIndexGenerationDispatcher: ChapterIndexGenerationDispatcher
+        pdfFooterPolicy: FooterDropPolicy, chapterIndexGenerationDispatcher: ChapterIndexGenerationDispatcher,
+        onManagedReady: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in }
     ) async -> BookDomainResources {
         let managedFingerprintStorage = BookFileStorage(
             rootURL: documentsURL,
@@ -89,7 +90,8 @@ enum BookDomainFactory {
             isTombstoned: { bookId in
                 (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
             },
-            events: bookImportEvents
+            events: bookImportEvents,
+            onManagedReady: onManagedReady
         )
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
@@ -229,6 +231,22 @@ struct BookDomainResources: Sendable {
     let events: BookImportEvents
     let materialization: BookMaterializationCoordinator
     let recovery: BookImportRecovery
+
+    /// Finite provenance revalidation for a source captured outside the sync identity gate.
+    func validatesManagedSource(book: Book, source: ManagedBookSource) async throws -> Bool {
+        let generation = source.accountGeneration
+        guard source.bookID == book.id, source.fingerprint.bookID == book.id,
+              source.fingerprint.ownerID == book.userId,
+              source.readingPermit.ownerID == book.userId,
+              await userIdBox.value == book.userId, await currentGeneration() == generation,
+              await sources.allowsArtworkRead(for: book, generation: generation),
+              let canonical = try await bookStore.book(book.id), canonical.userId == book.userId,
+              canonical.fileURL == book.fileURL, canonical.formatType == book.formatType,
+              try await persistence.readingPermit(forManagedFingerprint: source.fingerprint,
+                  expectedRelativePath: book.fileURL, generation: generation) == source.readingPermit,
+              await userIdBox.value == book.userId, await currentGeneration() == generation else { return false }
+        return await sources.allowsArtworkRead(for: book, generation: generation)
+    }
 
     func isCurrentAccountPermit(_ permit: AccountMutationPermit) async -> Bool {
         guard await userIdBox.value == permit.ownerID, await currentGeneration() == permit.accountGeneration else { return false }

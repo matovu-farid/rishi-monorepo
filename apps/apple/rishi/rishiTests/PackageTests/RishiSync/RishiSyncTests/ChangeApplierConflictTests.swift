@@ -1725,4 +1725,138 @@ struct ChangeApplierConflictTests {
         #expect(await positions.snapshot().count == 1)
     }
 
+    @Test("Closed parent replay preserves pending state and continues unrelated inbound", arguments: [false, true])
+    func closedParentPositionReplayPreservesDeletion(dirtyParent: Bool) async throws {
+        let owner = UUID(), closedID = UUID()
+        let metadata = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        try await metadata.applyLocalBookTombstone(closedID, mutation: {})
+        if !dirtyParent {
+            let dirtyAt = try await metadata.dirtyAt(entityId: closedID, kind: .book)
+            #expect(try await metadata.acknowledgeTombstoneIfUnchanged(entityId: closedID, kind: .book,
+                expectedDirtyAt: dirtyAt, lastSyncedAt: .distantPast, remoteEtag: "deleted"))
+        }
+        try await metadata.markDirty(entityId: closedID, kind: .position)
+        let parentDirty = try await metadata.dirtyAt(entityId: closedID, kind: .book)
+        let parentSynced = try await metadata.lastSyncedAt(entityId: closedID, kind: .book)
+        let parentOperation = try await metadata.operationId(entityId: closedID, kind: .book)
+        let childDirty = try await metadata.dirtyAt(entityId: closedID, kind: .position)
+        let childOperation = try await metadata.operationId(entityId: closedID, kind: .position)
+        let stale = Position(bookId: closedID, locator: "stale", updatedAt: Date(timeIntervalSince1970: 100))
+        let valid = Position(bookId: UUID(), locator: "valid", updatedAt: Date(timeIntervalSince1970: 101))
+        let positions = StubPositionStore()
+        let applier = makeApplier(bookStore: StubBookStore(), positionStore: positions, highlightStore: StubHighlightStore(),
+            metadata: metadata, currentUserId: { owner })
+        let result = await applier.apply([try positionChange(stale, at: stale.updatedAt), try positionChange(valid, at: valid.updatedAt)], expectedUserId: owner)
+        #expect(result.errors.isEmpty)
+        #expect(result.conflicts == 1)
+        #expect(result.applied == 1)
+        #expect(try await positions.position(for: closedID) == nil)
+        #expect(try await positions.position(for: valid.bookId) == valid)
+        #expect(try await metadata.isTombstone(entityId: closedID, kind: .book))
+        #expect(try await metadata.dirtyAt(entityId: closedID, kind: .book) == parentDirty)
+        #expect(try await metadata.lastSyncedAt(entityId: closedID, kind: .book) == parentSynced)
+        #expect(try await metadata.operationId(entityId: closedID, kind: .book) == parentOperation)
+        #expect(try await metadata.dirtyAt(entityId: closedID, kind: .position) == childDirty)
+        #expect(try await metadata.operationId(entityId: closedID, kind: .position) == childOperation)
+        #expect(try await metadata.lastSyncedAt(entityId: closedID, kind: .position) == nil)
+        #expect(try await metadata.remoteSeenAt(entityId: closedID, kind: .position) == stale.updatedAt)
+    }
+
+    @Test("Closed-position handling preserves real failure barriers", arguments: ["mismatch", "unconfirmed", "account", "observation", "malformed"])
+    func closedPositionReplayDoesNotSuppressFailures(mode: String) async throws {
+        let owner = UUID(), closedID = UUID()
+        let native = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        if mode != "unconfirmed" { try await native.applyLocalBookTombstone(closedID, mutation: {}) }
+        let account = ReplayAccount(owner)
+        let metadata = PositionReplayMetadata(base: native, gateErrorID: mode == "mismatch" ? UUID() : closedID,
+            observationFails: mode == "observation", beforeGate: {
+                if mode == "account" { await account.signOut() }
+            })
+        let stale = Position(bookId: closedID, locator: "stale", updatedAt: .distantPast)
+        let valid = Position(bookId: UUID(), locator: "must not apply")
+        var change = try positionChange(stale, at: stale.updatedAt)
+        if mode == "malformed" { change = SyncChange(kind: "position", id: stale.id, payload: SyncOpaqueJSON(data: Data("{}".utf8)), updatedAt: stale.updatedAt, deleted: false) }
+        let positions = StubPositionStore()
+        let applier = makeApplier(bookStore: StubBookStore(), positionStore: positions, highlightStore: StubHighlightStore(),
+            metadata: metadata, currentUserId: { await account.current() })
+        let result = await applier.apply([change, try positionChange(valid, at: valid.updatedAt)], expectedUserId: owner)
+        #expect(result.errors.count == 1)
+        #expect(result.applied == 0)
+        #expect(try await positions.position(for: valid.bookId) == nil)
+    }
+
+    @Test("Deletion committed before position gate entry becomes an observed conflict")
+    func concurrentClosureRemainsAuthoritative() async throws {
+        let owner = UUID(), closedID = UUID()
+        let native = try await SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        let gate = ReplayGate()
+        let metadata = PositionReplayMetadata(base: native, beforeGate: { await gate.suspend() })
+        let positions = StubPositionStore()
+        let applier = makeApplier(bookStore: StubBookStore(), positionStore: positions, highlightStore: StubHighlightStore(),
+            metadata: metadata, currentUserId: { owner })
+        let remote = Position(bookId: closedID, locator: "retired")
+        let change = try positionChange(remote, at: remote.updatedAt)
+        let applying = Task { await applier.apply([change], expectedUserId: owner) }
+        await gate.waitForEntry()
+        try await native.applyLocalBookTombstone(closedID, mutation: {})
+        await gate.release()
+        let result = await applying.value
+        #expect(result.errors.isEmpty)
+        #expect(result.conflicts == 1)
+        #expect(try await positions.position(for: closedID) == nil)
+    }
+
+}
+
+
+private actor ReplayAccount {
+    var owner: UserID?
+    init(_ owner: UserID) { self.owner = owner }
+    func current() -> UserID? { owner }
+    func signOut() { owner = nil }
+}
+
+private actor ReplayGate {
+    var entered = false
+    var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    var continuation: CheckedContinuation<Void, Never>?
+    func suspend() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation; entered = true
+            entryWaiters.forEach { $0.resume() }; entryWaiters.removeAll()
+        }
+    }
+    func waitForEntry() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+    func release() { continuation?.resume(); continuation = nil }
+}
+
+private struct PositionReplayMetadata: SyncMetadataStore {
+    struct ObservationFailure: Error {}
+    let base: any SyncMetadataStore
+    var gateErrorID: UUID? = nil
+    var observationFails = false
+    var beforeGate: @Sendable () async -> Void = {}
+    func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        await beforeGate()
+        if let gateErrorID { throw SyncMetadataError.bookIdentityClosed(gateErrorID) }
+        return try await base.withLiveBookIdentity(id, operation: operation)
+    }
+    func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool { try await base.isTombstone(entityId: entityId, kind: kind) }
+    func recordRemoteSeen(entityId: UUID, kind: SyncEntityKind, updatedAt: Date) async throws {
+        if observationFails { throw ObservationFailure() }
+        try await base.recordRemoteSeen(entityId: entityId, kind: kind, updatedAt: updatedAt)
+    }
+    func markDirty(entityId: UUID, kind: SyncEntityKind) async throws { try await base.markDirty(entityId: entityId, kind: kind) }
+    func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws { try await base.markClean(entityId: entityId, kind: kind, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
+    func markCleanIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool { try await base.markCleanIfUnchanged(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
+    func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? { try await base.dirtyAt(entityId: entityId, kind: kind) }
+    func allDirty() async throws -> [SyncPendingItem] { try await base.allDirty() }
+    func pending(kind: SyncEntityKind, limit: Int) async throws -> [SyncPendingItem] { try await base.pending(kind: kind, limit: limit) }
+    func pendingCount() async throws -> Int { try await base.pendingCount() }
+    func lastSyncedAt(forKind kind: SyncEntityKind) async throws -> Date? { try await base.lastSyncedAt(forKind: kind) }
+    func globalLastSyncedAt() async throws -> Date? { try await base.globalLastSyncedAt() }
+    func forget(entityId: UUID, kind: SyncEntityKind) async throws { try await base.forget(entityId: entityId, kind: kind) }
 }

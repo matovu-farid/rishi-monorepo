@@ -131,11 +131,15 @@ enum ServiceGraphFactory {
         } catch {
             fatalError("Failed to initialize sync metadata store: \(error)")
         }
+        let managedReadySyncDispatcher = BookManagedReadySyncDispatcher(
+            currentOwnerID: { await userIdBox.value }, currentGeneration: fingerprintAccountGeneration
+        )
         let bookDomain = await BookDomainFactory.make(
             documentsURL: documentsURL, bookStore: bookStore, bookImportPersistence: bookImportPersistence,
             syncMetadataStore: syncMetadataStore, userIdBox: userIdBox,
             fingerprintAccountGeneration: fingerprintAccountGeneration, indexBuilder: indexBuilder,
-            pdfFooterPolicy: pdfFooterPolicy, chapterIndexGenerationDispatcher: chapterIndexGenerationDispatcher
+            pdfFooterPolicy: pdfFooterPolicy, chapterIndexGenerationDispatcher: chapterIndexGenerationDispatcher,
+            onManagedReady: { await managedReadySyncDispatcher.managedReady($0) }
         )
         let bookSourceRegistry = bookDomain.sources
         let indexingHook = bookDomain.indexing
@@ -287,11 +291,14 @@ enum ServiceGraphFactory {
                 chapterIndexes: chapterIndexPersistence,
                 metadataStore: syncMetadataStore,
                 sourceResolver: bookSourceRegistry,
-                currentUserID: { await userIdBox.value }
+                currentUserID: { await userIdBox.value },
+                revalidateManagedSource: { try await bookDomain.validatesManagedSource(book: $0, source: $1) }
             )
             ),
             chatRefreshDelegate: chatRefreshAdapter
         )
+
+        await managedReadySyncDispatcher.configure(engine: syncEngine)
 
         let backgroundTaskCoordinator = await MainActor.run {
             BackgroundTaskCoordinator(engine: syncEngine)
