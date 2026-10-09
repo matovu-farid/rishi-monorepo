@@ -78,6 +78,61 @@ struct CoverExtractorTests {
         #expect(data == nil)
     }
 
+    @Test
+    func epubExtractor_readsEPUB2CoverWithContentBeforeName() async throws {
+        let dir = makeTempDir("epub2-content-first")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let epubURL = dir.appendingPathComponent("fixture.epub")
+        try await FixtureBuilders.writeTinyEPUB(
+            to: epubURL,
+            epubVersion: "2.0",
+            coverMetadataContentFirst: true,
+            coverManifestHrefFirst: true
+        )
+
+        let data = try #require(await EpubCoverExtractor().extractCover(from: epubURL))
+        #expect(data.prefix(8) == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+    }
+
+    @Test(arguments: [false, true], ["\"", "'"])
+    func parseCoverHref_handlesEPUB2MetadataAttributeOrders(contentFirst: Bool, quote: String) {
+        let metadata = contentFirst
+            ? "<meta content=\(quote)coverimagestandard\(quote) data-extra=\(quote)ignored\(quote) name=\(quote)cover\(quote)/>"
+            : "<meta name=\(quote)cover\(quote) data-extra=\(quote)ignored\(quote) content=\(quote)coverimagestandard\(quote)/>"
+        for hrefFirst in [false, true] {
+            let manifest = hrefFirst
+                ? "<item href=\(quote)kybalion-cover.jpg\(quote) id=\(quote)coverimagestandard\(quote) media-type=\(quote)image/jpeg\(quote)/>"
+                : "<item id=\(quote)coverimagestandard\(quote) href=\(quote)kybalion-cover.jpg\(quote) media-type=\(quote)image/jpeg\(quote)/>"
+            let opf = """
+            <package version="2.0">
+              <metadata>
+                <meta content="unrelated-image" name="generator"/>
+                \(metadata)
+              </metadata>
+              <manifest>
+                <item id="unrelated-image" href="unrelated.jpg" media-type="image/jpeg"/>
+                \(manifest)
+              </manifest>
+            </package>
+            """
+            #expect(EpubCoverExtractor.parseCoverHref(from: Data(opf.utf8)) == "kybalion-cover.jpg")
+        }
+    }
+
+    @Test
+    func parseCoverHref_doesNotCombineUnrelatedMetadataTags() {
+        let opf = """
+        <package version="2.0">
+          <metadata>
+            <meta content="unrelated-image" name="generator"/>
+            <meta name="cover"/>
+          </metadata>
+          <manifest><item id="unrelated-image" href="unrelated.jpg"/></manifest>
+        </package>
+        """
+        #expect(EpubCoverExtractor.parseCoverHref(from: Data(opf.utf8)) == nil)
+    }
+
     /// Regression: real-world EPUB 2 OPFs (Calibre, Gutenberg ebookmaker,
     /// Purple Cow, etc.) emit `<item>` attributes with `href` BEFORE `id`.
     /// The previous regex only matched `id`-first and silently dropped these

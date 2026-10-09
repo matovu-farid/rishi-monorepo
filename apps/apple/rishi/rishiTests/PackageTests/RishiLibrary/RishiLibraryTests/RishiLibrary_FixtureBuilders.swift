@@ -62,7 +62,13 @@ enum FixtureBuilders {
     ///
     /// ReadiumZIPFoundation 3.x made `Archive` an actor; init and `addEntry` are now `async`,
     /// so this builder is `async throws`.
-    static func writeTinyEPUB(to url: URL, withCover: Bool = true) async throws {
+    static func writeTinyEPUB(
+        to url: URL,
+        withCover: Bool = true,
+        epubVersion: String = "3.0",
+        coverMetadataContentFirst: Bool = false,
+        coverManifestHrefFirst: Bool = false
+    ) async throws {
         // Delete any existing file at url (Archive(creating:) requires a fresh path).
         try? FileManager.default.removeItem(at: url)
         let archive: Archive
@@ -96,11 +102,20 @@ enum FixtureBuilders {
         try await addEntry(archive: archive, path: "META-INF/container.xml", data: Data(container.utf8))
 
         // 3) content.opf with cover meta
-        let coverMeta = withCover ? "<meta name=\"cover\" content=\"cover-image\"/>" : ""
-        let coverManifest = withCover ? "<item id=\"cover-image\" href=\"cover.png\" media-type=\"image/png\" properties=\"cover-image\"/>" : ""
+        let coverMeta = withCover
+            ? (coverMetadataContentFirst
+                ? "<meta content=\"cover-image\" name=\"cover\"/>"
+                : "<meta name=\"cover\" content=\"cover-image\"/>")
+            : ""
+        let coverProperties = epubVersion == "3.0" ? " properties=\"cover-image\"" : ""
+        let coverManifest = withCover
+            ? (coverManifestHrefFirst
+                ? "<item href=\"cover.png\" id=\"cover-image\" media-type=\"image/png\"\(coverProperties)/>"
+                : "<item id=\"cover-image\" href=\"cover.png\" media-type=\"image/png\"\(coverProperties)/>")
+            : ""
         let opf = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+        <package xmlns="http://www.idpf.org/2007/opf" version="\(epubVersion)" unique-identifier="bookid">
           <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
             <dc:identifier id="bookid">test-book-id</dc:identifier>
             <dc:title>Fixture Title</dc:title>

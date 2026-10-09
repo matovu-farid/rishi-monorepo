@@ -140,11 +140,19 @@ public struct EpubCoverExtractor: CoverExtractor {
         }
 
         // EPUB 2 path.
-        let metaPattern = #"<meta[^>]*name\s*=\s*["']cover["'][^>]*content\s*=\s*["']([^"']+)["']"#
-        guard let metaRegex = try? NSRegularExpression(pattern: metaPattern),
-              let metaMatch = metaRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let idRange = Range(metaMatch.range(at: 1), in: text) else { return nil }
-        let coverId = String(text[idRange])
+        // EPUB 2 metadata attributes have no fixed order. The Kybalion,
+        // for example, places content before name in its cover declaration.
+        let metaPatterns = [
+            #"<meta[^>]*name\s*=\s*["']cover["'][^>]*content\s*=\s*["']([^"']+)["']"#,
+            #"<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']cover["']"#,
+        ]
+        let coverId = metaPatterns.lazy.compactMap { pattern -> String? in
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let range = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[range])
+        }.first
+        guard let coverId else { return nil }
 
         // Real-world EPUB 2 OPFs (Calibre, ebookmaker, Gutenberg) emit `<item>`
         // attributes in any order — most commonly `href` BEFORE `id`. The
