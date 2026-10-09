@@ -1,8 +1,8 @@
 import SwiftUI
 
 
-/// ONB-01 final visible step. Overlay-style coachmark telling the user to
-/// tap any book cover to start reading.
+/// ONB-01 final visible step. Overlay-style coachmark guiding the user to
+/// open a book or import something they are reading.
 struct FirstReaderHint: View {
     public let onBack: () -> Void
     public let onGotIt: () -> Void
@@ -23,11 +23,12 @@ struct FirstReaderHint: View {
                         .foregroundStyle(RishiColor.accent)
                         .accessibilityHidden(true)
 
-                    Text("Tap a book to open it")
+                    Text("Make yourself at home")
                         .font(RishiTypography.titleM)
                         .foregroundStyle(RishiColor.textPrimary)
+                        .accessibilityAddTraits(.isHeader)
 
-                    Text("Your library is ready. Tap any book cover to start reading, or use the toolbar to import more.")
+                    Text("After signing in, open a book from your library or import something you’re reading.")
                         .font(RishiTypography.body)
                         .foregroundStyle(RishiColor.textSecondary)
                         .multilineTextAlignment(.center)

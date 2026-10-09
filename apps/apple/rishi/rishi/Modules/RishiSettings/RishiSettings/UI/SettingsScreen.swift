@@ -191,6 +191,7 @@ public struct SettingsScreen: View {
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily
                 )
+                DefaultReaderGuideSection()
                 VoiceLanguageSection(selection: $voiceLanguage)
                 PDFViewModeSection(selection: $pdfViewMode)
                 FooterDetectionSection(store: footerDetectionStore)

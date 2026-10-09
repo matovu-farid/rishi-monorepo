@@ -14,6 +14,7 @@ import SwiftUI
 import os.signpost
 
 public struct ReaderToolBar: ViewModifier {
+    @Environment(\.onboardingTipsSuppressed) private var onboardingTipsSuppressed
     private let onReadAloud: (() -> Void)?
     private var chrome: ReaderChromeController
     private let voiceChatTip = VoiceChatTip()
@@ -44,7 +45,7 @@ public struct ReaderToolBar: ViewModifier {
                             chrome.userActivity()
                             onReadAloud()
                         } label: { Image(systemName: "speaker.wave.2.fill") }
-                            .popoverTip(readAloudTip)
+                            .popoverTip(onboardingTipsSuppressed ? nil : readAloudTip)
                             .accessibilityIdentifier("reader.toolbar.readAloud")
                             .accessibilityLabel(A11yLabel.readerReadAloud)
                     }
@@ -53,7 +54,7 @@ public struct ReaderToolBar: ViewModifier {
                             chrome.userActivity()
                             voicePresenter.presentVoice(bookId: viewModel.book.id, context: viewModel.voiceContext(), contextProvider: { viewModel.voiceContext() }, initialQuote: nil)
                         } label: { Image(systemName: "waveform.circle.fill") }
-                            .popoverTip(voiceChatTip)
+                            .popoverTip(onboardingTipsSuppressed ? nil : voiceChatTip)
                             .accessibilityIdentifier("reader.toolbar.voice")
                             .accessibilityLabel(A11yLabel.readerOpenVoice)
                     }
@@ -104,7 +105,7 @@ public struct ReaderToolBar: ViewModifier {
                         } label: {
                             Image(systemName: "speaker.wave.2.fill")
                         }
-                        .popoverTip(readAloudTip)
+                        .popoverTip(onboardingTipsSuppressed ? nil : readAloudTip)
                         .accessibilityIdentifier("reader.toolbar.readAloud")
                         .accessibilityLabel(A11yLabel.readerReadAloud)
                     }
@@ -121,7 +122,7 @@ public struct ReaderToolBar: ViewModifier {
                         } label: {
                             Image(systemName: "waveform.circle.fill")
                         }
-                        .popoverTip(voiceChatTip)
+                        .popoverTip(onboardingTipsSuppressed ? nil : voiceChatTip)
                         .accessibilityIdentifier("reader.toolbar.voice")
                         .accessibilityLabel(A11yLabel.readerOpenVoice)
                     }

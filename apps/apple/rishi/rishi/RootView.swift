@@ -28,6 +28,8 @@ struct RootView: View {
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var deps
     @Environment(TrialIntroPresentationCoordinator.self) private var trialCoordinator
+    @Environment(IncomingBookPresentationReadiness.self) private var incomingReadiness
+    @Environment(IncomingBookFileCoordinator.self) private var incomingFiles
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var trialPresentationState = TrialIntroPresentationState()
@@ -36,6 +38,7 @@ struct RootView: View {
     @State private var activeTrialClaimID: UUID?
     @State private var trialReleaseObserverID: UUID?
     @State private var trialAccountFenceToken: UUID?
+    @State private var incomingReadinessOwner: UUID?
     @State private var fencedTrialIdentity: LibraryAccountIdentity?
     @State private var blockedTrialClaimID: UUID?
     @State private var trialEvaluationInFlight = false
@@ -45,6 +48,7 @@ struct RootView: View {
     @State private var trialRetryFromOtherRelease = false
 
     @State private var bootstrapped = false
+    @State private var readerPositionAlertVisible = false
 
     @State private var showOnboarding = false
     @State private var showNoCardTrialIntro = false
@@ -76,7 +80,31 @@ struct RootView: View {
     @ViewBuilder
     private func realBody(deps: AppDependencies) -> some View {
         let credentialTicket = credentialAdapter?.authority.attemptTicket()
-        return realBodyContent(deps: deps)
+        let environmentContent = addingRootEnvironment(
+            to: realBodyContent(deps: deps),
+            deps: deps,
+            credentialTicket: credentialTicket
+        )
+        let lifecycleContent = addingRootLifecycleObservers(to: environmentContent, deps: deps)
+        let accountContent = addingRootAccountObservers(to: lifecycleContent, deps: deps)
+        let readinessContent = addingRootReadinessObservers(to: accountContent, deps: deps)
+        let incomingContent = addingIncomingReadinessObservers(to: readinessContent, deps: deps)
+        let trialContent = addingTrialObservers(to: incomingContent, deps: deps)
+        let serviceContent = addingRootServiceObservers(to: trialContent, deps: deps)
+        #if targetEnvironment(macCatalyst)
+        let subscriptionEventContent = addingSubscriptionEventObserver(to: serviceContent, deps: deps)
+        return addingSubscriptionPresentations(to: subscriptionEventContent, deps: deps)
+        #else
+        return serviceContent
+        #endif
+    }
+
+    private func addingRootEnvironment<Content: View>(
+        to content: Content,
+        deps: AppDependencies,
+        credentialTicket: CredentialAttemptTicket?
+    ) -> some View {
+        content
             .onChange(of: deps.credentialRetirementResult != nil) { _, _ in
                 credentialAdapter?.reconcileRetirement(into: currentUserBox)
             }
@@ -100,7 +128,11 @@ struct RootView: View {
             .environment(trialPresentationState)
             .modifier(ReaderPositionSaveFailureAlert(
                 presentation: deps.readerPositionSaveFailures,
-                accountIdentity: deps.activeAccountIdentity
+                accountIdentity: deps.activeAccountIdentity,
+                onNoticeVisibilityChange: { isVisible in
+                    readerPositionAlertVisible = isVisible
+                    reportIncomingReadiness(deps: deps)
+                }
             ))
             .environment(\.services, deps.services)
             .environment(deps.services!.billing.entitlementSnapshotStore)
@@ -135,8 +167,16 @@ struct RootView: View {
                     )
                 }
             })
-            .onAppear { installTrialRootProvider(deps: deps) }
-            .onDisappear { retireTrialRoot() }
+    }
+
+    private func addingRootLifecycleObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
+            .onAppear { incomingReadinessOwner = incomingReadiness.claimOwnership(of: .root); installTrialRootProvider(deps: deps); reportIncomingReadiness(deps: deps) }
+            .onDisappear { incomingReadiness.withdraw(.root, owner: incomingReadinessOwner); incomingReadinessOwner = nil; retireTrialRoot() }
+    }
+
+    private func addingRootAccountObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
             .onChange(of: signedInUserID) { oldID, newID in
                 if let oldID, let oldIdentity = deps.activeAccountIdentity, oldIdentity.userID == oldID {
                     trialPresentationState.invalidate(identity: oldIdentity)
@@ -160,28 +200,54 @@ struct RootView: View {
                 }
                 fencedTrialIdentity = newIdentity
                 trialPresentationState.update()
+                incomingReadiness.updateIdentity(newIdentity)
+                reportIncomingReadiness(deps: deps)
                 scheduleTrialEvaluation(deps: deps)
             }
-            .onChange(of: scenePhase) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: router.path.count) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: showOnboarding) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: workflow?.alertMessage) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: workflow?.pendingToken) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: workflow?.hasPendingInvitation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: workflow?.isRedeeming) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+    }
+
+    private func addingRootReadinessObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
+            .onChange(of: scenePhase) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: router.path.count) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showOnboarding) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showNoCardTrialIntro) { _, _ in reportIncomingReadiness(deps: deps) }
+            .onChange(of: workflow?.alertMessage) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.pendingToken) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.hasPendingInvitation) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: workflow?.isRedeeming) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+    }
+
+    private func addingIncomingReadinessObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
+            .onChange(of: incomingReadiness.revision) { _, _ in scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: incomingFiles.presentationError?.id) { _, _ in reportIncomingReadiness(deps: deps) }
+            .onChange(of: incomingFiles.selectedRootErrorSceneID) { _, _ in reportIncomingReadiness(deps: deps) }
+            .onChange(of: incomingFiles.revision) { _, _ in
+                reportIncomingReadiness(deps: deps)
+                scheduleTrialEvaluation(deps: deps)
+            }
+    }
+
+    private func addingTrialObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
             .onChange(of: trialPresentationState.revision) { _, _ in scheduleTrialEvaluation(deps: deps) }
             #if targetEnvironment(macCatalyst)
             .onChange(of: Set(readerWindows.openWindows.keys)) { _, _ in
                 trialPresentationState.update(); scheduleTrialEvaluation(deps: deps)
             }
-            .onChange(of: showSubscriptions) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: pendingSubscriptionConfirmation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
-            .onChange(of: showSubscriptionConfirmation) { _, _ in trialPresentationState.update(); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showSubscriptions) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: pendingSubscriptionConfirmation) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
+            .onChange(of: showSubscriptionConfirmation) { _, _ in trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps) }
             #endif
             .onChange(of: deps.services!.billing.manageSubscriptionPresenter.isPresenting) { _, _ in
-                trialPresentationState.update(); scheduleTrialEvaluation(deps: deps)
+                trialPresentationState.update(); reportIncomingReadiness(deps: deps); scheduleTrialEvaluation(deps: deps)
             }
+    }
+
+    private func addingRootServiceObservers<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
             .onReceive(
                 NotificationCenter.default.publisher(for: .rishiSearchableDataDidChange)
                     .receive(on: DispatchQueue.main)
@@ -189,12 +255,20 @@ struct RootView: View {
                 Task { await deps.services?.systemIntegration.spotlight.requestReindex() }
             }
             .task { await restorePersistedIdentityIfNeeded(deps: deps) }
-            #if targetEnvironment(macCatalyst)
+    }
+
+    #if targetEnvironment(macCatalyst)
+    private func addingSubscriptionEventObserver<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
             .onReceive(NotificationCenter.default.publisher(for: .rishiPresentSubscriptions)) { _ in
                 guard let snapshot = try? deps.credentialAuthority.snapshot(),
                       DerivedUserID.from(snapshot.lease.rawUserID) == signedInUserID else { return }
                 subscriptionState.request(snapshot, authority: deps.credentialAuthority)
             }
+    }
+
+    private func addingSubscriptionPresentations<Content: View>(to content: Content, deps: AppDependencies) -> some View {
+        content
             .rishiSubscriptionPresentation(item: Binding(
                 get: { subscriptionState.isPresented ? subscriptionState.active : nil },
                 set: { if $0 == nil { subscriptionState.setPresented(false) } }
@@ -203,9 +277,7 @@ struct RootView: View {
                 // queued request can now present without being adopted here.
                 guard let receipt = subscriptionState.claimNativeDismissal(authority: deps.credentialAuthority) else { return }
                 Task { @MainActor in
-                    _ = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
-                        credentialContext: .normal(receipt.lease))
-                    subscriptionState.finishDismissal(receipt, authority: deps.credentialAuthority)
+                    await finishSubscriptionDismissal(receipt, deps: deps)
                 }
             }) { presented in
                 subscriptionSheet(deps: deps, presented: presented)
@@ -224,8 +296,45 @@ struct RootView: View {
             } message: {
                 Text("Thank you for subscribing. Your plan is now active.")
             }
-            #endif
     }
+    #endif
+
+    private func reportIncomingReadiness(deps: AppDependencies) {
+        let identity = deps.activeAccountIdentity
+        var blockers = Set<IncomingBookPresentationReadiness.Blocker>()
+        let signedInMatches: Bool
+        if case .signedIn(let user) = currentUserBox.state {
+            signedInMatches = identity?.userID == user.id
+        } else { signedInMatches = false }
+        if !signedInMatches { blockers.insert(.authentication) }
+        if showOnboarding { blockers.insert(.onboarding) }
+        if showNoCardTrialIntro || activeTrialClaimID != nil { blockers.insert(.trial) }
+        if workflow?.alertMessage != nil || workflow?.pendingToken != nil
+            || workflow?.hasPendingInvitation == true || workflow?.isRedeeming == true { blockers.insert(.workflow) }
+        if readerPositionAlertVisible { blockers.insert(.positionAlert) }
+        if incomingFiles.presentationError != nil,
+           incomingFiles.selectedRootErrorSceneID == incomingReadiness.sceneID,
+           scenePhase == .active { blockers.insert(.incomingError) }
+        #if targetEnvironment(macCatalyst)
+        if showSubscriptions || pendingSubscriptionConfirmation || showSubscriptionConfirmation
+            || deps.services?.billing.manageSubscriptionPresenter.isPresenting == true { blockers.insert(.subscription) }
+        #endif
+        incomingReadiness.report(.root, identity: identity, blockers: blockers, owner: incomingReadinessOwner)
+    }
+
+    #if targetEnvironment(macCatalyst)
+    @MainActor
+    private func finishSubscriptionDismissal(
+        _ receipt: RootSubscriptionPresentationState.DismissalReceipt,
+        deps: AppDependencies
+    ) async {
+        _ = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+            reason: .foreground,
+            credentialContext: .normal(receipt.lease)
+        )
+        subscriptionState.finishDismissal(receipt, authority: deps.credentialAuthority)
+    }
+    #endif
 
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
@@ -438,7 +547,7 @@ struct RootView: View {
             revision: trialPresentationState.currentRevision,
             hostActive: lifetimeFacts.hostActive,
             sceneActive: lifetimeFacts.sceneActive,
-            rootPathEmpty: router.path.isEmpty,
+            rootPathEmpty: router.path.isEmpty && !incomingReadiness.incomingReaderRoutePresented,
             sharedReaderAbsent: router.sharedReaderRoute == nil,
             catalystReaderWindowsAbsent: readerWindowsAbsent,
             rootPresentation: presentation,
@@ -555,6 +664,8 @@ struct RootView: View {
               activeTrialClaimID == nil,
               let identity = deps.activeAccountIdentity,
               identity.userID == signedInUserID,
+              !incomingFiles.hasPendingFile(for: identity),
+              incomingFiles.presentationError == nil,
               trialPresentationState.pendingReadyIdentity == identity,
               let snapshot = trialPresentationState.snapshot(),
               NoCardTrialPresentationPolicy.permitsCheck(snapshot) else { return }

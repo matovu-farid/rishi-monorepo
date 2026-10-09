@@ -6,7 +6,32 @@
 //
 
 import Foundation
+import SwiftUI
 import TipKit
+
+public struct OnboardingGuidancePolicy {
+    public static func suppressesReaderTips(isTourActive: Bool) -> Bool {
+        isTourActive
+    }
+
+    public static func suppressesImportTip(
+        firstBookGuidanceActive: Bool,
+        recoveryPending: Bool
+    ) -> Bool {
+        firstBookGuidanceActive || recoveryPending
+    }
+}
+
+private struct OnboardingTipsSuppressedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    public var onboardingTipsSuppressed: Bool {
+        get { self[OnboardingTipsSuppressedKey.self] }
+        set { self[OnboardingTipsSuppressedKey.self] = newValue }
+    }
+}
 
 struct VoiceChatTip: Tip {
     var title: Text {

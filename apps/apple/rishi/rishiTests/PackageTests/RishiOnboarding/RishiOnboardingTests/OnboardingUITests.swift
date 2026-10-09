@@ -168,8 +168,7 @@ struct OnboardingUITests {
         _ = VoiceLanguagePrimer(
             selection: .constant("en"),
             onBack: {},
-            onContinue: {},
-            onSkip: {}
+            onContinue: {}
         ).body
     }
 

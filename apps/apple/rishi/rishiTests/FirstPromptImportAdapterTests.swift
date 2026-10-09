@@ -104,7 +104,9 @@ struct FirstPromptImportAdapterTests {
         let nextBook = UUID()
         #expect(nextAttempt.reduce(.began(supportedCount: 1)) == .wait)
         #expect(nextAttempt.reduce(.registered(nextBook)) == .accept(nextBook))
-        #expect(nextAttempt.reduce(.acceptanceFinished(nextBook, accepted: true)) == .finishAccepted(nextBook))
+        #expect(nextAttempt.reduce(.acceptanceFinished(nextBook, accepted: true)) == .publishAccepted(nextBook))
+        #expect(nextAttempt.reduce(.finished(candidateBookIDs: [nextBook])) == .finishAccepted(nextBook))
+        #expect(nextAttempt.reduce(.finished(candidateBookIDs: [nextBook])) == .ignore)
     }
 
     @Test("adapter publishes an accepted handoff before import terminal and finalizes once")

@@ -7,7 +7,6 @@ import SwiftUI
 struct DeepLinkHandlingModifier: ViewModifier {
 
     let model: SignedInViewModel
-    let refreshLibrary: () async -> Void
     let currentUserID: UserID
 
 
@@ -23,12 +22,6 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 }
                 router.onConversationResolved = { convo in
                     model.present(conversation: convo)
-                }
-                router.onFileURL = { fileURL in
-                    Task {
-                        _ = await services.library.importCoordinator.importBooks([fileURL])
-                        await refreshLibrary()
-                    }
                 }
                 router.handle(
                     url: url,
@@ -59,13 +52,11 @@ struct DeepLinkHandlingModifier: ViewModifier {
 extension View {
     func deepLinkHandling(
         model: SignedInViewModel,
-        refreshLibrary: @escaping () async -> Void,
         currentUserID: UserID
     ) -> some View {
         modifier(
             DeepLinkHandlingModifier(
                 model: model,
-                refreshLibrary: refreshLibrary,
                 currentUserID: currentUserID
             )
         )

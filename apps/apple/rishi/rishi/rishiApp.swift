@@ -78,6 +78,8 @@ enum RishiE2EConfiguration {
 struct rishiApp: App {
     @State private var deps: AppDependencies
     @State private var router: AppRouter
+    private let incomingFiles: IncomingBookFileCoordinator
+    private let incomingAccountFenceToken: UUID
     @State private var trialPresentationCoordinator = TrialIntroPresentationCoordinator()
     #if targetEnvironment(macCatalyst)
         @State private var readerWindows = ReaderWindowCoordinator()
@@ -94,8 +96,13 @@ struct rishiApp: App {
 
     init() {
         let dependencies = AppDependencies.shared
+        let incomingCoordinator = IncomingBookFileCoordinator.shared
         _deps = State(initialValue: dependencies)
         _router = State(initialValue: AppRouter(sharedReaderAccountIDProvider: { dependencies.cachedUserId }))
+        incomingFiles = incomingCoordinator
+        incomingAccountFenceToken = dependencies.installSynchronousAccountTransitionFence {
+            incomingCoordinator.accountDidChange(from: incomingCoordinator.resolvedIdentity, to: nil)
+        }
         SentryLaunchConfiguration.start()
         #if DEBUG
         if let sink = SimulatorDumpSink.make() {
@@ -127,9 +134,8 @@ struct rishiApp: App {
 
     var body: some Scene {
         WindowGroup {
-
-        
-            Group {
+            IncomingBookSceneHost(dependencies: deps, router: router, coordinator: incomingFiles) {
+                Group {
                 if let adapter = deps.credentialAuthenticationAdapter {
                     switch Result(catching: { try makeRootWorkflow(adapter: adapter) }) {
                     case .success(let workflow):
@@ -146,23 +152,6 @@ struct rishiApp: App {
                         Button("Retry") { Task { await deps.bootstrap() } }
                     }
                 } else { ProgressView().accessibilityLabel("Loading Rishi") }
-            }
-                .onOpenURL { url in
-                    // Google Sign-In can deliver OAuth callbacks through the
-                    // SwiftUI scene rather than UIApplicationDelegate. Keep
-                    // the delegate bridge below as a compatibility fallback;
-                    // URL events continue to propagate to existing deep-link
-                    // handlers.
-                    _ = GoogleSignInCoordinator.handle(url)
-                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
-                        router.handle(url: url, bookStore: nil, conversationStore: nil)
-                    }
-                }
-                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { userActivity in
-                    guard let url = userActivity.webpageURL else { return }
-                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
-                        router.handle(url: url, bookStore: nil, conversationStore: nil)
-                    }
                 }
                 .environment(currentUserBox)
                 .environment(\.appDependencies, deps)
@@ -247,6 +236,7 @@ struct rishiApp: App {
                     }
                 }
                 
+            }
         }
 #if targetEnvironment(macCatalyst)
         .defaultSize(width: 1400, height: 1000)
@@ -334,6 +324,96 @@ struct rishiApp: App {
         guard let snapshot = try? deps.credentialAuthority.snapshot() else { return }
         _ = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason,
             credentialContext: .normal(snapshot.lease))
+    }
+}
+
+@MainActor
+private struct IncomingBookSceneHost<Content: View>: View {
+    let dependencies: AppDependencies
+    let router: AppRouter
+    let coordinator: IncomingBookFileCoordinator
+    @ViewBuilder let content: () -> Content
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var sceneID = UUID()
+    @State private var rootRegistrationToken: UUID?
+    @State private var readiness: IncomingBookPresentationReadiness
+
+    init(
+        dependencies: AppDependencies,
+        router: AppRouter,
+        coordinator: IncomingBookFileCoordinator,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.dependencies = dependencies
+        self.router = router
+        self.coordinator = coordinator
+        self.content = content
+        let id = UUID()
+        _sceneID = State(initialValue: id)
+        _readiness = State(initialValue: IncomingBookPresentationReadiness(
+            sceneID: id, identity: dependencies.activeAccountIdentity
+        ))
+    }
+
+    var body: some View {
+        let displayedErrorID = coordinator.presentationError?.id
+        return content()
+            .environment(readiness)
+            .environment(coordinator)
+            .onOpenURL(perform: handleOpenURL)
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                guard let url = activity.webpageURL else { return }
+                if !AppRouter.enqueueShareOrSessionToken(from: url) {
+                    router.handle(url: url, bookStore: nil, conversationStore: nil)
+                }
+            }
+            .onAppear {
+                coordinator.accountDidChange(from: coordinator.resolvedIdentity, to: dependencies.activeAccountIdentity)
+                rootRegistrationToken = coordinator.registerRootScene(id: sceneID, isForeground: scenePhase == .active)
+                if scenePhase == .active { coordinator.foregroundSceneDidActivate() }
+            }
+            .onDisappear {
+                if let token = rootRegistrationToken {
+                    coordinator.unregisterRootScene(id: sceneID, registrationToken: token)
+                }
+                rootRegistrationToken = nil
+            }
+            .onChange(of: dependencies.activeAccountIdentity) { _, identity in
+                readiness.updateIdentity(identity)
+                coordinator.accountDidChange(from: coordinator.resolvedIdentity, to: identity)
+                coordinator.requestDrain()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                let foreground = phase == .active
+                coordinator.setRootSceneForeground(id: sceneID, isForeground: foreground, registrationToken: rootRegistrationToken)
+            }
+            .task(id: readiness.revision) { coordinator.requestDrain() }
+            .alert("Unable to open file", isPresented: Binding(
+                get: {
+                    coordinator.presentationError != nil
+                        && coordinator.selectedRootErrorSceneID == sceneID
+                        && scenePhase == .active
+                },
+                set: { _ in }
+            )) {
+                Button("OK", role: .cancel) {
+                    if let displayedErrorID { coordinator.dismissError(id: displayedErrorID) }
+                }
+            } message: {
+                Text(coordinator.presentationError?.message ?? "Rishi couldn't open this file.")
+            }
+    }
+
+    private func handleOpenURL(_ url: URL) {
+        if url.isFileURL {
+            let result = coordinator.receive(url, sceneID: sceneID, identity: dependencies.activeAccountIdentity)
+            if result == .accepted || result == .duplicate { coordinator.requestDrain() }
+            return
+        }
+        _ = GoogleSignInCoordinator.handle(url)
+        if !AppRouter.enqueueShareOrSessionToken(from: url) {
+            router.handle(url: url, bookStore: nil, conversationStore: nil)
+        }
     }
 }
 
@@ -530,6 +610,16 @@ struct rishiApp: App {
             open url: URL,
             options: [UIApplication.OpenURLOptionsKey: Any] = [:]
         ) -> Bool {
+            if url.isFileURL {
+                let identity = dependencies?.activeAccountIdentity ?? IncomingBookFileCoordinator.shared.resolvedIdentity
+                switch IncomingBookFileCoordinator.shared.receive(url, sceneID: nil, identity: identity) {
+                case .accepted, .duplicate, .failed:
+                    IncomingBookFileCoordinator.shared.requestDrain()
+                    return true
+                case .unsupported:
+                    return false
+                }
+            }
             if AppRouter.enqueueShareToken(from: url) {
                 return true
             }

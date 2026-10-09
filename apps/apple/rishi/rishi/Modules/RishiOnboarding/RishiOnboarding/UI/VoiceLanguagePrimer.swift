@@ -8,18 +8,15 @@ public struct VoiceLanguagePrimer: View {
     @Binding private var selection: String
     public let onBack: () -> Void
     public let onContinue: () -> Void
-    public let onSkip: () -> Void
 
     public init(
         selection: Binding<String>,
         onBack: @escaping () -> Void,
-        onContinue: @escaping () -> Void,
-        onSkip: @escaping () -> Void
+        onContinue: @escaping () -> Void
     ) {
         self._selection = selection
         self.onBack = onBack
         self.onContinue = onContinue
-        self.onSkip = onSkip
     }
 
     public var body: some View {
@@ -37,6 +34,7 @@ public struct VoiceLanguagePrimer: View {
                         .font(RishiTypography.titleM)
                         .foregroundStyle(RishiColor.textPrimary)
                         .multilineTextAlignment(.center)
+                        .accessibilityAddTraits(.isHeader)
 
                     Text("English is the default. Pick a different language now if you want the assistant to reply and transcribe in that language.")
                         .font(RishiTypography.body)
@@ -64,10 +62,6 @@ public struct VoiceLanguagePrimer: View {
                     .buttonStyle(.borderedProminent)
                     .tint(RishiColor.accent)
                     .accessibilityIdentifier("onboarding-language-continue")
-
-                    Button("Not now", action: onSkip)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .accessibilityIdentifier("onboarding-language-skip")
 
                     Button(action: onBack) {
                         Text("Back")
@@ -106,7 +100,6 @@ public struct VoiceLanguagePrimer: View {
     VoiceLanguagePrimer(
         selection: .constant("en"),
         onBack: {},
-        onContinue: {},
-        onSkip: {}
+        onContinue: {}
     )
 }

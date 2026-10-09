@@ -26,6 +26,7 @@ struct WelcomeScreen: View {
                     Text("Welcome to Rishi")
                         .font(RishiTypography.titleL)
                         .foregroundStyle(RishiColor.textPrimary)
+                        .accessibilityAddTraits(.isHeader)
 
                     VStack(alignment: .leading, spacing: RishiSpacing.m) {
                         bullet("Read EPUB + PDF books on every device")

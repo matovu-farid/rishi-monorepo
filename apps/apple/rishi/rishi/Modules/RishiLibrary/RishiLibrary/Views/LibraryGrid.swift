@@ -15,6 +15,7 @@ struct LibraryGrid: View {
     public let onShareSingle: (Book) -> Void
     public let onStartSharedReading: (Book) -> Void
     public let onBookVisibilityChange: (BookID, Bool) -> Void
+    public let onDeleteConfirmationChange: @MainActor (Bool) -> Void
 
     static let startSharedReadingContextMenuTitle = "Start Shared Reading"
 
@@ -42,7 +43,8 @@ struct LibraryGrid: View {
         onToggleSelection: @escaping (Book) -> Void = { _ in },
         onShareSingle: @escaping (Book) -> Void = { _ in },
         onStartSharedReading: @escaping (Book) -> Void = { _ in },
-        onBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in }
+        onBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in },
+        onDeleteConfirmationChange: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         self.books = books
         self.positionLookup = positionLookup
@@ -56,6 +58,7 @@ struct LibraryGrid: View {
         self.onShareSingle = onShareSingle
         self.onStartSharedReading = onStartSharedReading
         self.onBookVisibilityChange = onBookVisibilityChange
+        self.onDeleteConfirmationChange = onDeleteConfirmationChange
     }
     
 
@@ -76,18 +79,23 @@ struct LibraryGrid: View {
             "Delete book?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
-                set: { isPresented in if !isPresented { pendingDelete = nil } }
+                set: { isPresented in
+                    if !isPresented { pendingDelete = nil }
+                    onDeleteConfirmationChange(isPresented)
+                }
             ),
             presenting: pendingDelete
         ) { book in
             Button("Delete", role: .destructive) {
                 onDelete(book)
                 pendingDelete = nil
+                onDeleteConfirmationChange(false)
             }
 
             .accessibilityLabel("Delete \(book.title)")
             Button("Cancel", role: .cancel) {
                 pendingDelete = nil
+                onDeleteConfirmationChange(false)
             }
         } message: { book in
             Text(
@@ -163,6 +171,7 @@ struct LibraryGrid: View {
             }
             Button(role: .destructive) {
                 pendingDelete = book
+                onDeleteConfirmationChange(true)
             } label: {
                 Label("Delete\u{2026}", systemImage: "trash")
             }

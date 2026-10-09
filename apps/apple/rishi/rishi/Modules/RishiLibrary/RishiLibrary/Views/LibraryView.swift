@@ -25,6 +25,7 @@ public struct LibraryView: View {
     public let onStartSharedReading: (Book) -> Void
     public let onGridBookVisibilityChange: (BookID, Bool) -> Void
     public let onReadingNowBookVisibilityChange: (BookID, Bool) -> Void
+    public let onDeleteConfirmationChange: @MainActor (Bool) -> Void
 
     public init(books: [Book],
                 readingNow: [ReadingNowEntry] = [],
@@ -40,7 +41,8 @@ public struct LibraryView: View {
                 onShareSingle: @escaping (Book) -> Void = { _ in },
                 onStartSharedReading: @escaping (Book) -> Void = { _ in },
                 onGridBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in },
-                onReadingNowBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in }) {
+                onReadingNowBookVisibilityChange: @escaping (BookID, Bool) -> Void = { _, _ in },
+                onDeleteConfirmationChange: @escaping @MainActor (Bool) -> Void = { _ in }) {
         self.books = books
         self.readingNow = readingNow
         self.libraryBookCount = libraryBookCount
@@ -56,6 +58,7 @@ public struct LibraryView: View {
         self.onStartSharedReading = onStartSharedReading
         self.onGridBookVisibilityChange = onGridBookVisibilityChange
         self.onReadingNowBookVisibilityChange = onReadingNowBookVisibilityChange
+        self.onDeleteConfirmationChange = onDeleteConfirmationChange
     }
 
     public static func shouldShowReadingNow(_ entries: [ReadingNowEntry]) -> Bool {
@@ -95,7 +98,8 @@ public struct LibraryView: View {
                                 onToggleSelection: onToggleSelection,
                                 onShareSingle: onShareSingle,
                                 onStartSharedReading: onStartSharedReading,
-                                onBookVisibilityChange: onGridBookVisibilityChange
+                                onBookVisibilityChange: onGridBookVisibilityChange,
+                                onDeleteConfirmationChange: onDeleteConfirmationChange
                             )
                         }
                     }

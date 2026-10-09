@@ -1,6 +1,18 @@
 import SwiftUI
 
 
+@MainActor
+final class OnboardingCompletionGate {
+    private var hasCompleted = false
+
+    func completeOnce(_ completion: () -> Void) {
+        guard !hasCompleted else { return }
+        hasCompleted = true
+        completion()
+    }
+}
+
+
 /// Top-level View switching on `coordinator.currentStage`. 11-06 presents
 /// this as a `.fullScreenCover` when `state.hasCompletedOnboarding == false`
 /// on launch.
@@ -11,6 +23,7 @@ import SwiftUI
 public struct OnboardingFlowView: View {
 
     @Bindable private var coordinator: OnboardingCoordinator
+    @State private var completionGate = OnboardingCompletionGate()
 
     @Binding public var voiceLanguage: String
     public let onCompleted: () -> Void
@@ -35,15 +48,14 @@ public struct OnboardingFlowView: View {
                 VoiceLanguagePrimer(
                     selection: $voiceLanguage,
                     onBack: coordinator.back,
-                    onContinue: continueLanguage,
-                    onSkip: skipLanguage
+                    onContinue: continueLanguage
                 )
 
             case .firstReaderHint:
                 FirstReaderHint(onBack: coordinator.back, onGotIt: completeHint)
 
             case .completed:
-                Color.clear.onAppear { onCompleted() }
+                Color.clear.onAppear(perform: completeOnboardingOnce)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -70,20 +82,17 @@ public struct OnboardingFlowView: View {
         }
     }
 
-    private func skipLanguage() {
-        guard coordinator.beginTransition() else { return }
-        Task {
-            defer { coordinator.endTransition() }
-            await coordinator.skipCurrentStage()
-        }
-    }
-
     private func completeHint() {
         guard coordinator.beginTransition() else { return }
         Task {
             defer { coordinator.endTransition() }
             await coordinator.advance()
-            onCompleted()
+            guard coordinator.currentStage == .completed else { return }
+            completeOnboardingOnce()
         }
+    }
+
+    private func completeOnboardingOnce() {
+        completionGate.completeOnce(onCompleted)
     }
 }

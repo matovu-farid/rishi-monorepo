@@ -108,12 +108,32 @@ final class FirstPromptImportAdapter {
     private let onTerminated: @MainActor (Bool) -> Void
     private var reducer = FirstPromptImportReducer()
     private var candidates: [BookID: Book] = [:]
-    private var acceptanceTask: Task<Void, Never>?
+    private(set) var acceptanceTask: Task<Void, Never>?
     private var importTask: Task<Void, Never>?
     private var didTerminate = false
     private var didPublishAcceptance = false
+    private var internallyRetired = false
+    private var didPublishRetirement = false
 
     var wasRetired: Bool { reducer.retired }
+
+    func cancelInternalWorkForHostRetirement() {
+        guard !internallyRetired else { return }
+        internallyRetired = true
+        acceptanceTask?.cancel()
+        importTask?.cancel()
+        acceptanceTask = nil
+        importTask = nil
+        candidates.removeAll()
+    }
+
+    func publishHostRetirement() {
+        guard internallyRetired, !didPublishRetirement else { return }
+        didPublishRetirement = true
+        didTerminate = true
+        _ = reducer.reduce(.retired)
+        onTerminated(false)
+    }
 
     init(
         attemptID: UUID,
@@ -189,7 +209,7 @@ final class FirstPromptImportAdapter {
     }
 
     private func apply(_ event: FirstPromptImportReducer.Event) {
-        guard isCurrent(), !didTerminate else { return }
+        guard isCurrent(), !didTerminate, !internallyRetired else { return }
         let action = reducer.reduce(event)
         switch action {
         case let .accept(bookID):
@@ -240,6 +260,8 @@ public struct LibraryRootView: View {
     @Environment(LibraryViewModel.self) private var vm: LibraryViewModel
     @Environment(AppRouter.self) private var router
     @Environment(TrialIntroPresentationState.self) private var trialPresentationState
+    @Environment(IncomingBookPresentationReadiness.self) private var incomingReadiness
+    @State private var incomingReadinessOwner: UUID?
 
 
     public let importCoordinator: ImportCoordinator
@@ -253,6 +275,7 @@ public struct LibraryRootView: View {
     public let onImported:
         (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)?
     let firstPromptImportAdapter: FirstPromptImportAdapter?
+    private let suppressImportTip: Bool
 
     public let sharePackageService: SharePackageService?
     let sharedReadingAPI: SharedReadingAPI?
@@ -262,6 +285,7 @@ public struct LibraryRootView: View {
     @State private var trialRegistration: TrialIntroPresentationState.Registration?
     @State private var activeImportOperationIDs: Set<UUID> = []
     @State private var activeDeletionOperationIDs: Set<UUID> = []
+    @State private var nestedDeleteConfirmationPresented = false
 
     ///
 
@@ -316,6 +340,7 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
         firstPromptImportAdapter: FirstPromptImportAdapter? = nil,
+        suppressImportTip: Bool = false,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
@@ -331,6 +356,7 @@ public struct LibraryRootView: View {
         self.onShowChats = onShowChats
         self.onImported = onImported
         self.firstPromptImportAdapter = firstPromptImportAdapter
+        self.suppressImportTip = suppressImportTip
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
@@ -349,6 +375,7 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
         firstPromptImportAdapter: FirstPromptImportAdapter? = nil,
+        suppressImportTip: Bool = false,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
@@ -364,6 +391,7 @@ public struct LibraryRootView: View {
         self.onShowChats = onShowChats
         self.onImported = onImported
         self.firstPromptImportAdapter = firstPromptImportAdapter
+        self.suppressImportTip = suppressImportTip
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
@@ -468,34 +496,14 @@ public struct LibraryRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
             Task { await refreshLibraryAndPrewarm(vm) }
         }
-        return addingLibraryCommandNotifications(to: content, vm: vm)
+        let trialContent = addingLibraryCommandNotifications(to: content, vm: vm)
             .onAppear {
-                guard trialRegistration == nil, let accountIdentity else { return }
-                trialRegistration = trialPresentationState.register(.libraryRoot, identity: accountIdentity) {
-                    var safety = TrialChildSafety()
-                    safety.signedIn = true
-                    safety.consent = true
-                    safety.conversation = true
-                    safety.voice = true
-                    safety.libraryReady = true
-                    safety.libraryModal = !documentPickerPresented.wrappedValue
-                        && vm.importError == nil
-                        && vm.deletionError == nil
-                        && activeImportOperationIDs.isEmpty
-                        && activeDeletionOperationIDs.isEmpty
-                        && !selectionMode
-                        && !showShareComposer
-                        && !showSharedReadingComposer
-                        && !showSharedReadingSwitchConfirmation
-                        && pendingCreatorInvitation == nil
-                        && (externalPath?.wrappedValue.isEmpty ?? true)
-                        && router.sharedReaderRoute == nil
-                    safety.firstBookFlowActive = false
-                    return safety
-                }
-                trialPresentationState.update()
+                incomingReadinessOwner = incomingReadiness.claimOwnership(of: .libraryRoot)
+                registerTrialPresentationIfNeeded(vm: vm)
             }
             .onDisappear {
+                incomingReadiness.withdraw(.libraryRoot, owner: incomingReadinessOwner)
+                incomingReadinessOwner = nil
                 guard let trialRegistration else { return }
                 trialPresentationState.unregister(
                     trialRegistration,
@@ -514,6 +522,67 @@ public struct LibraryRootView: View {
             .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update() }
             .onChange(of: activeImportOperationIDs) { _, _ in trialPresentationState.update() }
             .onChange(of: activeDeletionOperationIDs) { _, _ in trialPresentationState.update() }
+        return addingIncomingReadinessObservers(to: trialContent, vm: vm)
+    }
+
+    private func addingIncomingReadinessObservers<Content: View>(
+        to content: Content,
+        vm: LibraryViewModel
+    ) -> some View {
+        content
+            .onChange(of: documentPickerPresented.wrappedValue) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: vm.importError?.id) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: vm.deletionError) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: activeImportOperationIDs) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: activeDeletionOperationIDs) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: selectionMode) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: showShareComposer) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: showSharedReadingComposer) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: showSharedReadingSwitchConfirmation) { _, _ in reportIncomingReadiness(vm: vm) }
+            .onChange(of: pendingCreatorInvitation?.sessionID) { _, _ in reportIncomingReadiness(vm: vm) }
+    }
+
+    private func reportIncomingReadiness(vm: LibraryViewModel) {
+        guard let accountIdentity else { return }
+        var blockers = Set<IncomingBookPresentationReadiness.Blocker>()
+        if documentPickerPresented.wrappedValue { blockers.insert(.picker) }
+        if vm.importError != nil || vm.deletionError != nil { blockers.insert(.importError) }
+        if !activeImportOperationIDs.isEmpty || !activeDeletionOperationIDs.isEmpty { blockers.insert(.operation) }
+        if selectionMode { blockers.insert(.selection) }
+        if showShareComposer { blockers.insert(.shareComposer) }
+        if showSharedReadingComposer { blockers.insert(.sharedReadingComposer) }
+        if showSharedReadingSwitchConfirmation { blockers.insert(.sharedReadingConfirmation) }
+        if pendingCreatorInvitation != nil { blockers.insert(.invitation) }
+        if nestedDeleteConfirmationPresented { blockers.insert(.deleteConfirmation) }
+        incomingReadiness.report(.libraryRoot, identity: accountIdentity, blockers: blockers, owner: incomingReadinessOwner)
+    }
+
+    private func registerTrialPresentationIfNeeded(vm: LibraryViewModel) {
+        guard trialRegistration == nil, let accountIdentity else { return }
+        trialRegistration = trialPresentationState.register(.libraryRoot, identity: accountIdentity) {
+            var safety = TrialChildSafety()
+            safety.signedIn = true
+            safety.consent = true
+            safety.conversation = true
+            safety.voice = true
+            safety.libraryReady = true
+            safety.libraryModal = !documentPickerPresented.wrappedValue
+                && vm.importError == nil
+                && vm.deletionError == nil
+                && activeImportOperationIDs.isEmpty
+                && activeDeletionOperationIDs.isEmpty
+                && !selectionMode
+                && !showShareComposer
+                && !showSharedReadingComposer
+                && !showSharedReadingSwitchConfirmation
+                && pendingCreatorInvitation == nil
+                && (externalPath?.wrappedValue.isEmpty ?? true)
+                && router.sharedReaderRoute == nil
+            safety.firstBookFlowActive = false
+            return safety
+        }
+        reportIncomingReadiness(vm: vm)
+        trialPresentationState.update()
     }
 
     private func addingLibraryCommandNotifications<Content: View>(
@@ -585,6 +654,10 @@ public struct LibraryRootView: View {
             },
             onReadingNowBookVisibilityChange: { bookID, visible in
                 vm.setReadingNowBookVisible(bookID, visible: visible)
+            },
+            onDeleteConfirmationChange: { isPresented in
+                nestedDeleteConfirmationPresented = isPresented
+                reportIncomingReadiness(vm: vm)
             }
         )
 
@@ -647,7 +720,7 @@ public struct LibraryRootView: View {
                         } label: {
                             Label("Import", systemImage: "plus")
                         }
-                        .popoverTip(importTip)
+                        .popoverTip(suppressImportTip ? nil : importTip)
                     }
 
 

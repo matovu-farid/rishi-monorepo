@@ -17,48 +17,51 @@ public struct NoCardTrialScreen: View {
     }
 
     public var body: some View {
-        RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
-            VStack(spacing: RishiSpacing.l) {
-                Image(systemName: "gift.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 88, height: 88)
-                    .foregroundStyle(RishiColor.accent)
-                    .accessibilityHidden(true)
+        OnboardingScrollContainer {
+            RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
+                VStack(spacing: RishiSpacing.l) {
+                    Image(systemName: "gift.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 88, height: 88)
+                        .foregroundStyle(RishiColor.accent)
+                        .accessibilityHidden(true)
 
-                Text("Try Rishi's AI features free")
-                    .font(RishiTypography.titleM)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .multilineTextAlignment(.center)
+                    Text("Try Rishi's AI features free")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .multilineTextAlignment(.center)
+                        .accessibilityAddTraits(.isHeader)
 
-                VStack(alignment: .leading, spacing: RishiSpacing.m) {
-                    bullet(
-                        icon: "creditcard.slash.fill",
-                        text: "No credit card required"
-                    )
-                    bullet(
-                        icon: "bolt.fill",
-                        text: "300 free credits to start — they never expire"
-                    )
-                    bullet(
-                        icon: "waveform",
-                        text: "Credits cover Natural AI narration and Voice Chat. Reading your books is always free."
-                    )
+                    VStack(alignment: .leading, spacing: RishiSpacing.m) {
+                        bullet(
+                            icon: "creditcard.slash.fill",
+                            text: "No credit card required"
+                        )
+                        bullet(
+                            icon: "bolt.fill",
+                            text: "300 free credits to start — they never expire"
+                        )
+                        bullet(
+                            icon: "waveform",
+                            text: "Credits cover Natural AI narration and Voice Chat. Reading your books is always free."
+                        )
+                    }
+                    .padding(.horizontal, RishiSpacing.l)
                 }
+            } actions: {
+                Button(action: onGotIt) {
+                    Text("Got it")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, RishiSpacing.m)
+                        .onboardingCTAWidth()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(RishiColor.accent)
                 .padding(.horizontal, RishiSpacing.l)
+                .padding(.bottom, RishiSpacing.l)
+                .accessibilityIdentifier("onboarding-no-card-trial-gotit")
             }
-        } actions: {
-            Button(action: onGotIt) {
-                Text("Got it")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, RishiSpacing.m)
-                    .onboardingCTAWidth()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(RishiColor.accent)
-            .padding(.horizontal, RishiSpacing.l)
-            .padding(.bottom, RishiSpacing.l)
-            .accessibilityIdentifier("onboarding-no-card-trial-gotit")
         }
     }
 

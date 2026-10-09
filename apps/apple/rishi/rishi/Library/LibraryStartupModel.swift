@@ -99,6 +99,32 @@ final class LibraryStartupModel {
         return current
     }
 
+    /// Removes a first-book or recovery prompt that an incoming document has
+    /// made obsolete. Trial readiness is deliberately not superseded here.
+    @discardableResult
+    func supersedeFirstBookIntent(identity: LibraryAccountIdentity, attemptID: UUID) -> Bool {
+        guard identity == self.identity, isCurrent(attemptID),
+              let intent, intent.identity == identity, intent.attemptID == attemptID else { return false }
+        guard intent.kind == .firstBookPrompt || intent.kind == .recoveryPrompt else { return false }
+        self.intent = nil
+        return true
+    }
+
+    /// Reissues a dismissed first-book/recovery prompt after an incoming
+    /// import fails, but only while the original empty-library attempt lives.
+    @discardableResult
+    func restorePromptAfterIncomingFailure(
+        identity: LibraryAccountIdentity, attemptID: UUID, kind: Intent.Kind
+    ) -> Bool {
+        guard identity == self.identity, isCurrent(attemptID),
+              library.loadReadiness == .success(identity), library.books.isEmpty,
+              !facts.documentPickerPresented, !facts.firstPromptImportActive,
+              intent == nil else { return false }
+        guard kind == .firstBookPrompt || kind == .recoveryPrompt else { return false }
+        publish(kind, attemptID: attemptID, markSeen: kind == .recoveryPrompt && suppressFirstBookPrompt)
+        return intent?.attemptID == attemptID && intent?.kind == kind
+    }
+
     func cancelTrialReadiness() {
         trialReadinessRequested = false
         trialPromptSeenRequested = false

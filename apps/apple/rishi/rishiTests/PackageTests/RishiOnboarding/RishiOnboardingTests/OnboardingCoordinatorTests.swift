@@ -80,13 +80,13 @@ struct OnboardingCoordinatorTests {
         #expect(await state.hasCompletedOnboarding() == false)
     }
 
-    @Test("Skipping the language primer advances to the first-reader hint")
-    func skippingLanguageAdvancesToHint() async {
+    @Test("Continuing from the language primer advances without completing onboarding")
+    func continuingLanguageAdvancesToHint() async {
         let state = InMemoryOnboardingState()
         let c = OnboardingCoordinator(state: state)
         c.setStageForTest(.voiceLanguagePrimer)
 
-        await c.skipCurrentStage()
+        await c.advance()
 
         #expect(c.currentStage == .firstReaderHint)
         #expect(await state.hasCompletedOnboarding() == false)

@@ -38,6 +38,7 @@ final class AppRouter {
 
     private var pendingReaderTour: (userID: UserID, bookID: BookID)?
     private var pendingAccountURLs: [URL] = []
+    var pendingAccountURLCountForTesting: Int { pendingAccountURLs.count }
     private var pendingAccountDrainTask: Task<Void, Never>?
     private var recentlyResolvedAccountURLs: Set<URL> = []
     private var resolvingAccountURLs: Set<URL> = []
@@ -53,8 +54,6 @@ final class AppRouter {
     #endif
 
     var onConversationResolved: ((Conversation) -> Void)?
-
-    var onFileURL: ((URL) -> Void)?
 
     /// Returns whether the live runtime was accepted by the current account's
     /// presentation boundary. The caller owns cleanup on rejection; starting
@@ -275,10 +274,7 @@ final class AppRouter {
             }
 
         case .unknown:
-
-            if url.isFileURL {
-                onFileURL?(url)
-            }
+            break
         }
     }
 

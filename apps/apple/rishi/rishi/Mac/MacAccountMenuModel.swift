@@ -62,6 +62,7 @@ final class MacAccountMenuModel {
     private var copyFeedbackGeneration = 0
     var deleteConfirmationPresented = false
     var deleteError: String?
+    private(set) var isDeletingAccount = false
     var onDeleteConfirmed: () async throws -> Void = {}
 
 
@@ -98,6 +99,9 @@ final class MacAccountMenuModel {
     }
 
     func confirmDelete() async {
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+        defer { isDeletingAccount = false }
         do {
             try await onDeleteConfirmed()
             deleteConfirmationPresented = false

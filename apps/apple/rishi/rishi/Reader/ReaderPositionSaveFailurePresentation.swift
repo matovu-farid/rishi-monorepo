@@ -53,6 +53,7 @@ final class ReaderPositionSaveFailurePresentation {
 struct ReaderPositionSaveFailureAlert: ViewModifier {
     let presentation: ReaderPositionSaveFailurePresentation
     let accountIdentity: LibraryAccountIdentity?
+    var onNoticeVisibilityChange: @MainActor (Bool) -> Void = { _ in }
     @Environment(\.scenePhase) private var scenePhase
     @State private var notice: ReaderPositionSaveFailurePresentation.Notice?
 
@@ -62,8 +63,11 @@ struct ReaderPositionSaveFailureAlert: ViewModifier {
             .onChange(of: scenePhase) { _, _ in takeNotice() }
             .onChange(of: accountIdentity) { _, identity in
                 if notice?.identity != identity { notice = nil }
+                onNoticeVisibilityChange(notice != nil)
                 takeNotice()
             }
+            .onChange(of: notice?.id) { _, _ in onNoticeVisibilityChange(notice != nil) }
+            .onDisappear { onNoticeVisibilityChange(false) }
             .task { takeNotice() }
             .alert("Reading position could not be saved", isPresented: Binding(
                 get: { notice != nil },

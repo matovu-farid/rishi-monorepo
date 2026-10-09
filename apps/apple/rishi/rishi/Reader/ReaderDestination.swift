@@ -430,6 +430,12 @@ struct ReaderDestination: View {
     /// compact player's reserved maximum, including its card and controls.
     private static let playerReservationHeight: CGFloat = 96
 
+    static func suppressesOnboardingTips(tourStep: ReaderOnboardingTourStep?) -> Bool {
+        OnboardingGuidancePolicy.suppressesReaderTips(
+            isTourActive: tourStep.map { $0 != .completed } ?? false
+        )
+    }
+
     init(
         vm: ReaderViewModel,
         dependencies: ReaderDestinationDependencies,
@@ -510,6 +516,7 @@ struct ReaderDestination: View {
     }
 
     var body: some View {
+        let suppressOnboardingTips = Self.suppressesOnboardingTips(tourStep: readerTour?.step)
         ReaderScreen(
             viewModel: vm,
             appDefaultTheme: dependencies.readerDefaults.theme,
@@ -919,6 +926,7 @@ struct ReaderDestination: View {
                 onDismiss: { voiceEntry.dismissUpgradePrompt() }
             )
         }
+        .environment(\.onboardingTipsSuppressed, suppressOnboardingTips)
     }
 
     private var reservedPlayerHeight: CGFloat {

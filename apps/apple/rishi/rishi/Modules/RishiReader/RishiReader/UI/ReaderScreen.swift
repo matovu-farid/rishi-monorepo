@@ -74,6 +74,8 @@ private struct StableSharedReaderMenu<Content: View>: View, Equatable {
 @MainActor
 public struct ReaderScreen: View {
 
+    @Environment(\.onboardingTipsSuppressed) private var onboardingTipsSuppressed
+
   
 
     nonisolated public static let toolbarAccessibilityIdentifiers: [String] = [
@@ -509,7 +511,7 @@ public struct ReaderScreen: View {
                         Button(action: readAloudAction) {
                             Image(systemName: "speaker.wave.2.fill")
                         }
-                        .popoverTip(readAloudTip)
+                        .popoverTip(onboardingTipsSuppressed ? nil : readAloudTip)
                         .accessibilityIdentifier("reader.toolbar.readAloud")
                         .accessibilityLabel(A11yLabel.readerReadAloud)
                     }
@@ -517,7 +519,7 @@ public struct ReaderScreen: View {
                         Button(action: voiceAction) {
                             Image(systemName: "waveform.circle.fill")
                         }
-                        .popoverTip(voiceChatTip)
+                        .popoverTip(onboardingTipsSuppressed ? nil : voiceChatTip)
                         .accessibilityIdentifier("reader.toolbar.voice")
                         .accessibilityLabel(A11yLabel.readerOpenVoice)
                     }
@@ -543,13 +545,13 @@ public struct ReaderScreen: View {
                 CatalystReaderToolbar(title: viewModel.book.title) {
                     if onReadAloud != nil && !isSharedFollower {
                         Button(action: readAloudAction) { Image(systemName: "speaker.wave.2.fill") }
-                            .popoverTip(readAloudTip)
+                            .popoverTip(onboardingTipsSuppressed ? nil : readAloudTip)
                             .accessibilityIdentifier("reader.toolbar.readAloud")
                             .accessibilityLabel(A11yLabel.readerReadAloud)
                     }
                     if voicePresenter != nil {
                         Button(action: voiceAction) { Image(systemName: "waveform.circle.fill") }
-                            .popoverTip(voiceChatTip)
+                            .popoverTip(onboardingTipsSuppressed ? nil : voiceChatTip)
                             .accessibilityIdentifier("reader.toolbar.voice")
                             .accessibilityLabel(A11yLabel.readerOpenVoice)
                     }

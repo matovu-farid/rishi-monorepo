@@ -79,20 +79,6 @@ public final class OnboardingCoordinator {
         currentStage = prev
     }
 
-    /// Skip the current primer stage. Records that the primer was shown so we
-    /// don't nag on relaunch, then advances to the next stage.
-    public func skipCurrentStage() async {
-        switch currentStage {
-        case .voiceLanguagePrimer:
-            currentStage = .firstReaderHint
-        case .firstReaderHint:
-            await state.setHasCompletedOnboarding(true)
-            currentStage = .completed
-        default:
-            await advance()
-        }
-    }
-
     // MARK: - Test-only seam
     //
     // The test target uses `@testable import RishiOnboarding` to reach this

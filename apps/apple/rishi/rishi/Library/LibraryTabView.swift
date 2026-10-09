@@ -85,12 +85,317 @@ struct FirstBookRecoveryStore {
     }
 }
 
+enum FirstBookUITestFixturePolicy {
+    static func usesGenericFixtures(environment: [String: String]) -> Bool {
+        environment["RISHI_UITEST"] == "1" && environment["RISHI_UITEST_FIRST_BOOK_PROMPT"] != "1"
+    }
+}
+
+enum FirstBookImportGuidancePolicy {
+    static func isActive(
+        promptVisible: Bool,
+        pendingDismissalOrCompletion: Bool,
+        pendingPresentation: Bool,
+        recoveryReopen: Bool,
+        samplePreparing: Bool,
+        sampleReadyForHandoff: Bool,
+        pickerQueuedOrVisible: Bool,
+        ownedImportAwaitingAcceptance: Bool
+    ) -> Bool {
+        promptVisible
+            || pendingDismissalOrCompletion
+            || pendingPresentation
+            || recoveryReopen
+            || samplePreparing
+            || sampleReadyForHandoff
+            || pickerQueuedOrVisible
+            || ownedImportAwaitingAcceptance
+    }
+}
+
+enum FirstBookSampleFailurePresentation {
+    static let retryableMessage = "We couldn’t prepare the sample. Try again or import your own book."
+    static let provenanceMessage = "The saved sample cannot be verified for this account. Import your own book to continue."
+}
+
 private enum FirstBookReadinessError: Error { case unavailable }
 
 private struct FirstBookTourOwnership: Equatable {
     let attemptID: UUID
     let identity: LibraryAccountIdentity
     let bookID: BookID
+}
+
+@MainActor
+final class FirstBookPromptHostAdmission {
+    enum PickerCloseAction: Equatable {
+        case reopenRecovery
+        case waitForOwnedTerminal
+        case requestOrdinaryReadiness
+    }
+
+    enum NativeDismissalOutcome: Equatable {
+        case completed
+        case retryableFailure
+        case importPresented
+        case externalFile
+        case ignored
+    }
+
+    let id: UUID
+    let identity: LibraryAccountIdentity
+    let hostToken: TrialRootLifetimeAuthority.Anchor
+    private(set) var revoked = false
+    var retirementObserverID: UUID?
+    var coordinator: FirstBookSampleCoordinator?
+    var adapter: FirstPromptImportAdapter?
+    fileprivate var tourRequest: FirstBookTourOwnership?
+    var activeReceipt: FirstBookPromptDismissalReceipt?
+    var pendingReceipt: FirstBookPromptDismissalReceipt?
+    var dismissalReceipt: FirstBookPromptDismissalReceipt?
+    var pickerReceipt: FirstBookPromptDismissalReceipt?
+    var lifecycleTask: Task<Void, Never>?
+    private(set) var retiredCleanupComplete = false
+    var presentationVisible = false
+    var dismissalInFlight = false
+    var completed = false
+
+    init(id: UUID = UUID(), identity: LibraryAccountIdentity, hostToken: TrialRootLifetimeAuthority.Anchor) {
+        self.id = id
+        self.identity = identity
+        self.hostToken = hostToken
+    }
+
+    func revoke() { revoked = true }
+
+    func canPresent(state: TrialIntroPresentationState, currentIdentity: LibraryAccountIdentity?) -> Bool {
+        !completed && !revoked && !presentationVisible && pendingReceipt == nil && !dismissalInFlight
+            && isCurrent(state: state, currentIdentity: currentIdentity)
+    }
+
+    func beginPresentation(_ receipt: FirstBookPromptDismissalReceipt) -> Bool {
+        guard !completed, !revoked, !presentationVisible, pendingReceipt == nil, !dismissalInFlight else { return false }
+        pickerReceipt = nil
+        activeReceipt = receipt
+        presentationVisible = true
+        return true
+    }
+
+    func captureNativeDismissal(_ receipt: FirstBookPromptDismissalReceipt) -> Bool {
+        guard presentationVisible, activeReceipt === receipt, pendingReceipt == nil else { return false }
+        presentationVisible = false
+        pendingReceipt = receipt
+        return true
+    }
+
+    func contentDidDisappear(_ receipt: FirstBookPromptDismissalReceipt) {
+        // Sheet content lifetime is not the native dismissal boundary.
+    }
+
+    func claimNativeDismissal(_ receipt: FirstBookPromptDismissalReceipt) -> FirstBookPromptDismissalReceipt.Reason? {
+        guard pendingReceipt === receipt, !dismissalInFlight,
+              let reason = receipt.consumeForNativeDismissal() else { return nil }
+        pendingReceipt = nil
+        activeReceipt = nil
+        dismissalReceipt = receipt
+        dismissalInFlight = true
+        return reason
+    }
+
+    func finishDismissal(_ receipt: FirstBookPromptDismissalReceipt, keepRecoverySession: Bool) {
+        guard dismissalInFlight, dismissalReceipt === receipt, receipt.admission === self else { return }
+        dismissalInFlight = false
+        dismissalReceipt = nil
+        if !keepRecoverySession { completed = true }
+    }
+
+    func owns(_ receipt: FirstBookPromptDismissalReceipt) -> Bool {
+        !revoked && !completed && (activeReceipt === receipt || pendingReceipt === receipt
+            || dismissalReceipt === receipt || pickerReceipt === receipt)
+    }
+
+    func pickerCloseAction(recoveryPending: Bool) -> PickerCloseAction {
+        if recoveryPending { return .reopenRecovery }
+        if pickerReceipt != nil || adapter != nil { return .waitForOwnedTerminal }
+        return .requestOrdinaryReadiness
+    }
+
+    func performOwnedReadiness(
+        for receipt: FirstBookPromptDismissalReceipt,
+        isCurrent: @MainActor () -> Bool,
+        requestReadiness: @MainActor () async -> Bool,
+        publishReadiness: @MainActor () -> Bool
+    ) async -> Bool {
+        guard !Task.isCancelled, owns(receipt), isCurrent() else { return false }
+        guard await requestReadiness(), !Task.isCancelled, owns(receipt), isCurrent() else { return false }
+        guard !Task.isCancelled, owns(receipt), isCurrent() else { return false }
+        return publishReadiness()
+    }
+
+    func performExplicitSkip(
+        _ receipt: FirstBookPromptDismissalReceipt,
+        isCurrent: @MainActor () -> Bool,
+        persistPending: @MainActor () -> Void,
+        skip: @MainActor () async -> Void,
+        dismiss: @MainActor (FirstBookPromptDismissalReceipt) -> Void
+    ) async -> Bool {
+        guard activeReceipt === receipt, owns(receipt), isCurrent() else { return false }
+        receipt.reason = .explicitSkip
+        persistPending()
+        await skip()
+        guard !Task.isCancelled, activeReceipt === receipt, owns(receipt), isCurrent() else { return false }
+        dismiss(receipt)
+        return true
+    }
+
+    func performNativeDismissal(
+        _ receipt: FirstBookPromptDismissalReceipt,
+        isCurrent: @MainActor () -> Bool,
+        skip: @MainActor () async -> Void,
+        completeSample: @MainActor () async -> Void,
+        requestReady: @MainActor (FirstBookPromptDismissalReceipt) async -> Bool
+    ) async -> NativeDismissalOutcome {
+        guard let reason = claimNativeDismissal(receipt) else { return .ignored }
+        guard !Task.isCancelled, isCurrent() else {
+            finishDismissal(receipt, keepRecoverySession: false)
+            return .ignored
+        }
+        switch reason {
+        case .explicitSkip, .interactiveIntentional:
+            if reason == .interactiveIntentional,
+               receipt.coordinator.state == .choosing || receipt.coordinator.state == .failed {
+                await skip()
+            }
+            guard !Task.isCancelled, owns(receipt), isCurrent() else { return .ignored }
+            _ = await requestReady(receipt)
+            guard !Task.isCancelled, owns(receipt), isCurrent() else { return .ignored }
+            finishDismissal(receipt, keepRecoverySession: false)
+            return .completed
+        case let .sample(attemptID):
+            guard receipt.coordinator.attemptID == attemptID,
+                  case .ready = receipt.coordinator.state else {
+                finishDismissal(receipt, keepRecoverySession: true)
+                return .ignored
+            }
+            await completeSample()
+            guard !Task.isCancelled, owns(receipt), isCurrent() else { return .ignored }
+            if receipt.coordinator.state == .failed {
+                finishDismissal(receipt, keepRecoverySession: true)
+                return .retryableFailure
+            }
+            guard receipt.coordinator.state == .choosing else {
+                finishDismissal(receipt, keepRecoverySession: true)
+                return .ignored
+            }
+            _ = await requestReady(receipt)
+            guard !Task.isCancelled, owns(receipt), isCurrent() else { return .ignored }
+            finishDismissal(receipt, keepRecoverySession: false)
+            return .completed
+        case .import:
+            pickerReceipt = receipt
+            _ = await requestReady(receipt)
+            guard !Task.isCancelled, owns(receipt), isCurrent() else { return .ignored }
+            finishDismissal(receipt, keepRecoverySession: true)
+            return .importPresented
+        case .externalFile:
+            finishDismissal(receipt, keepRecoverySession: false)
+            return .externalFile
+        }
+    }
+
+    func retireSynchronously() {
+        revoke()
+        lifecycleTask?.cancel()
+        coordinator?.cancelPendingHostWork()
+        adapter?.cancelInternalWorkForHostRetirement()
+    }
+
+    func cleanupRetiredOwner() {
+        guard !retiredCleanupComplete else { return }
+        coordinator?.hostDidDisappear()
+        adapter?.publishHostRetirement()
+        completed = true
+        retiredCleanupComplete = true
+        activeReceipt = nil
+        pendingReceipt = nil
+        dismissalReceipt = nil
+        pickerReceipt = nil
+        presentationVisible = false
+        dismissalInFlight = false
+    }
+
+    func isCurrent(state: TrialIntroPresentationState, currentIdentity: LibraryAccountIdentity?) -> Bool {
+        !completed && !revoked && currentIdentity == identity && state.isHostLifetimeCurrent(hostToken, identity: identity)
+    }
+}
+
+@MainActor
+final class FirstBookPromptDismissalReceipt {
+    enum Reason: Equatable {
+        case interactiveIntentional
+        case explicitSkip
+        case sample(UUID)
+        case `import`(UUID)
+        case externalFile
+    }
+
+    let id: UUID
+    let identity: LibraryAccountIdentity
+    let coordinator: FirstBookSampleCoordinator
+    let admission: FirstBookPromptHostAdmission
+    var reason: Reason = .interactiveIntentional
+    private(set) var consumed = false
+
+    init(id: UUID = UUID(), identity: LibraryAccountIdentity, coordinator: FirstBookSampleCoordinator,
+         admission: FirstBookPromptHostAdmission) {
+        self.id = id
+        self.identity = identity
+        self.coordinator = coordinator
+        self.admission = admission
+    }
+
+    func consume() -> Bool {
+        guard !consumed else { return false }
+        consumed = true
+        return true
+    }
+
+    func consumeForNativeDismissal() -> Reason? {
+        guard consume() else { return nil }
+        if reason == .interactiveIntentional,
+           case .ready = coordinator.state,
+           let attemptID = coordinator.attemptID {
+            reason = .sample(attemptID)
+        }
+        return reason
+    }
+}
+
+@MainActor
+private final class IncomingPromptWaiter {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var result: Bool?
+
+    func wait(timeout: Duration) async -> Bool {
+        if let result { return result }
+        let task = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: timeout)
+            self?.resolve(false)
+        }
+        let value = await withCheckedContinuation { continuation in
+            if let result { continuation.resume(returning: result) }
+            else { self.continuation = continuation }
+        }
+        task.cancel()
+        return value
+    }
+
+    func resolve(_ value: Bool) {
+        guard result == nil else { return }
+        result = value
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
 }
 
 struct LibraryTabView: View {
@@ -103,6 +408,9 @@ struct LibraryTabView: View {
 
     @Environment(AppRouter.self) private var router
     @Environment(TrialIntroPresentationState.self) private var trialPresentationState
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(IncomingBookPresentationReadiness.self) private var incomingReadiness
+    @Environment(IncomingBookFileCoordinator.self) private var incomingFiles
     #if targetEnvironment(macCatalyst)
         @Environment(ReaderWindowCoordinator.self) private var readerWindows
     #endif
@@ -123,16 +431,175 @@ struct LibraryTabView: View {
     @State private var promptImportDismissalAttemptID: UUID?
     @State private var firstPromptImportNeedsReopen = false
     @State private var ownedTourRequest: FirstBookTourOwnership?
+    @State private var promptDismissalReceipt: FirstBookPromptDismissalReceipt?
+    @State private var pendingNativeDismissalReceipt: FirstBookPromptDismissalReceipt?
+    @State private var promptAdmission: FirstBookPromptHostAdmission?
+    @State private var pendingPromptPresentation = false
+    @State private var incomingReaderRoute: ReaderRoute?
+    @State private var presentedPromptKind: LibraryStartupModel.Intent.Kind?
+    @State private var incomingPromptSuspension: IncomingPromptSuspension?
+    @State private var incomingPromptWaiter: IncomingPromptWaiter?
+    @State private var incomingHostRegistered = false
+    @State private var incomingHostRegistrationToken: UUID?
+    @State private var incomingReadinessOwner: UUID?
     private let recoveryStore = FirstBookRecoveryStore()
+
+    private struct IncomingPromptSuspension {
+        let identity: LibraryAccountIdentity
+        let attemptID: UUID
+        let kind: LibraryStartupModel.Intent.Kind
+    }
+
+    private var firstBookPromptPresentation: Binding<Bool> {
+        Binding(
+            get: { showFirstBookPrompt },
+            set: { isPresented in
+                if !isPresented { captureNativeDismissalReceipt() }
+                showFirstBookPrompt = isPresented
+            }
+        )
+    }
 
     private var firstBookPromptSeenKey: String {
         "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
+    }
+
+    private var firstBookGuidanceActive: Bool {
+        let admission = promptAdmission
+        let coordinator = admission?.coordinator ?? sampleCoordinator
+        let sampleReadyForHandoff: Bool
+        if case .ready? = coordinator?.state {
+            sampleReadyForHandoff = true
+        } else {
+            sampleReadyForHandoff = false
+        }
+        let ownedImportAwaitingAcceptance = firstPromptImportAdapter?.identity == dependencies.accountIdentity
+            && (admission?.pickerReceipt != nil || admission?.adapter === firstPromptImportAdapter || admission?.lifecycleTask != nil)
+        return FirstBookImportGuidancePolicy.isActive(
+            promptVisible: showFirstBookPrompt || admission?.presentationVisible == true,
+            pendingDismissalOrCompletion: promptDismissalReceipt != nil
+                || pendingNativeDismissalReceipt != nil
+                || admission?.pendingReceipt != nil
+                || admission?.dismissalReceipt != nil
+                || admission?.dismissalInFlight == true,
+            pendingPresentation: pendingPromptPresentation,
+            recoveryReopen: firstPromptImportNeedsReopen,
+            samplePreparing: coordinator?.state == .installing,
+            sampleReadyForHandoff: sampleReadyForHandoff,
+            pickerQueuedOrVisible: presentDocumentPickerAfterPrompt
+                || trialReadyAfterDocumentPicker
+                || showDocumentPicker,
+            ownedImportAwaitingAcceptance: ownedImportAwaitingAcceptance
+        )
+    }
+
+    private var shouldSuppressImportTip: Bool {
+        let identity = dependencies.accountIdentity
+        let recoveryPending = recoveryStore.hasRecovery(userID: identity.userID)
+            || trialPresentationState.recoveryActiveIdentity == identity
+        return OnboardingGuidancePolicy.suppressesImportTip(
+            firstBookGuidanceActive: firstBookGuidanceActive,
+            recoveryPending: recoveryPending
+        )
     }
 
     private func markFirstBookPromptSeen() {
         hasSeenFirstBookPrompt = true
         UserDefaults.standard.set(true, forKey: firstBookPromptSeenKey)
         updateStartupFacts()
+    }
+
+    @MainActor
+    private func presentFirstBookPrompt() {
+        guard !showFirstBookPrompt, pendingNativeDismissalReceipt == nil else {
+            pendingPromptPresentation = true
+            reportIncomingTabReadiness()
+            return
+        }
+        guard dependencies.currentAccountIdentity() == dependencies.accountIdentity else { return }
+        guard let hostToken = trialPresentationState.currentHostLifetimeToken,
+              trialPresentationState.isHostLifetimeCurrent(hostToken, identity: dependencies.accountIdentity) else {
+            pendingPromptPresentation = true
+            reportIncomingTabReadiness()
+            return
+        }
+        let admission: FirstBookPromptHostAdmission
+        if let existing = promptAdmission, existing.hostToken == hostToken {
+            guard existing.canPresent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()) else {
+                pendingPromptPresentation = true
+                reportIncomingTabReadiness()
+                return
+            }
+            admission = existing
+        } else {
+            admission = FirstBookPromptHostAdmission(identity: dependencies.accountIdentity, hostToken: hostToken)
+            promptAdmission = admission
+        }
+        let coordinator: FirstBookSampleCoordinator
+        if let owned = admission.coordinator {
+            coordinator = owned
+            sampleCoordinator = owned
+        } else {
+            coordinator = makeSampleCoordinator()
+            admission.coordinator = coordinator
+        }
+        let receipt = FirstBookPromptDismissalReceipt(
+            identity: dependencies.accountIdentity,
+            coordinator: coordinator,
+            admission: admission
+        )
+        if admission.retirementObserverID == nil {
+            admission.retirementObserverID = trialPresentationState.observeHostRetirement(hostToken) {
+                let retiredTour = admission.tourRequest
+                admission.retireSynchronously()
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        admission.cleanupRetiredOwner()
+                        if self.ownedTourRequest == retiredTour, let ownership = retiredTour {
+                            self.clearOwnedTour(ownership)
+                        }
+                        guard self.promptAdmission === admission else { return }
+                        self.startup.retire()
+                        self.trialReadyAfterDocumentPicker = false
+                        self.presentDocumentPickerAfterPrompt = false
+                        self.firstPromptImportNeedsReopen = false
+                        self.pendingPromptPresentation = false
+                        if self.firstPromptImportAdapter === admission.adapter { self.firstPromptImportAdapter = nil }
+                        if self.sampleCoordinator === admission.coordinator { self.sampleCoordinator = nil }
+                        if self.promptDismissalReceipt?.admission === admission { self.promptDismissalReceipt = nil }
+                        if self.pendingNativeDismissalReceipt?.admission === admission { self.pendingNativeDismissalReceipt = nil }
+                        self.promptAdmission = nil
+                        self.reportIncomingTabReadiness()
+                    }
+                }
+            }
+        }
+        guard admission.retirementObserverID != nil,
+              admission.beginPresentation(receipt) else {
+            pendingPromptPresentation = true
+            reportIncomingTabReadiness()
+            return
+        }
+        pendingPromptPresentation = false
+        promptDismissalReceipt = receipt
+        showFirstBookPrompt = true
+        reportIncomingTabReadiness()
+    }
+
+    @MainActor
+    private func captureNativeDismissalReceipt() {
+        guard pendingNativeDismissalReceipt == nil,
+              let receipt = promptDismissalReceipt else { return }
+        guard receipt.admission.captureNativeDismissal(receipt) else { return }
+        pendingNativeDismissalReceipt = receipt
+    }
+
+    @MainActor
+    private func dismissFirstBookPrompt(_ receipt: FirstBookPromptDismissalReceipt) {
+        guard promptDismissalReceipt === receipt,
+              receipt.admission.captureNativeDismissal(receipt) else { return }
+        pendingNativeDismissalReceipt = receipt
+        showFirstBookPrompt = false
     }
 
     @MainActor
@@ -163,6 +630,12 @@ struct LibraryTabView: View {
     @MainActor
     private func makeSampleCoordinator() -> FirstBookSampleCoordinator {
         let identity = dependencies.accountIdentity
+        let admission = promptAdmission
+        let admitted: @MainActor @Sendable (LibraryAccountIdentity) -> Bool = { expected in
+            guard let admission, promptAdmission === admission else { return false }
+            return admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity())
+                && expected == admission.identity
+        }
         let coordinator = FirstBookSampleCoordinator(
             identity: identity,
             platform: {
@@ -177,18 +650,22 @@ struct LibraryTabView: View {
                     ownerId: identity.userID,
                     accountGeneration: identity.generation,
                     isCurrentAccount: {
-                        await MainActor.run { dependencies.currentAccountIdentity() == identity }
+                        await MainActor.run { admitted(identity) }
                     }
                 )
             },
             acquireLease: { book in
-                try await dependencies.bookSourceRegistry.acquireReadableSource(for: book)
+                guard await MainActor.run(body: { admitted(identity) }) else { throw CancellationError() }
+                let lease = try await dependencies.bookSourceRegistry.acquireReadableSource(for: book)
+                guard await MainActor.run(body: { admitted(identity) }) else { throw CancellationError() }
+                return lease
             },
             ensureReady: { _ in
+                guard await MainActor.run(body: { admitted(identity) }) else { throw CancellationError() }
                 await vm.refresh()
                 guard !Task.isCancelled else { throw FirstBookReadinessError.unavailable }
                 let libraryReady = await MainActor.run {
-                    dependencies.currentAccountIdentity() == identity
+                    admitted(identity)
                         && vm.loadReadiness == .success(identity)
                 }
                 guard !Task.isCancelled, libraryReady else {
@@ -196,36 +673,45 @@ struct LibraryTabView: View {
                 }
             },
             isCurrentIdentity: { expected in
-                !Task.isCancelled && dependencies.currentAccountIdentity() == expected
+                !Task.isCancelled && admitted(expected)
             },
             persistRecovery: { captured in
+                guard admitted(captured), !Task.isCancelled else { return }
                 publishRecovery(true, identity: captured, isCancelled: Task.isCancelled)
             },
             dismiss: {
-                showFirstBookPrompt = false
+                guard let admission, admitted(identity), promptAdmission === admission,
+                      promptDismissalReceipt?.admission === admission else { return }
+                let attemptID = sampleCoordinator?.attemptID ?? UUID()
+                guard let receipt = promptDismissalReceipt,
+                      receipt.admission === admission else { return }
+                receipt.reason = .sample(attemptID)
+                dismissFirstBookPrompt(receipt)
             },
             markSeen: { captured in
-                guard dependencies.currentAccountIdentity() == captured else { return }
+                guard admitted(captured) else { return }
                 markFirstBookPromptSeen()
             },
             requestTour: { bookUserID, bookID in
-                guard dependencies.currentAccountIdentity() == identity, bookUserID == identity.userID else { return }
+                guard admitted(identity), bookUserID == identity.userID else { return }
                 router.requestReaderTour(for: bookID, userID: bookUserID)
                 if let attemptID = sampleCoordinator?.attemptID {
-                    ownedTourRequest = FirstBookTourOwnership(
+                    let ownership = FirstBookTourOwnership(
                         attemptID: attemptID,
                         identity: identity,
                         bookID: bookID
                     )
+                    admission?.tourRequest = ownership
+                    ownedTourRequest = ownership
                 }
             },
             openBook: { book in
-                guard dependencies.currentAccountIdentity() == identity else { return false }
-                return openBook(book)
+                guard admitted(identity) else { return false }
+                return await openBook(book)
             },
             hasOwnedReaderWindow: { readerIdentity in
                 #if targetEnvironment(macCatalyst)
-                return dependencies.currentAccountIdentity() == identity
+                return admitted(identity)
                     && readerWindows.openWindows[ReaderWindowID(
                         userID: readerIdentity.userID,
                         bookID: readerIdentity.bookID
@@ -235,14 +721,21 @@ struct LibraryTabView: View {
                 #endif
             },
             clearTourRequest: { bookUserID, bookID in
-                guard dependencies.currentAccountIdentity() == identity,
+                let attemptID = sampleCoordinator?.attemptID
+                let ownership = admission?.tourRequest
+                guard admitted(identity), let attemptID,
                       bookUserID == identity.userID,
-                      ownedTourRequest?.identity == identity,
-                      ownedTourRequest?.bookID == bookID else { return }
+                      let ownership,
+                      ownership.attemptID == attemptID,
+                      ownership.identity == identity,
+                      ownership.bookID == bookID,
+                      ownedTourRequest == ownership else { return }
                 router.clearReaderTourRequest()
                 ownedTourRequest = nil
+                admission?.tourRequest = nil
             },
             clearRecovery: { captured in
+                guard admitted(captured), !Task.isCancelled else { return }
                 publishRecovery(false, identity: captured, isCancelled: Task.isCancelled)
             }
         )
@@ -258,22 +751,29 @@ struct LibraryTabView: View {
     @MainActor
     private func beginFirstPromptImport() {
         guard firstPromptImportAdapter == nil,
-              dependencies.currentAccountIdentity() == dependencies.accountIdentity else { return }
+              dependencies.currentAccountIdentity() == dependencies.accountIdentity,
+              let admission = promptAdmission,
+              admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()) else { return }
         let attemptID = UUID()
         let identity = dependencies.accountIdentity
+        guard let receipt = promptDismissalReceipt, receipt.admission === admission else { return }
+        receipt.reason = .import(attemptID)
         publishRecovery(true, identity: identity)
         firstPromptImportNeedsReopen = false
         let adapter = FirstPromptImportAdapter(
             attemptID: attemptID,
             identity: identity,
             isCurrent: {
-                dependencies.currentAccountIdentity() == identity
+                promptAdmission === admission
+                    && admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity())
                     && firstPromptImportAdapter?.attemptID == attemptID
                     && firstPromptImportAdapter?.identity == identity
             },
             onLifecycle: { event in
                 guard event.attemptID == attemptID,
                       event.identity == identity,
+                      promptAdmission === admission,
+                      admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
                       dependencies.currentAccountIdentity() == identity,
                       firstPromptImportAdapter?.attemptID == attemptID else { return }
                 publishCurrentRecovery(identity: identity)
@@ -282,28 +782,42 @@ struct LibraryTabView: View {
                 await acceptFirstPromptImportCandidate(
                     book,
                     attemptID: attemptID,
-                    identity: identity
+                    identity: identity,
+                    admission: admission
                 )
             },
             onAccepted: { bookID in
-                guard dependencies.currentAccountIdentity() == identity,
+                guard promptAdmission === admission,
+                      admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
+                      dependencies.currentAccountIdentity() == identity,
                       firstPromptImportAdapter?.attemptID == attemptID else { return }
                 vm.markImportReaderOpenRequested(bookID: bookID)
             },
             onTerminated: { accepted in
-                guard firstPromptImportAdapter?.attemptID == attemptID,
-                      firstPromptImportAdapter?.identity == identity else { return }
-                let wasRetired = firstPromptImportAdapter?.wasRetired == true
-                firstPromptImportAdapter = nil
+                guard admission.adapter?.attemptID == attemptID,
+                      admission.adapter?.identity == identity else { return }
+                let wasRetired = admission.adapter?.wasRetired == true
+                if firstPromptImportAdapter === admission.adapter { firstPromptImportAdapter = nil }
+                admission.adapter = nil
                 if promptImportDismissalAttemptID == attemptID {
                     promptImportDismissalAttemptID = nil
                 }
-                if accepted, !wasRetired, trialReadyAfterDocumentPicker {
-                    trialReadyAfterDocumentPicker = false
-                    requestDeferredLibraryReadyAction()
-                }
-                if !accepted, !wasRetired,
-                   dependencies.currentAccountIdentity() == identity {
+                guard !wasRetired, promptAdmission === admission,
+                      admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
+                      let ownedReceipt = admission.pickerReceipt else { return }
+                if accepted {
+                    let task = Task { @MainActor in
+                        defer { admission.lifecycleTask = nil }
+                        if trialReadyAfterDocumentPicker {
+                            trialReadyAfterDocumentPicker = false
+                            _ = await requestDeferredLibraryReadyAction(for: ownedReceipt)
+                        }
+                        guard promptAdmission === admission,
+                              admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()) else { return }
+                        finishPromptAdmission(admission)
+                    }
+                    admission.lifecycleTask = task
+                } else {
                     trialReadyAfterDocumentPicker = false
                     firstPromptImportNeedsReopen = true
                     reopenFirstBookPromptIfSafe()
@@ -311,18 +825,20 @@ struct LibraryTabView: View {
                 publishCurrentRecovery(identity: identity)
             }
         )
+        admission.adapter = adapter
         firstPromptImportAdapter = adapter
         promptImportDismissalAttemptID = attemptID
         presentDocumentPickerAfterPrompt = true
         startup.cancelTrialReadiness()
-        showFirstBookPrompt = false
+        dismissFirstBookPrompt(receipt)
     }
 
     @MainActor
     private func acceptFirstPromptImportCandidate(
         _ book: Book,
         attemptID: UUID,
-        identity: LibraryAccountIdentity
+        identity: LibraryAccountIdentity,
+        admission: FirstBookPromptHostAdmission
     ) async -> Bool {
 #if DEBUG
         if RishiE2EConfiguration.isRealAuth, RishiE2EConfiguration.fixtureURL != nil {
@@ -330,6 +846,8 @@ struct LibraryTabView: View {
         }
 #endif
         guard book.userId == identity.userID,
+              promptAdmission === admission,
+              admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
               dependencies.currentAccountIdentity() == identity,
               firstPromptImportAdapter?.attemptID == attemptID,
               firstPromptImportAdapter?.identity == identity,
@@ -342,10 +860,13 @@ struct LibraryTabView: View {
         }
         defer { withExtendedLifetime(lease) {} }
         guard dependencies.currentAccountIdentity() == identity,
+              promptAdmission === admission,
+              admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
               firstPromptImportAdapter?.attemptID == attemptID,
               firstPromptImportAdapter?.identity == identity,
               !Task.isCancelled else { return false }
         let tour = FirstBookTourOwnership(attemptID: attemptID, identity: identity, bookID: book.id)
+        admission.tourRequest = tour
         ownedTourRequest = tour
         router.requestReaderTour(for: book.id, userID: identity.userID)
         let existingWindow: Bool
@@ -354,8 +875,11 @@ struct LibraryTabView: View {
         #else
         existingWindow = false
         #endif
-        let accepted = await currentSampleCoordinator().acceptOwnedPersonalImportHandoff(book, lease: lease)
+        guard let coordinator = admission.coordinator else { return false }
+        let accepted = await coordinator.acceptOwnedPersonalImportHandoff(book, lease: lease)
         guard dependencies.currentAccountIdentity() == identity,
+              admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
+              promptAdmission === admission,
               firstPromptImportAdapter?.attemptID == attemptID,
               firstPromptImportAdapter?.identity == identity,
               !Task.isCancelled else {
@@ -373,6 +897,7 @@ struct LibraryTabView: View {
         guard ownedTourRequest == ownership else { return }
         router.clearReaderTourRequest()
         ownedTourRequest = nil
+        if promptAdmission?.tourRequest == ownership { promptAdmission?.tourRequest = nil }
     }
 
     @MainActor
@@ -384,6 +909,8 @@ struct LibraryTabView: View {
             sampleHandoffIsActive = false
         }
         guard firstPromptImportNeedsReopen,
+              !showFirstBookPrompt,
+              pendingNativeDismissalReceipt == nil,
               firstPromptImportAdapter == nil,
               !presentDocumentPickerAfterPrompt,
               !trialReadyAfterDocumentPicker,
@@ -407,7 +934,7 @@ struct LibraryTabView: View {
         guard !readerWindows.openWindows.keys.contains(where: { $0.userID == user.id }) else { return }
         #endif
         firstPromptImportNeedsReopen = false
-        showFirstBookPrompt = true
+        presentFirstBookPrompt()
     }
 
     @MainActor
@@ -428,9 +955,9 @@ struct LibraryTabView: View {
     private func sampleFailureMessage(for coordinator: FirstBookSampleCoordinator) -> String? {
         guard coordinator.state == .failed else { return nil }
         if coordinator.failureKind == .provenanceUnavailable {
-            return "The saved sample cannot be verified for this account. Import your own book to continue."
+            return FirstBookSampleFailurePresentation.provenanceMessage
         }
-        return "The sample could not be prepared. You can try again or import your own book."
+        return FirstBookSampleFailurePresentation.retryableMessage
     }
 
     init(
@@ -466,11 +993,13 @@ struct LibraryTabView: View {
         )
         _vm = State(initialValue: library)
         let identity = dependencies.accountIdentity
-        let isUITest: Bool
+        let usesGenericFixtures: Bool
         #if DEBUG
-        isUITest = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        usesGenericFixtures = FirstBookUITestFixturePolicy.usesGenericFixtures(
+            environment: ProcessInfo.processInfo.environment
+        )
         #else
-        isUITest = false
+        usesGenericFixtures = false
         #endif
         _startup = State(initialValue: LibraryStartupModel(
             identity: identity,
@@ -484,7 +1013,7 @@ struct LibraryTabView: View {
             },
             prepareInitialSnapshot: {
                 #if DEBUG
-                if isUITest {
+                if usesGenericFixtures {
                     guard !Task.isCancelled, dependencies.currentAccountIdentity() == identity else { return }
                     _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: identity.userID)
                     guard !Task.isCancelled, dependencies.currentAccountIdentity() == identity else { return }
@@ -492,7 +1021,7 @@ struct LibraryTabView: View {
                 }
                 #endif
             },
-            suppressFirstBookPrompt: isUITest
+            suppressFirstBookPrompt: usesGenericFixtures
         ))
     }
 
@@ -522,6 +1051,10 @@ struct LibraryTabView: View {
         guard let pending = startup.intent,
               dependencies.currentAccountIdentity() == pending.identity,
               startup.isCurrentAttempt(pending.attemptID) else { return }
+        if pending.kind == .firstBookPrompt || pending.kind == .recoveryPrompt {
+            guard !incomingFiles.hasPendingFile(for: pending.identity),
+                  incomingFiles.presentationError == nil else { return }
+        }
         if pending.kind == .trialReady {
             guard !showDocumentPicker, !showFirstBookPrompt,
                   firstPromptImportAdapter == nil, !firstPromptImportNeedsReopen else { return }
@@ -530,10 +1063,12 @@ struct LibraryTabView: View {
         if accepted.markFirstBookPromptSeen { markFirstBookPromptSeen() }
         switch accepted.kind {
         case .firstBookPrompt:
-            showFirstBookPrompt = true
+            presentedPromptKind = .firstBookPrompt
+            presentFirstBookPrompt()
         case .recoveryPrompt:
+            presentedPromptKind = .recoveryPrompt
             firstPromptImportNeedsReopen = true
-            showFirstBookPrompt = true
+            presentFirstBookPrompt()
             publishCurrentRecovery(identity: accepted.identity)
         case .trialReady:
             trialReadyAfterDocumentPicker = false
@@ -560,6 +1095,37 @@ struct LibraryTabView: View {
                 applyStartupIntent()
             }
         }
+    }
+
+    @MainActor
+    private func requestDeferredLibraryReadyAction(for receipt: FirstBookPromptDismissalReceipt) async -> Bool {
+        let admission = receipt.admission
+        func isCurrent() -> Bool {
+            promptAdmission === admission
+                && admission.owns(receipt)
+                && admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity())
+        }
+        guard isCurrent(), let attemptID = startup.currentAttemptID,
+              startup.isCurrentAttempt(attemptID) else { return false }
+        updateStartupFacts()
+        return await admission.performOwnedReadiness(
+            for: receipt,
+            isCurrent: { isCurrent() && startup.isCurrentAttempt(attemptID) },
+            requestReadiness: { await startup.requestTrialReadiness() },
+            publishReadiness: {
+                guard !showDocumentPicker, isCurrent() else { return false }
+                if presentDocumentPickerAfterPrompt {
+                    presentDocumentPickerAfterPrompt = false
+                    trialReadyAfterDocumentPicker = true
+                    admission.pickerReceipt = receipt
+                    showDocumentPicker = true
+                    updateStartupFacts()
+                } else {
+                    applyStartupIntent()
+                }
+                return true
+            }
+        )
     }
 
     @MainActor
@@ -607,38 +1173,194 @@ struct LibraryTabView: View {
     }
 
     private func handleFirstBookPromptDismissal() {
-        if firstPromptImportAdapter == nil {
-            if let sampleCoordinator,
-               sampleCoordinator.state == .choosing || sampleCoordinator.state == .failed {
-                publishRecovery(true, identity: dependencies.accountIdentity)
+        guard let receipt = pendingNativeDismissalReceipt else { return }
+        pendingNativeDismissalReceipt = nil
+        if promptDismissalReceipt === receipt { promptDismissalReceipt = nil }
+        let admission = receipt.admission
+        let task = Task { @MainActor in
+            defer { admission.lifecycleTask = nil }
+            let outcome = await admission.performNativeDismissal(
+                receipt,
+                isCurrent: {
+                    promptAdmission === admission
+                        && admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity())
+                },
+                skip: {
+                    if receipt.reason == .interactiveIntentional {
+                        await receipt.coordinator.skip()
+                    }
+                },
+                completeSample: { await receipt.coordinator.completeDismissal() },
+                requestReady: { await requestDeferredLibraryReadyAction(for: $0) }
+            )
+            switch outcome {
+            case .externalFile:
+                finishPromptAdmission(admission)
+                reportIncomingTabReadiness()
+                incomingPromptWaiter?.resolve(true)
+                incomingPromptWaiter = nil
+            case .retryableFailure:
+                firstPromptImportNeedsReopen = true
+                reopenFirstBookPromptIfSafe()
+            case .completed:
+                finishPromptAdmission(admission)
+            case .importPresented, .ignored:
+                break
             }
-            requestDeferredLibraryReadyAction()
-        } else if presentDocumentPickerAfterPrompt {
-            requestDeferredLibraryReadyAction()
+        }
+        admission.lifecycleTask = task
+    }
+
+    @MainActor
+    private func prepareForIncomingClaim() async -> Bool {
+        let identity = dependencies.accountIdentity
+        guard dependencies.currentAccountIdentity() == identity,
+              !showDocumentPicker, firstPromptImportAdapter?.identity != identity else { return false }
+        guard sampleCoordinator?.state != .installing, ownedTourRequest == nil else { return false }
+        guard showFirstBookPrompt else {
+            return promptAdmission?.lifecycleTask == nil && promptAdmission?.dismissalInFlight != true
+        }
+        let kind = presentedPromptKind
+            ?? (recoveryStore.hasRecovery(userID: identity.userID) ? .recoveryPrompt : .firstBookPrompt)
+        guard let receipt = promptDismissalReceipt,
+              let attemptID = startup.currentAttemptID,
+              receipt.identity == identity,
+              promptAdmission?.adapter == nil,
+              promptAdmission?.lifecycleTask == nil,
+              promptAdmission?.dismissalInFlight != true else { return false }
+        incomingPromptSuspension = IncomingPromptSuspension(identity: identity, attemptID: attemptID, kind: kind)
+        let waiter = IncomingPromptWaiter()
+        incomingPromptWaiter = waiter
+        receipt.reason = .externalFile
+        dismissFirstBookPrompt(receipt)
+        // The coordinator owns the ten-second claim timeout and reports its
+        // retryable error. This later local timeout only releases a waiter if
+        // that host was concurrently retired before its cancellation arrives.
+        let dismissed = await waiter.wait(timeout: .seconds(12))
+        guard dependencies.currentAccountIdentity() == identity else { return false }
+        if !dismissed { incomingPromptWaiter = nil }
+        return dismissed
+    }
+
+    @MainActor
+    private func restoreIncomingPromptAfterFailureIfSettled() {
+        guard incomingFiles.presentationError == nil,
+              !incomingFiles.hasPendingFile(for: dependencies.accountIdentity),
+              let suspension = incomingPromptSuspension,
+              suspension.identity == dependencies.accountIdentity,
+              startup.isCurrentAttempt(suspension.attemptID) else { return }
+        if startup.restorePromptAfterIncomingFailure(
+            identity: suspension.identity, attemptID: suspension.attemptID, kind: suspension.kind
+        ) {
+            incomingPromptSuspension = nil
         }
     }
 
-    private func handleFirstBookPromptDisappearance(_ coordinator: FirstBookSampleCoordinator) {
-        if let dismissalAttemptID = promptImportDismissalAttemptID,
-           firstPromptImportAdapter?.attemptID == dismissalAttemptID {
-            return
+    private func reportIncomingTabReadiness() {
+        let identity = dependencies.accountIdentity
+        var blockers = Set<IncomingBookPresentationReadiness.Blocker>()
+        if vm.loadReadiness != .success(identity) { blockers.insert(.libraryLoad) }
+        let activePromptWork = firstPromptImportAdapter?.identity == identity
+            || promptAdmission?.adapter != nil
+            || promptAdmission?.lifecycleTask != nil
+            || promptAdmission?.dismissalInFlight == true
+            || sampleCoordinator?.state == .installing
+            || ownedTourRequest != nil
+        if showFirstBookPrompt && !activePromptWork { blockers.insert(.idleFirstBookPrompt) }
+        if pendingPromptPresentation || pendingNativeDismissalReceipt != nil || promptAdmission?.pendingReceipt != nil
+            || promptAdmission?.dismissalReceipt != nil
+            || promptAdmission?.dismissalInFlight == true { blockers.insert(.promptDismissal) }
+        if activePromptWork { blockers.insert(.promptImport) }
+        if showDocumentPicker || presentDocumentPickerAfterPrompt || trialReadyAfterDocumentPicker {
+            blockers.insert(.picker)
         }
-        Task { @MainActor in
-            if case .ready = coordinator.state {
-                await coordinator.completeDismissal()
-            } else if coordinator.state == .choosing || coordinator.state == .failed {
-                await coordinator.skip()
-            }
+        if model.showSettings { blockers.insert(.settings) }
+        if showConversations { blockers.insert(.conversations) }
+        if model.paywallFeature != nil { blockers.insert(.paywall) }
+        if showSubscriptionConfirmation || pendingSubscriptionConfirmation { blockers.insert(.subscriptionConfirmation) }
+        if showActiveReadingSessions { blockers.insert(.readingSessions) }
+        if router.sharedReaderRoute != nil { blockers.insert(.sharedReader) }
+        if vm.importError != nil || vm.deletionError != nil { blockers.insert(.importError) }
+        incomingReadiness.report(.libraryTab, identity: identity, blockers: blockers, owner: incomingReadinessOwner)
+    }
+
+    @MainActor
+    private func finishIncomingBookImport(_ book: Book, identity: LibraryAccountIdentity, attemptID: UUID?) {
+        guard dependencies.currentAccountIdentity() == identity,
+              dependencies.accountIdentity == identity,
+              identity.userID == user.id,
+              book.userId == identity.userID,
+              let attemptID,
+              startup.isCurrentAttempt(attemptID) else { return }
+        _ = startup.supersedeFirstBookIntent(identity: identity, attemptID: attemptID)
+        pendingPromptPresentation = false
+        firstPromptImportNeedsReopen = false
+        presentDocumentPickerAfterPrompt = false
+        trialReadyAfterDocumentPicker = false
+        presentedPromptKind = nil
+        publishRecovery(false, identity: identity)
+        incomingPromptSuspension = nil
+        markFirstBookPromptSeen()
+    }
+
+    @MainActor
+    private func finishIncomingBookPresentation(_ book: Book) -> IncomingBookOpenResult {
+        let identity = dependencies.accountIdentity
+        guard dependencies.currentAccountIdentity() == identity, book.userId == identity.userID else { return .unavailable }
+        model.hint(book)
+        dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
+        #if targetEnvironment(macCatalyst)
+        let windowID = ReaderWindowID(userID: user.id, bookID: book.id)
+        if readerWindows.openWindows[windowID] != nil {
+            readerWindows.focus(bookID: book.id, userID: user.id)
+            return .focusedExisting
         }
+        return readerWindows.open(book: book, user: user) ? .presented : .unavailable
+        #else
+        incomingReaderRoute = ReaderRoute.route(for: book)
+        return .presented
+        #endif
+    }
+
+    @MainActor
+    private func finishPromptAdmission(_ admission: FirstBookPromptHostAdmission) {
+        guard promptAdmission === admission else { return }
+        let coordinator = admission.coordinator
+        let adapter = admission.adapter
+        if let id = admission.retirementObserverID { trialPresentationState.removeHostRetirementObserver(id) }
+        admission.retirementObserverID = nil
+        admission.completed = true
+        admission.adapter = nil
+        admission.coordinator = nil
+        admission.tourRequest = nil
+        if sampleCoordinator === coordinator { sampleCoordinator = nil }
+        if firstPromptImportAdapter === adapter { firstPromptImportAdapter = nil }
+        promptAdmission = nil
     }
 
     private func handleDocumentPickerPresentationChange(_ isPresented: Bool) {
         guard !isPresented else { return }
-        if firstPromptImportNeedsReopen {
+        let pickerCloseAction: FirstBookPromptHostAdmission.PickerCloseAction
+        if let promptAdmission {
+            pickerCloseAction = promptAdmission.pickerCloseAction(recoveryPending: firstPromptImportNeedsReopen)
+        } else if firstPromptImportNeedsReopen {
+            pickerCloseAction = .reopenRecovery
+        } else if firstPromptImportAdapter != nil {
+            pickerCloseAction = .waitForOwnedTerminal
+        } else {
+            pickerCloseAction = .requestOrdinaryReadiness
+        }
+        switch pickerCloseAction {
+        case .reopenRecovery:
             reopenFirstBookPromptIfSafe()
             return
+        case .waitForOwnedTerminal:
+            return
+        case .requestOrdinaryReadiness:
+            break
         }
         guard trialReadyAfterDocumentPicker else { return }
+        // Prompt picker readiness belongs to the exact accepted adapter terminal callback.
         requestDeferredLibraryReadyAction()
     }
 
@@ -652,19 +1374,38 @@ struct LibraryTabView: View {
         }
         return SampleOrImportScreen(
             onUseSample: {
+                guard let admission = promptAdmission,
+                      admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()) else { return }
                 publishRecovery(true, identity: dependencies.accountIdentity)
-                Task {
+                let task = Task { @MainActor in
+                    defer { admission.lifecycleTask = nil }
                     if retryable { await coordinator.retry() }
                     else { await coordinator.selectSample() }
                 }
+                admission.lifecycleTask = task
             },
             onImport: { beginFirstPromptImport() },
             onSkip: {
-                publishRecovery(true, identity: dependencies.accountIdentity)
-                Task { @MainActor in
-                    await coordinator.skip()
-                    showFirstBookPrompt = false
+                guard let admission = promptAdmission,
+                      admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity()),
+                      let receipt = promptDismissalReceipt,
+                      receipt.admission === admission,
+                      admission.activeReceipt === receipt else { return }
+                let task = Task { @MainActor in
+                    defer { admission.lifecycleTask = nil }
+                    _ = await admission.performExplicitSkip(
+                        receipt,
+                        isCurrent: {
+                            promptAdmission === admission
+                                && promptDismissalReceipt === receipt
+                                && admission.isCurrent(state: trialPresentationState, currentIdentity: dependencies.currentAccountIdentity())
+                        },
+                        persistPending: { publishRecovery(true, identity: dependencies.accountIdentity) },
+                        skip: { await coordinator.skip() },
+                        dismiss: { exactReceipt in dismissFirstBookPrompt(exactReceipt) }
+                    )
                 }
+                admission.lifecycleTask = task
             },
             isSamplePreparing: coordinator.state == .installing,
             isSampleRetryable: retryable,
@@ -674,7 +1415,11 @@ struct LibraryTabView: View {
                 : nil,
             sampleUnavailable: coordinator.failureKind == .provenanceUnavailable
         )
-        .onDisappear { handleFirstBookPromptDisappearance(coordinator) }
+        .onDisappear {
+            if let receipt = promptDismissalReceipt {
+                receipt.admission.contentDidDisappear(receipt)
+            }
+        }
     }
 
     private var libraryNavigation: some View {
@@ -708,6 +1453,7 @@ struct LibraryTabView: View {
                 onShowSettings: settingsHandler,
                 onImported: handleImported,
                 firstPromptImportAdapter: firstPromptImportAdapter,
+                suppressImportTip: shouldSuppressImportTip,
                 documentPickerPresented: $showDocumentPicker,
                 sharePackageService: dependencies.sharePackageService,
                 sharedReadingAPI: dependencies.sharedReadingAPI,
@@ -741,6 +1487,16 @@ struct LibraryTabView: View {
                 }
             }
             .navigationDestination(for: ReaderRoute.self) { route in
+                ReaderDestinationView(
+                    route: route,
+                    hint: model.hint(for: route.bookId),
+                    onRequestPaywall: { name in
+                        let paid = dependencies.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
+                        model.requestPaywall(PaywallRequest(feature: name), serverPaidActive: paid)
+                    }
+                )
+            }
+            .navigationDestination(item: $incomingReaderRoute) { route in
                 ReaderDestinationView(
                     route: route,
                     hint: model.hint(for: route.bookId),
@@ -816,199 +1572,318 @@ struct LibraryTabView: View {
     }
 
     var body: some View {
-        libraryNavigation
-        .overlay {
-            if case .failure(let identity) = vm.loadReadiness,
-               identity == dependencies.accountIdentity,
-               vm.books.isEmpty {
-                ContentUnavailableView {
-                    Label("Library unavailable", systemImage: "books.vertical")
-                } description: {
-                    Text("Your library could not be loaded.")
-                } actions: {
-                    Button("Retry") { Task { await performInitialLibraryLoad() } }
+        let lifecycleContent = addingLibraryTabLifecycle(to: libraryNavigation)
+        let stateObservedContent = addingLibraryTabStateObservers(to: lifecycleContent)
+        let observedContent = addingLibraryReadinessObservers(to: stateObservedContent)
+        let presentationContent = addingLibraryPromptPresentations(to: observedContent)
+        return addingLibrarySubscriptionPresentations(to: presentationContent)
+    }
+
+    private func addingLibraryTabLifecycle<Content: View>(to content: Content) -> some View {
+        content
+            .overlay {
+                if case .failure(let identity) = vm.loadReadiness,
+                   identity == dependencies.accountIdentity,
+                   vm.books.isEmpty {
+                    ContentUnavailableView {
+                        Label("Library unavailable", systemImage: "books.vertical")
+                    } description: {
+                        Text("Your library could not be loaded.")
+                    } actions: {
+                        Button("Retry") { Task { await performInitialLibraryLoad() } }
+                    }
                 }
             }
-        }
-        .environment(vm)
-        .onAppear {
-            refreshPersistedRecovery()
-            guard trialRegistration == nil else { return }
-            trialRegistration = trialPresentationState.register(.library, identity: dependencies.accountIdentity) {
-                var safety = TrialChildSafety()
-                safety.signedIn = true
-                safety.consent = true
-                safety.conversation = true
-                safety.voice = true
-                safety.libraryReady = vm.loadReadiness == .success(dependencies.accountIdentity)
-                safety.libraryModal = router.path.isEmpty
-                    && router.sharedReaderRoute == nil
-                    && !showFirstBookPrompt
-                    && !showDocumentPicker
-                    && !showActiveReadingSessions
-                    && !showConversations
-                    && !model.showSettings
-                    && model.paywallFeature == nil
-                    && !showSubscriptionConfirmation
-                    && !pendingSubscriptionConfirmation
-                    && !presentDocumentPickerAfterPrompt
-                    && !trialReadyAfterDocumentPicker
-                safety.firstBookFlowActive = showFirstBookPrompt
-                    || presentDocumentPickerAfterPrompt
-                    || trialReadyAfterDocumentPicker
-                    || firstPromptImportAdapter?.identity == dependencies.accountIdentity
-                    || recoveryStore.hasRecovery(userID: dependencies.accountIdentity.userID)
-                    || trialPresentationState.recoveryActiveIdentity == dependencies.accountIdentity
-                return safety
+            .environment(vm)
+            .onAppear {
+                incomingReadinessOwner = incomingReadiness.claimOwnership(of: .libraryTab)
+                refreshPersistedRecovery()
+                reportIncomingTabReadiness()
+                if !incomingHostRegistered {
+                    let importCoordinator = dependencies.importCoordinator
+                    incomingHostRegistrationToken = incomingFiles.registerScene(
+                        id: incomingReadiness.sceneID,
+                        identity: dependencies.accountIdentity,
+                        readiness: incomingReadiness,
+                        currentIdentity: { dependencies.currentAccountIdentity() },
+                        prepareForClaim: { await prepareForIncomingClaim() },
+                        importOwned: { url in
+                            let outcomes = await importCoordinator.registerOwnedSourceReadableBooks([url], providerKind: .fileProvider)
+                            return outcomes.first ?? ImportCoordinator.ImportOutcome(url: url, book: nil, error: "empty_import_result")
+                        },
+                        refresh: { await vm.refresh() },
+                        open: { book in finishIncomingBookPresentation(book) },
+                        importAttemptID: { startup.currentAttemptID },
+                        didImportSuccessfully: { book, identity, attemptID in
+                            finishIncomingBookImport(book, identity: identity, attemptID: attemptID)
+                        }
+                    )
+                    if let token = incomingHostRegistrationToken {
+                        incomingFiles.setSceneForeground(id: incomingReadiness.sceneID, isForeground: scenePhase == .active, registrationToken: token)
+                    }
+                    incomingHostRegistered = true
+                }
+                guard trialRegistration == nil else { return }
+                trialRegistration = trialPresentationState.register(.library, identity: dependencies.accountIdentity) {
+                    var safety = TrialChildSafety()
+                    safety.signedIn = true
+                    safety.consent = true
+                    safety.conversation = true
+                    safety.voice = true
+                    safety.libraryReady = vm.loadReadiness == .success(dependencies.accountIdentity)
+                    safety.libraryModal = router.path.isEmpty
+                        && router.sharedReaderRoute == nil
+                        && incomingReaderRoute == nil
+                        && !incomingFiles.hasPendingFile(for: dependencies.accountIdentity)
+                        && incomingFiles.presentationError == nil
+                        && !showFirstBookPrompt
+                        && !showDocumentPicker
+                        && !showActiveReadingSessions
+                        && !showConversations
+                        && !model.showSettings
+                        && model.paywallFeature == nil
+                        && !showSubscriptionConfirmation
+                        && !pendingSubscriptionConfirmation
+                        && !presentDocumentPickerAfterPrompt
+                        && !trialReadyAfterDocumentPicker
+                    safety.firstBookFlowActive = showFirstBookPrompt
+                        || presentDocumentPickerAfterPrompt
+                        || trialReadyAfterDocumentPicker
+                        || firstPromptImportAdapter?.identity == dependencies.accountIdentity
+                        || recoveryStore.hasRecovery(userID: dependencies.accountIdentity.userID)
+                        || trialPresentationState.recoveryActiveIdentity == dependencies.accountIdentity
+                    return safety
+                }
+                trialPresentationState.update()
             }
-            trialPresentationState.update()
-        }
-        .onDisappear {
-            let covered = trialPresentationState.activeOwnedCoverClaimID != nil
-            if !covered, dependencies.currentAccountIdentity() != dependencies.accountIdentity {
+            .onDisappear {
+                if let token = incomingHostRegistrationToken {
+                    incomingFiles.unregisterScene(id: incomingReadiness.sceneID, registrationToken: token)
+                }
+                incomingHostRegistrationToken = nil
+                incomingHostRegistered = false
+                incomingReaderRoute = nil
+                incomingReadiness.withdraw(.libraryTab, owner: incomingReadinessOwner)
+                incomingReadinessOwner = nil
+                incomingPromptWaiter?.resolve(false)
+                incomingPromptWaiter = nil
+                let covered = trialPresentationState.activeOwnedCoverClaimID != nil
+                if !covered, dependencies.currentAccountIdentity() != dependencies.accountIdentity {
+                    startup.retire()
+                    sampleCoordinator?.hostDidDisappear()
+                    firstPromptImportAdapter?.retire()
+                }
+                guard let trialRegistration else { return }
+                trialPresentationState.unregister(
+                    trialRegistration,
+                    deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
+                )
+                self.trialRegistration = nil
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+                .receive(on: DispatchQueue.main)) { _ in
+                refreshPersistedRecovery()
+            }
+    }
+
+    private func addingLibraryTabStateObservers<Content: View>(to content: Content) -> some View {
+        content
+            .onChange(of: scenePhase) { _, phase in
+                guard let token = incomingHostRegistrationToken else { return }
+                incomingFiles.setSceneForeground(
+                    id: incomingReadiness.sceneID,
+                    isForeground: phase == .active,
+                    registrationToken: token
+                )
+            }
+            .onChange(of: vm.loadReadiness) { _, _ in
+                trialPresentationState.update()
+                refreshPersistedRecovery()
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: trialPresentationState.currentIdentity) { oldIdentity, newIdentity in
+                guard oldIdentity != newIdentity,
+                      newIdentity != dependencies.accountIdentity else { return }
                 startup.retire()
-                sampleCoordinator?.hostDidDisappear()
+                incomingPromptWaiter?.resolve(false)
+                incomingPromptWaiter = nil
+                incomingPromptSuspension = nil
+                incomingReaderRoute = nil
+                if let ownedTourRequest { clearOwnedTour(ownedTourRequest) }
+                sampleCoordinator?.updateIdentity(newIdentity)
                 firstPromptImportAdapter?.retire()
+                firstPromptImportAdapter = nil
             }
-            guard let trialRegistration else { return }
-            trialPresentationState.unregister(
-                trialRegistration,
-                deferredUnderCover: trialPresentationState.activeOwnedCoverClaimID
-            )
-            self.trialRegistration = nil
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .receive(on: DispatchQueue.main)) { _ in
-            refreshPersistedRecovery()
-        }
-        .onChange(of: vm.loadReadiness) { _, _ in
-            trialPresentationState.update()
-            refreshPersistedRecovery()
-        }
-        .onChange(of: trialPresentationState.currentIdentity) { oldIdentity, newIdentity in
-            guard oldIdentity != newIdentity,
-                  newIdentity != dependencies.accountIdentity else { return }
-            startup.retire()
-            if let ownedTourRequest { clearOwnedTour(ownedTourRequest) }
-            sampleCoordinator?.updateIdentity(newIdentity)
-            firstPromptImportAdapter?.retire()
-            firstPromptImportAdapter = nil
-        }
-        .onChange(of: router.path.isEmpty) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: router.sharedReaderRoute) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: showFirstBookPrompt) { _, _ in trialPresentationState.update() }
-        .onChange(of: showDocumentPicker) { _, _ in trialPresentationState.update() }
-        .onChange(of: showActiveReadingSessions) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: showConversations) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: model.showSettings) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: model.paywallFeature) { _, _ in trialPresentationState.update(); reopenFirstBookPromptIfSafe() }
-        .onChange(of: vm.importError?.id) { _, errorID in
-            if errorID == nil { reopenFirstBookPromptIfSafe() }
-        }
-        .onChange(of: vm.deletionError) { _, error in
-            if error == nil { reopenFirstBookPromptIfSafe() }
-        }
-        .sheet(isPresented: $showActiveReadingSessions) {
-            if let active = try? ActiveReadingSessionsView(
-                api: dependencies.sharedReadingAPI, bookService: dependencies.sessionBookService,
-                userId: user.id, sessionRegistry: dependencies.sharedReadingSessionRegistry, router: router,
-                credentialSnapshot: dependencies.credentialSnapshot, credentialAuthority: dependencies.credentialAuthority,
-                accountIdentity: dependencies.accountIdentity, currentAccountIdentity: dependencies.currentAccountIdentity) {
-                active
-            } else { ContentUnavailableView("Account changed", systemImage: "person.crop.circle.badge.exclamationmark") }
-        }
+            .onChange(of: trialPresentationState.currentRevision) { _, _ in
+                if pendingPromptPresentation { presentFirstBookPrompt() }
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: router.path.isEmpty) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: router.sharedReaderRoute) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: incomingReaderRoute) { _, _ in
+                incomingReadiness.setIncomingReaderRoutePresented(incomingReaderRoute != nil, owner: incomingReadinessOwner)
+                trialPresentationState.update()
+            }
+            .onChange(of: showFirstBookPrompt) { _, _ in
+                trialPresentationState.update()
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: showDocumentPicker) { _, _ in
+                trialPresentationState.update()
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: showActiveReadingSessions) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: showConversations) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: model.showSettings) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: model.paywallFeature) { _, _ in
+                updateTrialPresentationAndReopenPrompt()
+            }
+            .onChange(of: showSubscriptionConfirmation) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: pendingSubscriptionConfirmation) { _, _ in reportIncomingTabReadiness() }
+    }
 
-        .sheet(isPresented: $showFirstBookPrompt, onDismiss: handleFirstBookPromptDismissal) {
-            firstBookPrompt
-        }
-        .onChange(of: showDocumentPicker) { _, isPresented in
-            updateStartupFacts()
-            handleDocumentPickerPresentationChange(isPresented)
-        }
-        .onChange(of: vm.loadReadiness) { _, readiness in
-            handleLoadReadinessChange(readiness)
-        }
-        .onChange(of: startup.intent?.id) { _, _ in applyStartupIntent() }
-        .onChange(of: firstPromptImportAdapter?.attemptID) { _, _ in
-            updateStartupFacts()
-            applyStartupIntent()
-        }
+    private func updateTrialPresentationAndReopenPrompt() {
+        trialPresentationState.update()
+        reopenFirstBookPromptIfSafe()
+        reportIncomingTabReadiness()
+    }
 
-        #if !targetEnvironment(macCatalyst)
+    private func addingLibraryReadinessObservers<Content: View>(to content: Content) -> some View {
+        content
+            .onChange(of: promptAdmission?.dismissalInFlight) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: sampleCoordinator?.state) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: ownedTourRequest) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: presentDocumentPickerAfterPrompt) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: trialReadyAfterDocumentPicker) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: firstPromptImportAdapter?.attemptID) { _, _ in reportIncomingTabReadiness() }
+            .onChange(of: vm.importError?.id) { _, errorID in
+                if errorID == nil { reopenFirstBookPromptIfSafe() }
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: vm.deletionError) { _, error in
+                if error == nil { reopenFirstBookPromptIfSafe() }
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: incomingFiles.revision) { _, _ in
+                reportIncomingTabReadiness()
+                applyStartupIntent()
+                restoreIncomingPromptAfterFailureIfSettled()
+            }
+    }
+
+    private func addingLibraryPromptPresentations<Content: View>(to content: Content) -> some View {
+        content
+            .sheet(isPresented: $showActiveReadingSessions) {
+                if let active = try? ActiveReadingSessionsView(
+                    api: dependencies.sharedReadingAPI, bookService: dependencies.sessionBookService,
+                    userId: user.id, sessionRegistry: dependencies.sharedReadingSessionRegistry, router: router,
+                    credentialSnapshot: dependencies.credentialSnapshot, credentialAuthority: dependencies.credentialAuthority,
+                    accountIdentity: dependencies.accountIdentity, currentAccountIdentity: dependencies.currentAccountIdentity) {
+                    active
+                } else { ContentUnavailableView("Account changed", systemImage: "person.crop.circle.badge.exclamationmark") }
+            }
+            .sheet(isPresented: firstBookPromptPresentation, onDismiss: handleFirstBookPromptDismissal) {
+                firstBookPrompt
+            }
+            .onChange(of: showDocumentPicker) { _, isPresented in
+                updateStartupFacts()
+                handleDocumentPickerPresentationChange(isPresented)
+            }
+            .onChange(of: vm.loadReadiness) { _, readiness in
+                handleLoadReadinessChange(readiness)
+                reportIncomingTabReadiness()
+            }
+            .onChange(of: startup.intent?.id) { _, _ in applyStartupIntent() }
+            .onChange(of: firstPromptImportAdapter?.attemptID) { _, _ in
+                updateStartupFacts()
+                applyStartupIntent()
+            }
+#if !targetEnvironment(macCatalyst)
             .sheet(isPresented: Bindable(model).showSettings) {
                 SettingsSheet(
                     dependencies: dependencies.settings,
                     user: user
                 )
             }
-        #endif
+#endif
+    }
 
-        .rishiSubscriptionPresentation(item: Bindable(model).paywallFeature, onDismiss: {
-            // Best-effort: purchase/restore via SubscriptionStoreView may have
-            // synced entitlements while the sheet was up.
-            Task {
-                _ = await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
-                    credentialContext: .normal(dependencies.credentialSnapshot.lease))
-                guard dependencies.credentialAuthority.isCurrent(dependencies.credentialSnapshot.lease), pendingSubscriptionConfirmation else { return }
-                await MainActor.run {
-                    pendingSubscriptionConfirmation = false
-                    showSubscriptionConfirmation = true
+    private func addingLibrarySubscriptionPresentations<Content: View>(to content: Content) -> some View {
+        content
+            .rishiSubscriptionPresentation(item: Bindable(model).paywallFeature, onDismiss: {
+                // Best-effort: purchase/restore via SubscriptionStoreView may have
+                // synced entitlements while the sheet was up.
+                Task {
+                    _ = await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground,
+                        credentialContext: .normal(dependencies.credentialSnapshot.lease))
+                    guard dependencies.credentialAuthority.isCurrent(dependencies.credentialSnapshot.lease), pendingSubscriptionConfirmation else { return }
+                    await MainActor.run {
+                        pendingSubscriptionConfirmation = false
+                        showSubscriptionConfirmation = true
+                    }
                 }
-            }
-        }) { _ in
-            if dependencies.groupID != nil {
-                SubscriptionsView(
-                    dependencies: SubscriptionDependencies(
-                        groupID: dependencies.groupID,
-                        entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
-                        restoreService: dependencies.settings.restoreService,
-                        customerEntitlements: dependencies.settings.customerEntitlements, store: dependencies.settings.store
-                    ), credentialAuthority: dependencies.credentialAuthority,
-                    credentialSnapshot: dependencies.credentialSnapshot,
-                    onPurchaseCompleted: {
-                    pendingSubscriptionConfirmation = true
-                    model.dismissPaywall()
-                })
-            } else {
-                NavigationStack {
-                    ContentUnavailableView(
-                        "Plans unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("Could not load subscription plans. Try again later.")
-                    )
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { model.dismissPaywall() }
+            }) { _ in
+                if dependencies.groupID != nil {
+                    SubscriptionsView(
+                        dependencies: SubscriptionDependencies(
+                            groupID: dependencies.groupID,
+                            entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
+                            restoreService: dependencies.settings.restoreService,
+                            customerEntitlements: dependencies.settings.customerEntitlements, store: dependencies.settings.store
+                        ), credentialAuthority: dependencies.credentialAuthority,
+                        credentialSnapshot: dependencies.credentialSnapshot,
+                        onPurchaseCompleted: {
+                        pendingSubscriptionConfirmation = true
+                        model.dismissPaywall()
+                    })
+                } else {
+                    NavigationStack {
+                        ContentUnavailableView(
+                            "Plans unavailable",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("Could not load subscription plans. Try again later.")
+                        )
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { model.dismissPaywall() }
+                            }
                         }
                     }
                 }
             }
-        }
-        .onChange(of: dependencies.entitlementSnapshotStore.resolution) { old, new in
-            let oldPaid = old.resolvedSnapshot?.isPaidActive ?? false
-            let newPaid = new.resolvedSnapshot?.isPaidActive ?? false
-            // Dismiss only when crossing into paid-active (verified grant).
-            // Do not dismiss when already paid (allowance upgrade / plan change).
-            if model.paywallFeature != nil, newPaid, !oldPaid {
-                model.dismissPaywall()
+            .onChange(of: dependencies.entitlementSnapshotStore.resolution) { old, new in
+                let oldPaid = old.resolvedSnapshot?.isPaidActive ?? false
+                let newPaid = new.resolvedSnapshot?.isPaidActive ?? false
+                // Dismiss only when crossing into paid-active (verified grant).
+                // Do not dismiss when already paid (allowance upgrade / plan change).
+                if model.paywallFeature != nil, newPaid, !oldPaid {
+                    model.dismissPaywall()
+                }
             }
-        }
-        .onChange(of: model.paywallFeature) { old, new in
-            guard old != nil, new == nil, pendingSubscriptionConfirmation else { return }
-            pendingSubscriptionConfirmation = false
-            showSubscriptionConfirmation = true
-        }
-        .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Thank you for subscribing. Your plan is now active.")
-        }
-
-        .deepLinkHandling(
-            model: model,
-            refreshLibrary: { await vm.refresh() },
-            currentUserID: user.id
-        )
+            .onChange(of: model.paywallFeature) { old, new in
+                guard old != nil, new == nil, pendingSubscriptionConfirmation else { return }
+                pendingSubscriptionConfirmation = false
+                showSubscriptionConfirmation = true
+            }
+            .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Thank you for subscribing. Your plan is now active.")
+            }
+            .deepLinkHandling(
+                model: model,
+                currentUserID: user.id
+            )
     }
 
 }

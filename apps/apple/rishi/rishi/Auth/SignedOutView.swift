@@ -58,47 +58,49 @@ struct SignedOutView: View {
     }
 
     var body: some View {
-        NavigationStack{
-            ZStack{
+        NavigationStack {
+            ZStack {
                 Color.rishiBrown
                     .opacity(0.1)
                     .ignoresSafeArea()
-                
-                RishiScreenScaffold(actionPlacement: .belowContent) {
-                    VStack(spacing: 24){
-                        Image(.rishi)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 100, height: 100)
-                            .clipShape(.rect(cornerRadius: 20))
-                        VStack(spacing: 8) {
-                            Text("Rishi Reader")
-                                .font(.largeTitle)
-                                .fontWeight(.bold)
-                            
-                            Text("Read with focus, listen on the go, and seamlessly switch between text and audio.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
+
+                GeometryReader { geometry in
+                    ScrollView {
+                        RishiScreenScaffold(actionPlacement: .belowContent) {
+                            VStack(spacing: 24) {
+                                Image(.rishi)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(.rect(cornerRadius: 20))
+                                VStack(spacing: 8) {
+                                    Text("Rishi Reader")
+                                        .font(.largeTitle)
+                                        .fontWeight(.bold)
+                                        .accessibilityAddTraits(.isHeader)
+
+                                    Text("Read with focus, listen on the go, and seamlessly switch between text and audio.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal, 32)
+                                }
+                            }
+                            .padding(.horizontal, RishiSpacing.l)
+                        } actions: {
+                            VStack(spacing: RishiSpacing.l) {
+                                buttons
+                                errorRow
+                            }
+                            .padding(.horizontal, RishiSpacing.l)
+                            .padding(.bottom, RishiSpacing.l)
                         }
+                        .frame(minHeight: geometry.size.height)
                     }
-                    .padding(.horizontal, RishiSpacing.l)
-                } actions: {
-                    VStack(spacing: RishiSpacing.l) {
-                        buttons
-                        errorRow
+                    .task {
+                        viewModel.setAuthService(authService)
+                        viewModel.onSignedIn = onSignedIn
                     }
-                    .padding(.horizontal, RishiSpacing.l)
-                    .padding(.bottom, RishiSpacing.l)
-                }
-          
-                
-                .task {
-                    
-                    viewModel.setAuthService(authService)
-                    
-                    viewModel.onSignedIn = onSignedIn
                 }
             }
             .navigationDestination(isPresented: $isSignedIn) {

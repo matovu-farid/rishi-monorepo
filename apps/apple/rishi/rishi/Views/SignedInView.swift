@@ -115,8 +115,10 @@ struct SignedInView: View {
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUserBox
     @Environment(TrialIntroPresentationState.self) private var trialPresentationState
+    @Environment(IncomingBookPresentationReadiness.self) private var incomingReadiness
     @Environment(\.signOut) private var signOut
     @State private var trialRegistration: TrialIntroPresentationState.Registration?
+    @State private var incomingReadinessOwner: UUID?
 #if targetEnvironment(macCatalyst)
     @State private var showUsernameEditor = false
 #endif
@@ -166,6 +168,8 @@ struct SignedInView: View {
             )
             .accountDeletionAlerts(account: appDependencies.macAccountMenu)
             .onAppear {
+                incomingReadinessOwner = incomingReadiness.claimOwnership(of: .signedInView)
+                reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies)
                 guard trialRegistration == nil else { return }
                 trialRegistration = trialPresentationState.register(.signedIn, identity: accountIdentity) { [weak appDependencies, weak currentUserBox] in
                     var safety = TrialChildSafety()
@@ -201,6 +205,8 @@ struct SignedInView: View {
                 }
             }
             .onDisappear {
+                incomingReadiness.withdraw(.signedInView, owner: incomingReadinessOwner)
+                incomingReadinessOwner = nil
                 guard let trialRegistration else { return }
                 trialPresentationState.unregister(
                     trialRegistration,
@@ -208,13 +214,23 @@ struct SignedInView: View {
                 )
                 self.trialRegistration = nil
             }
+            .onChange(of: appDependencies.activeAccountIdentity) { _, identity in
+                if identity == accountIdentity {
+                    reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies)
+                } else {
+                    incomingReadiness.withdraw(.signedInView, owner: incomingReadinessOwner)
+                }
+            }
 #if targetEnvironment(macCatalyst)
-            .onChange(of: showUsernameEditor) { _, _ in trialPresentationState.update() }
+            .onChange(of: showUsernameEditor) { _, _ in trialPresentationState.update(); reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies) }
             .onChange(of: appDependencies.macAccountMenu.deleteConfirmationPresented) { _, _ in
-                trialPresentationState.update()
+                trialPresentationState.update(); reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies)
             }
             .onChange(of: appDependencies.macAccountMenu.deleteError) { _, _ in
-                trialPresentationState.update()
+                trialPresentationState.update(); reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies)
+            }
+            .onChange(of: appDependencies.macAccountMenu.isDeletingAccount) { _, _ in
+                trialPresentationState.update(); reportIncomingReadiness(accountIdentity: accountIdentity, appDependencies: appDependencies)
             }
 #endif
 #if targetEnvironment(macCatalyst)
@@ -239,6 +255,19 @@ struct SignedInView: View {
             }
         }
     }
+
+    private func reportIncomingReadiness(accountIdentity: LibraryAccountIdentity, appDependencies: AppDependencies) {
+        var blockers = Set<IncomingBookPresentationReadiness.Blocker>()
+        let matches = user?.id == accountIdentity.userID && appDependencies.activeAccountIdentity == accountIdentity
+        if !matches { blockers.insert(.identityMismatch) }
+        #if targetEnvironment(macCatalyst)
+        if showUsernameEditor { blockers.insert(.username) }
+        if appDependencies.macAccountMenu.deleteConfirmationPresented
+            || appDependencies.macAccountMenu.isDeletingAccount { blockers.insert(.accountDeletion) }
+        if appDependencies.macAccountMenu.deleteError != nil { blockers.insert(.accountError) }
+        #endif
+        incomingReadiness.report(.signedInView, identity: accountIdentity, blockers: blockers, owner: incomingReadinessOwner)
+    }
 }
 
 struct SignedInContent: View {
@@ -250,6 +279,7 @@ struct SignedInContent: View {
     @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw: String = ""
     @Environment(AppRouter.self) private var router
     @Environment(TrialIntroPresentationState.self) private var trialPresentationState
+    @Environment(IncomingBookPresentationReadiness.self) private var incomingReadiness
 #if targetEnvironment(macCatalyst)
     @Environment(ReaderWindowCoordinator.self) private var readerWindows
 #endif
@@ -258,6 +288,7 @@ struct SignedInContent: View {
     @State private var dataUseConsentGranted = false
     @State private var retryVoiceAfterConsent = false
     @State private var trialRegistration: TrialIntroPresentationState.Registration?
+    @State private var incomingReadinessOwner: UUID?
 
     var body: some View {
         @Bindable var model = model
@@ -314,6 +345,8 @@ struct SignedInContent: View {
             }
         }
         .onAppear {
+            incomingReadinessOwner = incomingReadiness.claimOwnership(of: .signedInContent)
+            reportIncomingReadiness()
             guard trialRegistration == nil else { return }
             trialRegistration = trialPresentationState.register(.signedInContent, identity: dependencies.library.accountIdentity) {
                 var safety = TrialChildSafety()
@@ -328,6 +361,8 @@ struct SignedInContent: View {
             }
         }
         .onDisappear {
+            incomingReadiness.withdraw(.signedInContent, owner: incomingReadinessOwner)
+            incomingReadinessOwner = nil
             guard let trialRegistration else { return }
             trialPresentationState.unregister(
                 trialRegistration,
@@ -335,11 +370,11 @@ struct SignedInContent: View {
             )
             self.trialRegistration = nil
         }
-        .onChange(of: dataUseConsentGranted) { _, _ in trialPresentationState.update() }
-        .onChange(of: showDataUseConsent) { _, _ in trialPresentationState.update() }
-        .onChange(of: model.selectedConversation?.id) { _, _ in trialPresentationState.update() }
-        .onChange(of: dependencies.voicePresenter.isPresenting) { _, _ in trialPresentationState.update() }
-        .onChange(of: dependencies.voicePresenter.failure) { _, _ in trialPresentationState.update() }
+        .onChange(of: dataUseConsentGranted) { _, _ in trialPresentationState.update(); reportIncomingReadiness() }
+        .onChange(of: showDataUseConsent) { _, _ in trialPresentationState.update(); reportIncomingReadiness() }
+        .onChange(of: model.selectedConversation?.id) { _, _ in trialPresentationState.update(); reportIncomingReadiness() }
+        .onChange(of: dependencies.voicePresenter.isPresenting) { _, _ in trialPresentationState.update(); reportIncomingReadiness() }
+        .onChange(of: dependencies.voicePresenter.failure) { _, _ in trialPresentationState.update(); reportIncomingReadiness() }
         .sheet(isPresented: $showDataUseConsent) {
             AIDataConsentView(
                 onAllow: {
@@ -375,6 +410,7 @@ struct SignedInContent: View {
         }
         .onChange(of: dependencies.voicePresenter.isPresenting) { _, presenting in
             if !presenting { dependencies.voicePresenter.promotePendingFailure() }
+            reportIncomingReadiness()
         }
         .alert(
             dependencies.voicePresenter.failure?.title ?? "",
@@ -416,6 +452,16 @@ struct SignedInContent: View {
 #if !targetEnvironment(macCatalyst)
         .sceneRestoration(model: model, tabRaw: $selectedTabRaw, openBookIdRaw: $openBookIdRaw)
 #endif
+    }
+
+    private func reportIncomingReadiness() {
+        let identity = dependencies.library.accountIdentity
+        var blockers = Set<IncomingBookPresentationReadiness.Blocker>()
+        if !dataUseConsentGranted || showDataUseConsent { blockers.insert(.consent) }
+        if model.selectedConversation != nil { blockers.insert(.conversation) }
+        if dependencies.voicePresenter.isPresenting { blockers.insert(.voice) }
+        if dependencies.voicePresenter.failure != nil { blockers.insert(.voiceError) }
+        incomingReadiness.report(.signedInContent, identity: identity, blockers: blockers, owner: incomingReadinessOwner)
     }
 
     private static func openSettings() {

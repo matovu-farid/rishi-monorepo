@@ -81,6 +81,18 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
+    @Test("A document file URL is not handled by the account deep-link router")
+    func documentURLStaysOutsideRouter() {
+        let router = AppRouter(sharedReaderAccountIDProvider: { nil })
+        router.handle(
+            url: URL(fileURLWithPath: "/tmp/Selected Book.pdf"),
+            bookStore: nil,
+            conversationStore: nil
+        )
+        #expect(router.path.isEmpty)
+        #expect(router.pendingAccountURLCountForTesting == 0)
+    }
+
     @Test("authCallback deep link is a no-op (path stays empty)")
     func authCallbackNoOp() {
         let router = AppRouter(sharedReaderAccountIDProvider: { nil })
